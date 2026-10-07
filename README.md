@@ -5,7 +5,7 @@ an extracted romfs and it reads the game's string tables, layouts, archives and 
 and writes them back, including adding the English glyphs the game's Japanese-only
 fonts lack.
 
-**Status:** early. The file-format library is done and verified; the GUI is next.
+**Status:** This is still very much in the early stages.
 
 No game data is included or distributed. You need your own extracted romfs.
 
@@ -29,45 +29,3 @@ How the game puts text on screen, which shapes most of the design:
   key stored in the pane's user data.
 - The game does not wrap lines; `\n` breaks them. Strings may carry colour switches
   (`\u0002\u0001` .. `\u0002\u0003`).
-
-## Building
-
-Requires JDK 25 or newer and Maven.
-
-```
-mvn -q compile
-mvn -q test
-mvn -q compile exec:java   # run the app
-```
-
-`mvn test` runs the unit tests on synthetic data. To also check every reader and writer
-against a real romfs (each archive, font and string table must survive read then write
-byte for byte):
-
-```
-mvn -q test -Dpsaro.romfs=C:/path/to/romfs
-```
-
-or set the `PSARO_ROMFS` environment variable. Without either, those tests are skipped.
-
-## Releasing
-
-Pushing a version tag builds installers for Windows (`.msi`), macOS (`.dmg`) and Linux
-(`.deb`) and attaches them to a GitHub release:
-
-```
-git tag v0.1.0
-git push origin v0.1.0
-```
-
-The workflow can also be run by hand from the Actions tab. The installers' icon is made
-from `src/main/resources/images/psaroeditor.png` (512×512).
-
-## Roadmap
-
-1. File-format library with round-trip tests *(done)*
-2. String editor: a table of keys, Japanese and English per screen, with a live preview
-   in the game's font at the pane's real size, and overflow / missing-glyph warnings
-3. Automatic font building from donor fonts inside the romfs
-4. Glyph generation from TrueType fonts, styled to match each game font
-5. Export: a LayeredFS folder for Luma3DS / Citra, and xdelta patches
