@@ -31,6 +31,9 @@
         <version>3.6.4</version>
         <configuration>
           <mainClass>psaro.MainWindow</mainClass>
+          <jvmArgs>
+            <jvmArg>--enable-native-access=ALL-UNNAMED</jvmArg>
+          </jvmArgs>
         </configuration>
       </plugin>
       <plugin>
@@ -58,6 +61,9 @@
                   <mainClass>psaro.MainWindow</mainClass>
                   <manifestEntries>
                     <Implementation-Version>${project.version}</Implementation-Version>
+                    <!-- FlatLaf loads a JNI library for its Windows title bar; without this a
+                         plain `java -jar` run warns, and a future JDK will block it outright. -->
+                    <Enable-Native-Access>ALL-UNNAMED</Enable-Native-Access>
                   </manifestEntries>
                 </transformer>
               </transformers>
@@ -69,6 +75,20 @@
   </build>
 
   <dependencies>
+    <!-- Look and feel -->
+    <dependency>
+      <groupId>com.formdev</groupId>
+      <artifactId>flatlaf</artifactId>
+      <version>3.7.2</version>
+    </dependency>
+
+    <!-- JSON parsing (GitHub release check) -->
+    <dependency>
+      <groupId>org.json</groupId>
+      <artifactId>json</artifactId>
+      <version>20260814</version>
+    </dependency>
+
     <dependency>
       <groupId>org.junit.jupiter</groupId>
       <artifactId>junit-jupiter</artifactId>

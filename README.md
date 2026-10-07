@@ -37,6 +37,7 @@ Requires JDK 25 or newer and Maven.
 ```
 mvn -q compile
 mvn -q test
+mvn -q compile exec:java   # run the app
 ```
 
 `mvn test` runs the unit tests on synthetic data. To also check every reader and writer
@@ -59,9 +60,8 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-The workflow can also be run by hand from the Actions tab. It refuses to publish until
-`psaro.MainWindow` exists. The installers' icon is made from
-`src/main/resources/images/psaroeditor.png` (512×512).
+The workflow can also be run by hand from the Actions tab. The installers' icon is made
+from `src/main/resources/images/psaroeditor.png` (512×512).
 
 ## Roadmap
 

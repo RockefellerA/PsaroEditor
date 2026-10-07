@@ -121,6 +121,7 @@ jobs:
             --vendor           "RockefellerA" `
             --main-jar         psaroeditor.jar `
             --main-class       psaro.MainWindow `
+            --java-options     "--enable-native-access=ALL-UNNAMED" `
             @iconArgs `
             --win-dir-chooser `
             --win-shortcut `
@@ -200,6 +201,7 @@ jobs:
             --vendor           "RockefellerA" \
             --main-jar         psaroeditor.jar \
             --main-class       psaro.MainWindow \
+            --java-options     "--enable-native-access=ALL-UNNAMED" \
             "${ICON_ARGS[@]}" \
             --type             dmg \
             --dest             target/dist
@@ -252,6 +254,7 @@ jobs:
             --vendor           "RockefellerA" \
             --main-jar         psaroeditor.jar \
             --main-class       psaro.MainWindow \
+            --java-options     "--enable-native-access=ALL-UNNAMED" \
             "${ICON_ARGS[@]}" \
             --linux-shortcut \
             --type             deb \
