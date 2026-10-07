@@ -1,10 +1,13 @@
 package psaro;
 
 import java.awt.BorderLayout;
+import java.awt.Component;
 import java.awt.EventQueue;
 import java.awt.Taskbar;
 import java.awt.Toolkit;
 import java.awt.event.KeyEvent;
+import java.awt.event.WindowAdapter;
+import java.awt.event.WindowEvent;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
@@ -26,8 +29,9 @@ import psaro.dialog.PreferencesDialog;
 import psaro.menu.HelpMenu;
 import psaro.project.Translations;
 import psaro.romfs.RomfsIndex;
+import psaro.ui.EditorPanel;
 
-/** The application window. For now: open a romfs and report what it holds. */
+/** The application window: open a romfs, edit its English, save. */
 public final class MainWindow {
 
 	private static final String TITLE = "PsaroEditor";
@@ -35,8 +39,11 @@ public final class MainWindow {
 
 	private final Preferences prefs = Preferences.userNodeForPackage(MainWindow.class);
 	private final JFrame frame = new JFrame(TITLE);
-	private final JLabel body = new JLabel("", SwingConstants.CENTER);
+	private final JLabel empty = new JLabel("Open an extracted romfs to begin (File → Open romfs…)", SwingConstants.CENTER);
 	private final JLabel status = new JLabel(" ");
+	private final JMenuItem save = new JMenuItem("Save");
+	/** What fills the window: {@link #empty} or the editor. */
+	private Component body = empty;
 	/** The open romfs and its English, or null. */
 	private RomfsIndex index;
 	private Translations translations;
@@ -49,20 +56,26 @@ public final class MainWindow {
 	}
 
 	private MainWindow() {
-		frame.setDefaultCloseOperation(WindowConstants.EXIT_ON_CLOSE);
+		frame.setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
+		frame.addWindowListener(new WindowAdapter() {
+			@Override
+			public void windowClosing(WindowEvent e) {
+				close();
+			}
+		});
 		frame.setIconImages(AppIcon.windowIcons());
 		setDockIcon();
 		frame.setJMenuBar(menuBar());
 
 		// a FlatLaf style, not a fixed colour, so it follows a theme change
-		body.putClientProperty(FlatClientProperties.STYLE, "foreground: $Label.disabledForeground");
+		empty.putClientProperty(FlatClientProperties.STYLE, "foreground: $Label.disabledForeground");
 		status.setBorder(BorderFactory.createEmptyBorder(4, 8, 4, 8));
 		frame.add(body, BorderLayout.CENTER);
 		frame.add(status, BorderLayout.SOUTH);
 
-		frame.setSize(1100, 720);
+		frame.setSize(1280, 820);
 		frame.setLocationRelativeTo(null);
-		showEmpty();
+		refresh();
 	}
 
 	private void show() {
@@ -81,6 +94,10 @@ public final class MainWindow {
 		open.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_O, shortcut));
 		open.addActionListener(e -> chooseRomfs());
 
+		save.setMnemonic(KeyEvent.VK_S);
+		save.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_S, shortcut));
+		save.addActionListener(e -> save());
+
 		JMenuItem preferences = new JMenuItem("Preferences…");
 		preferences.setMnemonic(KeyEvent.VK_P);
 		preferences.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_COMMA, shortcut));
@@ -88,11 +105,12 @@ public final class MainWindow {
 
 		JMenuItem exit = new JMenuItem("Exit");
 		exit.setMnemonic(KeyEvent.VK_X);
-		exit.addActionListener(e -> frame.dispose());
+		exit.addActionListener(e -> close());
 
 		JMenu file = new JMenu("File");
 		file.setMnemonic(KeyEvent.VK_F);
 		file.add(open);
+		file.add(save);
 		file.addSeparator();
 		file.add(preferences);
 		file.addSeparator();
@@ -105,6 +123,9 @@ public final class MainWindow {
 	}
 
 	private void chooseRomfs() {
+		if (!confirmUnsaved()) {
+			return;
+		}
 		JFileChooser chooser = new JFileChooser();
 		chooser.setDialogTitle("Open romfs");
 		chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
@@ -150,15 +171,62 @@ public final class MainWindow {
 		index = scanned;
 		translations = loaded;
 		prefs.put(PREF_ROMFS, dir.toString());
-		frame.setTitle(TITLE + " — " + dir);
-		body.setText(String.format("%,d string tables · %,d strings · %,d translated · %,d layouts",
-				index.tables().size(), index.stringCount(), translations.translatedCount(), index.layoutCount()));
-		status.setText("Translations: " + translations.folder());
+		setBody(new EditorPanel(index, translations, this::refresh));
+		refresh();
 	}
 
-	private void showEmpty() {
-		body.setText("Open an extracted romfs to begin (File → Open romfs…)");
-		status.setText(" ");
+	private boolean save() {
+		if (translations == null || !translations.isDirty()) {
+			return true;
+		}
+		try {
+			translations.save();
+			refresh();
+			return true;
+		} catch (IOException e) {
+			error("Could not save the translations to " + translations.folder() + ":\n" + e.getMessage());
+			return false;
+		}
+	}
+
+	/** Asks what to do with unsaved English; true when it is safe to go on. */
+	private boolean confirmUnsaved() {
+		if (translations == null || !translations.isDirty()) {
+			return true;
+		}
+		int choice = JOptionPane.showConfirmDialog(frame,
+				"Save your changes to " + String.join(", ", translations.dirtyTables()) + " first?",
+				TITLE, JOptionPane.YES_NO_CANCEL_OPTION, JOptionPane.WARNING_MESSAGE);
+		return choice == JOptionPane.YES_OPTION ? save() : choice == JOptionPane.NO_OPTION;
+	}
+
+	private void close() {
+		if (confirmUnsaved()) {
+			frame.dispose();
+		}
+	}
+
+	private void setBody(Component next) {
+		frame.remove(body);
+		body = next;
+		frame.add(body, BorderLayout.CENTER);
+		frame.revalidate();
+		frame.repaint();
+	}
+
+	/** Title, status bar and Save item after anything that changes what is open or unsaved. */
+	private void refresh() {
+		boolean dirty = translations != null && translations.isDirty();
+		save.setEnabled(dirty);
+		if (index == null) {
+			frame.setTitle(TITLE);
+			status.setText(" ");
+			return;
+		}
+		frame.setTitle((dirty ? "• " : "") + TITLE + " — " + index.root());
+		status.setText(String.format("%,d of %,d strings translated · Saved to %s%s",
+				translations.translatedCount(), index.stringCount(), translations.folder(),
+				dirty ? " · Unsaved changes" : ""));
 	}
 
 	private void error(String message) {

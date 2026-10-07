@@ -30,8 +30,16 @@ public final class Bclyt {
 		}
 	}
 
+	/**
+	 * A text pane's box and type settings. {@code textPosition} places the text block in the
+	 * box: horizontal = position % 3 (0 left, 1 centre, 2 right), vertical = position / 3 (0
+	 * top, 1 centre, 2 bottom). {@code lineAlignment} aligns each line within the block: 0
+	 * follows the horizontal position, 1 left, 2 centre, 3 right. Colours are RGBA, red in
+	 * the top byte.
+	 */
 	public record TextInfo(String font, float boxWidth, float boxHeight, int bufferBytes,
-			float fontSizeX, float fontSizeY, float charSpace, float lineSpace, String placeholder) {
+			float fontSizeX, float fontSizeY, float charSpace, float lineSpace, String placeholder,
+			int textPosition, int lineAlignment, int topColor, int bottomColor) {
 	}
 
 	public record Layout(List<String> fonts, List<Pane> panes) {
@@ -77,7 +85,9 @@ public final class Bclyt {
 								Bytes.f32(d, o + 0x44), Bytes.f32(d, o + 0x48), Bytes.u16(d, o + 0x4C),
 								Bytes.f32(d, o + 0x64), Bytes.f32(d, o + 0x68),
 								Bytes.f32(d, o + 0x6C), Bytes.f32(d, o + 0x70),
-								Bytes.utf16(d, o + textOff, o + size));
+								Bytes.utf16(d, o + textOff, o + size),
+								Bytes.u8(d, o + 0x54), Bytes.u8(d, o + 0x55),
+								rgba(d, o + 0x5C), rgba(d, o + 0x60));
 					}
 					panes.add(new Pane(tag, name, new ArrayList<>(), info));
 				}
@@ -95,5 +105,10 @@ public final class Bclyt {
 			o += size;
 		}
 		return new Layout(fonts, panes);
+	}
+
+	/** Four bytes r, g, b, a as RGBA with red in the top byte. */
+	private static int rgba(byte[] d, int i) {
+		return Bytes.u8(d, i) << 24 | Bytes.u8(d, i + 1) << 16 | Bytes.u8(d, i + 2) << 8 | Bytes.u8(d, i + 3);
 	}
 }
