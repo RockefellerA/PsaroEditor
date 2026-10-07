@@ -50,13 +50,12 @@ final class PreviewPanel extends JPanel {
 			return usage;
 		}
 
+		/** Marked when the English overflows this pane, so the picker shows which panes need work. */
 		@Override
 		public String toString() {
-			String archive = usage.archive().getFileName().toString().replace(".arc.lz", "");
-			String layout = usage.layout().substring(usage.layout().lastIndexOf('/') + 1);
 			var t = fonts.text(usage);
-			return String.format("%s › %s › %s  (%.0f×%.0f, %s)", archive, layout, usage.pane().name(),
-					t.boxWidth(), t.boxHeight(), usage.fontName());
+			return String.format("%s%s  (%.0f×%.0f, %s)", overflowing.contains(usage) ? "⚠ " : "", name(usage),
+					t.boxWidth(), t.boxHeight(), t.font());
 		}
 	}
 
@@ -71,6 +70,8 @@ final class PreviewPanel extends JPanel {
 	private final JPanel content = new JPanel();
 	private final PaneSettingsBar settings;
 	private List<Usage> usages = List.of();
+	/** The previewable panes the English does not fit, as the Fits column counts them. */
+	private Set<Usage> overflowing = Set.of();
 	private String japaneseRaw = "";
 	private String englishRaw;
 
@@ -87,6 +88,7 @@ final class PreviewPanel extends JPanel {
 		this.index = fonts.index();
 		this.fonts = fonts;
 		this.settings = new PaneSettingsBar(fonts, () -> {
+			measure();
 			pane.repaint();
 			redraw();
 			onLayoutChanged.run();
@@ -141,14 +143,27 @@ final class PreviewPanel extends JPanel {
 		clear();
 	}
 
-	/** Shows a string: the panes that use it, its Japanese, and its English (null if none). */
+	/**
+	 * Shows a string: the panes that use it, its Japanese, and its English (null if none). The
+	 * first pane the English does not fit is chosen, so the preview shows what the Fits column
+	 * flags.
+	 */
 	void showString(List<Usage> all, String japaneseText, String englishText) {
 		usages = all;
 		japaneseRaw = japaneseText;
 		englishRaw = englishText;
+		measure();
 		pane.removeAllItems();
+		Choice first = null;
 		for (Usage u : Fit.previewable(all)) {
-			pane.addItem(new Choice(u));
+			Choice c = new Choice(u);
+			pane.addItem(c);
+			if (first == null && overflowing.contains(u)) {
+				first = c;
+			}
+		}
+		if (first != null) {
+			pane.setSelectedItem(first);
 		}
 		pane.setEnabled(pane.getItemCount() > 1);
 		redraw();
@@ -157,7 +172,22 @@ final class PreviewPanel extends JPanel {
 	/** Redraws with new English, keeping the chosen pane. */
 	void setEnglish(String englishText) {
 		englishRaw = englishText;
+		measure();
+		pane.repaint();
 		redraw();
+	}
+
+	/** Works out which panes the English does not fit. */
+	private void measure() {
+		Set<Usage> out = new LinkedHashSet<>();
+		if (englishRaw != null) {
+			for (Usage u : Fit.previewable(usages)) {
+				if (Fit.judge(fonts, u, englishRaw, japaneseRaw).overflows()) {
+					out.add(u);
+				}
+			}
+		}
+		overflowing = out;
 	}
 
 	/** Opens the color mapping, or brings it forward if it is already open. */
@@ -171,6 +201,7 @@ final class PreviewPanel extends JPanel {
 
 	void clear() {
 		usages = List.of();
+		overflowing = Set.of();
 		pane.removeAllItems();
 		pane.setEnabled(false);
 		japanese.setIcon(null);
@@ -205,7 +236,7 @@ final class PreviewPanel extends JPanel {
 
 		List<String> lines = new ArrayList<>();
 		if (font == null) {
-			lines.add(u.fontName() + " is not in this archive (the 3DS system font is not part of the romfs), "
+			lines.add(fonts.fontName(u) + " is not in this archive (the 3DS system font is not part of the romfs), "
 					+ "so this pane is drawn with a stand-in typeface and its fit is approximate.");
 		}
 		if (englishRaw == null) {
@@ -216,6 +247,7 @@ final class PreviewPanel extends JPanel {
 			english.setText(null);
 			english.setIcon(new ImageIcon(en.image()));
 			describeFit(Fit.judge(fonts, u, englishRaw, japaneseRaw), lines);
+			describeOthers(u, lines);
 			describeMissing(lines);
 		}
 		notes.setText(lines.stream().map(s -> "• " + s).collect(Collectors.joining("\n")));
@@ -247,6 +279,26 @@ final class PreviewPanel extends JPanel {
 		}
 	}
 
+	/** The other panes showing this string that the English does not fit. */
+	private void describeOthers(Usage current, List<String> lines) {
+		List<String> others = overflowing.stream().filter(o -> !o.equals(current)).map(PreviewPanel::name).toList();
+		if (others.isEmpty()) {
+			return;
+		}
+		int shown = Math.min(others.size(), 4);
+		String list = String.join(", ", others.subList(0, shown))
+				+ (others.size() > shown ? " and " + (others.size() - shown) + " more" : "");
+		lines.add(String.format("Does not fit %d other pane%s showing this string (marked ⚠ under Pane): %s.",
+				others.size(), others.size() == 1 ? "" : "s", list));
+	}
+
+	/** A pane as "archive › layout › pane". */
+	private static String name(Usage u) {
+		String archive = u.archive().getFileName().toString().replace(".arc.lz", "");
+		String layout = u.layout().substring(u.layout().lastIndexOf('/') + 1);
+		return archive + " › " + layout + " › " + u.pane().name();
+	}
+
 	private static String limitSource(Fit.Limit by) {
 		return switch (by) {
 			case BOX -> "the box is";
@@ -264,10 +316,10 @@ final class PreviewPanel extends JPanel {
 			if (font != null) {
 				TextRenderer.Result r = TextRenderer.measure(font, Fit.donors(fonts, u), fonts.text(u), englishRaw);
 				if (!r.missing().isEmpty()) {
-					byFont.computeIfAbsent(u.fontName(), k -> new LinkedHashSet<>()).addAll(r.missing());
+					byFont.computeIfAbsent(fonts.fontName(u), k -> new LinkedHashSet<>()).addAll(r.missing());
 				}
 				if (!r.standIn().isEmpty()) {
-					noDonor.computeIfAbsent(u.fontName(), k -> new LinkedHashSet<>()).addAll(r.standIn());
+					noDonor.computeIfAbsent(fonts.fontName(u), k -> new LinkedHashSet<>()).addAll(r.standIn());
 				}
 			}
 		}

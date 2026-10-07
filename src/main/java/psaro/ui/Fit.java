@@ -85,7 +85,9 @@ public record Fit(boolean shown, boolean tooWide, boolean tooTall, Set<Integer> 
 
 	/**
 	 * Measures {@code english} in {@code u}'s pane against the room the game gives Japanese there,
-	 * with what the pane's font lacks as the font patch would add it.
+	 * with what the pane's font lacks as the font patch would add it. The original Japanese (a
+	 * string marked to keep it) in a pane left as the layout has it always fits: the game already
+	 * shows it that way, so a measured overflow would only be the measuring's mistake.
 	 */
 	public static Judgement judge(FontPatcher fonts, Usage u, String english, String japanese) {
 		RomfsIndex index = fonts.index();
@@ -98,8 +100,9 @@ public record Fit(boolean shown, boolean tooWide, boolean tooTall, Set<Integer> 
 		double jpH = jp.textBounds().getHeight();
 		Limit heightBy = largest(info.boxHeight(), jpH, room);
 		double h = Math.max(info.boxHeight(), Math.max(jpH, room));
-		return new Judgement(en, info.boxWidth(), info.boxHeight(), h, heightBy, en.tooWide(),
-				en.textBounds().getHeight() > h + TOLERANCE);
+		boolean asShipped = english.equals(japanese) && fonts.overrides().get(u.layout(), u.pane().name()).isEmpty();
+		return new Judgement(en, info.boxWidth(), info.boxHeight(), h, heightBy, !asShipped && en.tooWide(),
+				!asShipped && en.textBounds().getHeight() > h + TOLERANCE);
 	}
 
 	/** Which of the three is largest; a tie goes to the earlier one. */

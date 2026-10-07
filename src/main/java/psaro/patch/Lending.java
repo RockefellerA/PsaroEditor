@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 import psaro.format.Bcfnt;
+import psaro.romfs.RomfsIndex;
 import psaro.romfs.RomfsIndex.Donor;
 
 /** Adds the glyphs a font lacks from donor fonts, the same way for the preview and the patch. */
@@ -33,8 +34,8 @@ public final class Lending {
 	 * the others, in order. Returns the donor each added code came from; a code no donor has is
 	 * left out.
 	 */
-	public static Map<Integer, Donor> add(Bcfnt target, Collection<Integer> codes, List<Donor> donors,
-			String extraSpace) {
+	public static Map<Integer, Donor> add(String targetName, Bcfnt target, Collection<Integer> codes,
+			List<Donor> donors, String extraSpace) {
 		List<Donor> order = primaryFirst(donors);
 		Map<Donor, List<Integer>> byDonor = new LinkedHashMap<>();
 		Map<Integer, Donor> from = new TreeMap<>();
@@ -50,10 +51,20 @@ public final class Lending {
 				}
 			}
 		}
+		String style = RomfsIndex.style(targetName);
 		for (Map.Entry<Donor, List<Integer>> e : byDonor.entrySet()) {
 			Bcfnt donor = e.getKey().font();
-			boolean same = donor.width == target.width && donor.height == target.height;
-			target.addGlyphsFrom(same ? donor : donor.scaledTo(target, e.getValue()), e.getValue(), false);
+			Bcfnt src;
+			boolean otherStyle = style != null && !style.equals(RomfsIndex.style(e.getKey().name()));
+			double ink = otherStyle ? inkRatio(target, donor) : Double.NaN;
+			if (!Double.isNaN(ink)) {
+				// another style sets its nominal size its own way: match the glyphs' real height instead
+				src = donor.scaledTo(target, e.getValue(), ink, ink);
+			} else {
+				boolean same = donor.width == target.width && donor.height == target.height;
+				src = same ? donor : donor.scaledTo(target, e.getValue());
+			}
+			target.addGlyphsFrom(src, e.getValue(), false);
 		}
 		for (int c : from.keySet()) {
 			if (extraSpace.codePoints().anyMatch(s -> s == c)) {
@@ -87,6 +98,47 @@ public final class Lending {
 			}
 		}
 		return true;
+	}
+
+	/**
+	 * How much taller {@code target}'s glyphs are than {@code donor}'s: the median ratio of their
+	 * inked heights over the characters both have, or NaN when they share fewer than three.
+	 */
+	static double inkRatio(Bcfnt target, Bcfnt donor) {
+		List<Double> ratios = new ArrayList<>();
+		for (int c : target.cmap.keySet()) {
+			if (c > 0x20 && donor.has(c)) {
+				int t = inkHeight(target, c);
+				int d = inkHeight(donor, c);
+				if (t > 0 && d > 0) {
+					ratios.add((double) t / d);
+				}
+			}
+		}
+		if (ratios.size() < 3) {
+			return Double.NaN;
+		}
+		ratios.sort(null);
+		return ratios.get(ratios.size() / 2);
+	}
+
+	/** Rows of {@code c}'s cell holding a clearly visible pixel, top to bottom; 0 for a blank glyph. */
+	private static int inkHeight(Bcfnt font, int c) {
+		int[] px = font.rgba(font.cmap.get(c));
+		int top = -1;
+		int bottom = -1;
+		for (int y = 0; y < font.cellH; y++) {
+			for (int x = 0; x < font.cellW; x++) {
+				if ((px[y * font.cellW + x] & 0xFF) > 64) {
+					if (top < 0) {
+						top = y;
+					}
+					bottom = y;
+					break;
+				}
+			}
+		}
+		return top < 0 ? 0 : bottom - top + 1;
 	}
 
 	/** Every code point some donor could lend. */

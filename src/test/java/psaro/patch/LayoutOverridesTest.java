@@ -28,7 +28,7 @@ class LayoutOverridesTest {
 		Path romfs = dir.resolve("game");
 		LayoutOverrides o = LayoutOverrides.open(romfs);
 		assertTrue(o.layouts().isEmpty());
-		TextOverride t = new TextOverride(40f, null, null, null, 2.1f, null);
+		TextOverride t = new TextOverride(40f, null, null, null, 2.1f, null, "SulaPro_B_04a_18.bcfnt");
 		o.set(LAYOUT, List.of("Txt_Btn", "Txt_Btn_Shad"), t);
 
 		Path file = dir.resolve("game.psaro/layouts.json");

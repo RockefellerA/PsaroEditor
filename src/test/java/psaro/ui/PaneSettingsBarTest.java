@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Map;
 
 import javax.swing.JButton;
+import javax.swing.JComboBox;
 import javax.swing.JSpinner;
 
 import org.junit.jupiter.api.Test;
@@ -72,5 +73,35 @@ class PaneSettingsBarTest {
 				.orElseThrow().doClick();
 		assertTrue(fonts.overrides().layouts().isEmpty());
 		assertEquals(120.0, spinners.get(0).getValue());
+	}
+
+	@Test
+	void anotherOfTheLayoutsFontsCanBeChosen() throws IOException {
+		Path romfs = dir.resolve("game");
+		SampleRomfs.table(romfs, "menu", Map.of("menu_0001", "はい"));
+		SampleRomfs.archive(romfs, "scene/menu/menu.arc.lz", "blyt/menu.bclyt", List.of("a.bcfnt", "b.bcfnt"), Map.of(),
+				SampleRomfs.pane("Txt_Yes", "menu_0001"), SampleRomfs.pane("Txt_Yes_Shad", "menu_0001"));
+		RomfsIndex index = RomfsIndex.scan(romfs);
+		FontPatcher fonts = new FontPatcher(index, PatchSettings.open(romfs), LayoutOverrides.open(romfs));
+		int[] changes = {0};
+		PaneSettingsBar bar = new PaneSettingsBar(fonts, () -> changes[0]++);
+		List<Usage> usages = index.usages(index.table("menu"), "menu_0001");
+
+		bar.show(usages.get(0), usages);
+		@SuppressWarnings("unchecked")
+		JComboBox<String> font = all(bar, JComboBox.class, new ArrayList<>()).get(0);
+		assertEquals("a.bcfnt", font.getSelectedItem());
+		assertTrue(font.isEnabled());
+		assertEquals(0, changes[0], "showing a pane is not a change");
+
+		font.setSelectedItem("b.bcfnt");
+		assertEquals(1, changes[0]);
+		assertEquals("b.bcfnt", fonts.overrides().get("blyt/menu.bclyt", "Txt_Yes").font());
+		assertEquals("b.bcfnt", fonts.fontName(usages.get(0)));
+		// the twin drew with the same font, so it follows
+		assertEquals("b.bcfnt", fonts.overrides().get("blyt/menu.bclyt", "Txt_Yes_Shad").font());
+
+		font.setSelectedItem("a.bcfnt");
+		assertTrue(fonts.overrides().layouts().isEmpty());
 	}
 }

@@ -402,8 +402,15 @@ public final class Bcfnt {
 	 * an exact-coverage box filter in premultiplied alpha, so outlines keep their colour.
 	 */
 	public Bcfnt scaledTo(Bcfnt target, Collection<Integer> codes) {
-		double sx = (double) target.width / width;
-		double sy = (double) target.height / height;
+		return scaledTo(target, codes, (double) target.width / width, (double) target.height / height);
+	}
+
+	/**
+	 * A font holding only {@code codes} from this one, with {@code target}'s proportions but its
+	 * glyphs resampled by {@code sx} across and {@code sy} down, for when the two fonts' nominal
+	 * sizes do not compare (fonts of different styles set them differently).
+	 */
+	public Bcfnt scaledTo(Bcfnt target, Collection<Integer> codes, double sx, double sy) {
 		Bcfnt out = new Bcfnt();
 		out.format = format;
 		out.pad = pad;

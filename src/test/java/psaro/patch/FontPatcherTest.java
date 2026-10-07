@@ -214,6 +214,42 @@ class FontPatcherTest {
 		assertFalse(patcher.plan(List.of()).hasWork());
 	}
 
+	/**
+	 * A pane switched to the layout's other font is measured in it, that font gets the English's
+	 * glyphs instead of the pane's own, and the written layout points the pane at it.
+	 */
+	@Test
+	void aPaneSwitchedToAnotherFontIsMeasuredAndPatchedInIt() throws IOException {
+		String small = "SulaPro_B_04a_18.bcfnt";
+		Path other = dir.resolve("other");
+		SampleRomfs.table(other, "menu", Map.of("menu_0001", "はい"));
+		SampleRomfs.archive(other, "scene/menu/menu.arc.lz", "blyt/menu.bclyt", List.of(FONT, small),
+				Map.of(FONT, SampleRomfs.font("はい", 10), small, SampleRomfs.font("い", 6)),
+				SampleRomfs.pane("Txt_Yes", "menu_0001"));
+		SampleRomfs.archive(other, "scene/plaza/plaza.arc.lz", "blyt/plaza.bclyt", List.of(FONT, small),
+				Map.of(FONT, SampleRomfs.font(ALPHABET + "はい", 8), small, SampleRomfs.font(ALPHABET + "はい", 6)));
+		RomfsIndex idx = RomfsIndex.scan(other);
+		FontPatcher p = new FontPatcher(idx, PatchSettings.open(other), LayoutOverrides.open(other));
+		Usage u = idx.usages(idx.table("menu"), "menu_0001").get(0);
+		assertEquals(List.of(FONT, small), u.layoutFonts());
+		assertEquals(FONT, p.fontName(u));
+
+		p.overrides().set("blyt/menu.bclyt", List.of("Txt_Yes"), TextOverride.NONE.withFont(small));
+		assertEquals(small, p.fontName(u));
+		assertFalse(p.current(u).has('は'), "measured in the small font, which lacks it");
+		List<Text> yes = List.of(new Text(idx.table("menu"), "menu_0001", "Yes"));
+		Plan plan = p.plan(yes);
+		assertEquals(List.of(small), plan.fonts().stream().map(FontChange::font).toList());
+		assertEquals(codes("Yes"), plan.fonts().get(0).add());
+
+		p.write(plan, step -> { });
+		Map<String, Darc.Node> files = Darc.files(Archive.load(p.outputPath(other.resolve("scene/menu/menu.arc.lz"))));
+		assertEquals(small, Bclyt.read(files.get("blyt/menu.bclyt").data).textPanes().get(0).text().font());
+		assertTrue(Bcfnt.parse(files.get("font/" + small).data).has('Y'));
+		assertFalse(Bcfnt.parse(files.get("font/" + FONT).data).has('Y'));
+		assertFalse(p.plan(yes).hasWork());
+	}
+
 	@Test
 	void anArchiveWithGlyphsAndALayoutChangeGetsBoth() throws IOException {
 		patcher.overrides().set("blyt/menu.bclyt", List.of("Txt_Yes"), new TextOverride(40f, null, null, null, null, null));
@@ -225,6 +261,36 @@ class FontPatcherTest {
 		patcher.write(patcher.plan(List.of()), step -> { });
 		assertFalse(written().has('Y'));
 		assertFalse(patcher.plan(List.of()).hasWork());
+	}
+
+	/**
+	 * A plain {@code 02a} font whose style has no English anywhere borrows from the same family in
+	 * another style; an {@code 04a} font whose own style has the alphabet keeps to it.
+	 */
+	@Test
+	void anotherStyleLendsOnlyWhenTheFontsOwnStyleHasNoAlphabet() throws IOException {
+		Path other = dir.resolve("other");
+		SampleRomfs.table(other, "menu", Map.of("menu_0001", "はい", "menu_0002", "いいえ"));
+		SampleRomfs.archive(other, "scene/menu/menu.arc.lz", "blyt/menu.bclyt",
+				List.of("SulaPro_B_02a_18.bcfnt", "SulaPro_B_04a_18.bcfnt"),
+				Map.of("SulaPro_B_02a_18.bcfnt", SampleRomfs.font("はい", 10), "SulaPro_B_04a_18.bcfnt",
+						SampleRomfs.font("いえ", 10)),
+				SampleRomfs.pane("Txt_Plain", "menu_0001"));
+		SampleRomfs.archive(other, "scene/other/other.arc.lz", "blyt/other.bclyt", List.of("SulaPro_B_01a_18.bcfnt"),
+				Map.of("SulaPro_B_01a_18.bcfnt", SampleRomfs.font(ALPHABET, 7), "SulaPro_B_04a_20.bcfnt",
+						SampleRomfs.font(ALPHABET, 8)));
+		RomfsIndex idx = RomfsIndex.scan(other);
+		List<String> plain = idx.donors("SulaPro_B_02a_18.bcfnt").stream().map(d -> d.name()).toList();
+		assertEquals(List.of("SulaPro_B_01a_18.bcfnt"), plain);
+		List<String> outlined = idx.donors("SulaPro_B_04a_18.bcfnt").stream().map(d -> d.name()).toList();
+		assertEquals("SulaPro_B_04a_20.bcfnt", outlined.get(0));
+		assertFalse(outlined.contains("SulaPro_B_01a_18.bcfnt"), "the outlined font's own style has the alphabet");
+
+		FontPatcher p = new FontPatcher(idx, PatchSettings.open(other), LayoutOverrides.open(other));
+		FontChange f = p.plan(List.of(new Text(idx.table("menu"), "menu_0001", "Yes"))).fonts().get(0);
+		assertTrue(f.unavailable().isEmpty());
+		assertEquals(codes("Yes"), f.lent());
+		assertEquals(Set.of("SulaPro_B_01a_18.bcfnt"), Set.copyOf(f.from().values().stream().map(d -> d.name()).toList()));
 	}
 
 	@Test

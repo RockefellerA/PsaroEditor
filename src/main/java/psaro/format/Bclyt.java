@@ -54,20 +54,32 @@ public final class Bclyt {
 
 	/**
 	 * New values for a text pane's box and type settings; a null field keeps the layout's own.
-	 * Character spacing and line spacing are in the same units as the box.
+	 * Character spacing and line spacing are in the same units as the box. {@code font} is
+	 * another of the fonts the layout lists (fnl1), by file name.
 	 */
 	public record TextOverride(Float boxWidth, Float boxHeight, Float fontSizeX, Float fontSizeY, Float charSpace,
-			Float lineSpace) {
+			Float lineSpace, String font) {
 
-		public static final TextOverride NONE = new TextOverride(null, null, null, null, null, null);
+		public static final TextOverride NONE = new TextOverride(null, null, null, null, null, null, null);
+
+		/** A change that keeps the pane's font. */
+		public TextOverride(Float boxWidth, Float boxHeight, Float fontSizeX, Float fontSizeY, Float charSpace,
+				Float lineSpace) {
+			this(boxWidth, boxHeight, fontSizeX, fontSizeY, charSpace, lineSpace, null);
+		}
 
 		public boolean isEmpty() {
 			return equals(NONE);
 		}
 
+		/** This change with {@code font} in place of its own. */
+		public TextOverride withFont(String font) {
+			return new TextOverride(boxWidth, boxHeight, fontSizeX, fontSizeY, charSpace, lineSpace, font);
+		}
+
 		/** {@code info} with this override's values in place of its own. */
 		public TextInfo apply(TextInfo info) {
-			return new TextInfo(info.font(), or(boxWidth, info.boxWidth()), or(boxHeight, info.boxHeight()),
+			return new TextInfo(font != null ? font : info.font(), or(boxWidth, info.boxWidth()), or(boxHeight, info.boxHeight()),
 					info.bufferBytes(), or(fontSizeX, info.fontSizeX()), or(fontSizeY, info.fontSizeY()),
 					or(charSpace, info.charSpace()), or(lineSpace, info.lineSpace()), info.placeholder(),
 					info.textPosition(), info.lineAlignment(), info.topColor(), info.bottomColor());
@@ -139,18 +151,23 @@ public final class Bclyt {
 
 	/**
 	 * A copy of layout {@code d} with each text pane named in {@code overrides} given its new
-	 * settings. Only those floats change; every other byte stays as it was.
+	 * settings. Only those floats and the font index change; every other byte stays as it was.
+	 * A font the layout does not list is left as it was, since the pane can only point into
+	 * fnl1.
 	 */
 	public static byte[] withText(byte[] d, Map<String, TextOverride> overrides) {
 		byte[] out = d.clone();
 		ByteBuffer b = ByteBuffer.wrap(out).order(ByteOrder.LITTLE_ENDIAN);
+		List<String> fonts = List.of();
 		int o = Bytes.u16(d, 6);
 		while (o < d.length - 8) {
 			int size = Bytes.u32(d, o + 4);
 			if (size == 0) {
 				break;
 			}
-			if (Bytes.magic(d, o, "txt1")) {
+			if (Bytes.magic(d, o, "fnl1")) {
+				fonts = read(d).fonts();
+			} else if (Bytes.magic(d, o, "txt1")) {
 				String name = Bytes.ascii(d, o + 12);
 				TextOverride t = overrides.get(name.length() > 16 ? name.substring(0, 16) : name);
 				if (t != null) {
@@ -160,6 +177,10 @@ public final class Bclyt {
 					put(b, o + 0x68, t.fontSizeY());
 					put(b, o + 0x6C, t.charSpace());
 					put(b, o + 0x70, t.lineSpace());
+					int font = t.font() == null ? -1 : fonts.indexOf(t.font());
+					if (font >= 0) {
+						b.putShort(o + 0x52, (short) font);
+					}
 				}
 			}
 			o += size;

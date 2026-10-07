@@ -96,4 +96,21 @@
       <scope>test</scope>
     </dependency>
   </dependencies>
+
+  <profiles>
+    <!-- The IDE (VS Code's Java extension, Eclipse) builds into target/ide instead of
+         target/classes, so its build on every save and command-line Maven cannot overwrite or
+         delete each other's classes. m2e sets m2e.version when it imports the project. -->
+    <profile>
+      <id>ide</id>
+      <activation>
+        <property>
+          <name>m2e.version</name>
+        </property>
+      </activation>
+      <build>
+        <directory>target/ide</directory>
+      </build>
+    </profile>
+  </profiles>
 </project>

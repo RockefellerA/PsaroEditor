@@ -1,15 +1,20 @@
 package psaro.ui;
 
+import java.awt.Component;
 import java.awt.FlowLayout;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import javax.swing.BorderFactory;
 import javax.swing.BoxLayout;
+import javax.swing.DefaultListCellRenderer;
 import javax.swing.JButton;
+import javax.swing.JComboBox;
 import javax.swing.JComponent;
 import javax.swing.JLabel;
+import javax.swing.JList;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JSpinner;
@@ -21,10 +26,11 @@ import psaro.patch.FontPatcher;
 import psaro.romfs.RomfsIndex.Usage;
 
 /**
- * The previewed pane's box and type settings, changeable in place. A change is made to the
- * layout, so it applies to that pane, and its drop-shadow twin, in every archive that carries
- * the layout; the preview and the fit use it at once, and the patch writes it. A value that
- * differs from the layout's own shows in bold.
+ * The previewed pane's font, box and type settings, changeable in place. A change is made to
+ * the layout, so it applies to that pane, and its drop-shadow twin, in every archive that
+ * carries the layout; the preview and the fit use it at once, and the patch writes it. A value
+ * that differs from the layout's own shows in bold. The font can be any the layout lists, since
+ * a pane only points into that list.
  */
 final class PaneSettingsBar extends JPanel {
 
@@ -35,10 +41,14 @@ final class PaneSettingsBar extends JPanel {
 	private final FontPatcher fonts;
 	private final Runnable onChange;
 	private final List<Field> fields = new ArrayList<>();
+	/** The fonts the layout lists, any of which the pane can draw with. */
+	private final JComboBox<String> font = new JComboBox<>();
 	private final JButton reset = new JButton("Reset");
 	private final JLabel scope = new JLabel();
 	private Usage usage;
 	private List<String> panes = List.of();
+	/** The pane's drop-shadow twins, which take its changes. */
+	private List<Usage> twins = List.of();
 	/** Set while the spinners are filled in, so that is not taken as a change. */
 	private boolean loading;
 
@@ -62,8 +72,24 @@ final class PaneSettingsBar extends JPanel {
 		fields.add(new Field(letters, TextInfo::charSpace, "letter spacing"));
 		fields.add(new Field(lines, TextInfo::lineSpace, "line spacing"));
 
+		font.setRenderer(new DefaultListCellRenderer() {
+			@Override
+			public Component getListCellRendererComponent(JList<?> list, Object value, int index, boolean selected,
+					boolean focus) {
+				return super.getListCellRendererComponent(list, value == null ? null : String.valueOf(value)
+						.replace(".bcfnt", ""), index, selected, focus);
+			}
+		});
+		font.addActionListener(e -> {
+			if (!loading && usage != null) {
+				save(fromSpinners());
+			}
+		});
+
 		JPanel first = row();
-		first.add(label("Box:"));
+		first.add(label("Font:"));
+		first.add(font);
+		first.add(label("   Box:"));
 		first.add(boxW);
 		first.add(new JLabel("×"));
 		first.add(boxH);
@@ -102,12 +128,18 @@ final class PaneSettingsBar extends JPanel {
 	void show(Usage u, List<Usage> all) {
 		usage = u;
 		panes = new ArrayList<>(List.of(u.pane().name()));
+		twins = new ArrayList<>();
 		for (Usage o : all) {
 			if (o != u && Fit.isShadow(o) && o.archive().equals(u.archive()) && o.layout().equals(u.layout())
 					&& !panes.contains(o.pane().name())) {
 				panes.add(o.pane().name());
+				twins.add(o);
 			}
 		}
+		loading = true;
+		font.removeAllItems();
+		u.layoutFonts().forEach(font::addItem);
+		loading = false;
 		int archives = fonts.index().archivesWithLayout(u.layout()).size();
 		String layout = u.layout().substring(u.layout().lastIndexOf('/') + 1);
 		scope.setText(archives <= 1 ? "Applies to " + layout : "Applies to " + layout + " in " + archives + " archives");
@@ -119,12 +151,17 @@ final class PaneSettingsBar extends JPanel {
 	void clear() {
 		usage = null;
 		panes = List.of();
+		twins = List.of();
 		loading = true;
 		for (Field f : fields) {
 			f.spinner().setEnabled(false);
 			f.spinner().setValue(0.0);
 			style(f, false, null);
 		}
+		font.removeAllItems();
+		font.setEnabled(false);
+		style(font, false);
+		font.setToolTipText(null);
 		loading = false;
 		reset.setEnabled(false);
 		scope.setText(" ");
@@ -142,6 +179,14 @@ final class PaneSettingsBar extends JPanel {
 			f.spinner().setValue((double) value);
 			style(f, differs(value, original), original);
 		}
+		font.setSelectedItem(now.font());
+		// the system font, or a layout with one font, leaves nothing to switch to
+		font.setEnabled(usage.layoutFonts().size() > 1 && usage.layoutFonts().contains(own.font()));
+		boolean switched = !Objects.equals(now.font(), own.font());
+		style(font, switched);
+		font.setToolTipText(usage.layoutFonts().size() <= 1 ? "The layout lists no other font"
+				: "The fonts this layout lists" + (switched ? "; the layout's own is " + own.font().replace(".bcfnt", "")
+						: ". Patch adds the glyphs the English needs to whichever is chosen."));
 		loading = false;
 		reset.setEnabled(!fonts.overrides().get(usage.layout(), usage.pane().name()).isEmpty());
 	}
@@ -155,12 +200,26 @@ final class PaneSettingsBar extends JPanel {
 			float value = ((Number) f.spinner().getValue()).floatValue();
 			v[i] = differs(value, f.get().apply(own)) ? value : null;
 		}
-		return new TextOverride(v[0], v[1], v[2], v[3], v[4], v[5]);
+		String chosen = (String) font.getSelectedItem();
+		return new TextOverride(v[0], v[1], v[2], v[3], v[4], v[5],
+				chosen == null || chosen.equals(own.font()) ? null : chosen);
 	}
 
+	/**
+	 * Saves {@code t} for the pane and its twins. A twin follows a font switch only when it drew
+	 * with the pane's font: a shadow in a blurred font of its own keeps it.
+	 */
 	private void save(TextOverride t) {
 		try {
-			fonts.overrides().set(usage.layout(), panes, t);
+			List<String> same = new ArrayList<>(List.of(usage.pane().name()));
+			List<String> own = new ArrayList<>();
+			for (Usage twin : twins) {
+				(Objects.equals(twin.fontName(), usage.fontName()) ? same : own).add(twin.pane().name());
+			}
+			fonts.overrides().set(usage.layout(), same, t);
+			if (!own.isEmpty()) {
+				fonts.overrides().set(usage.layout(), own, t.withFont(null));
+			}
 		} catch (IOException e) {
 			JOptionPane.showMessageDialog(this, "Could not save the layout change:\n" + e.getMessage(), "Layout",
 					JOptionPane.ERROR_MESSAGE);
@@ -178,6 +237,10 @@ final class PaneSettingsBar extends JPanel {
 		editor.putClientProperty(FlatClientProperties.STYLE, changed ? "font: bold" : null);
 		f.spinner().setToolTipText(original == null ? null
 				: "The " + f.name() + (changed ? "; the layout's own is " + format(original) : ", as the layout has it"));
+	}
+
+	private static void style(JComponent c, boolean changed) {
+		c.putClientProperty(FlatClientProperties.STYLE, changed ? "font: bold" : null);
 	}
 
 	private static String format(float v) {

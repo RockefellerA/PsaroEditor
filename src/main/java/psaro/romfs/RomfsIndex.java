@@ -52,9 +52,13 @@ public final class RomfsIndex {
 	public record StringTable(String name, Path path, Map<String, String> strings) {
 	}
 
-	/** One text pane that shows a string: the archive, the layout's path inside it, and the pane. */
-	public record Usage(Path archive, String layout, Bclyt.Pane pane) {
+	/**
+	 * One text pane that shows a string: the archive, the layout's path inside it, the pane, and
+	 * the fonts the layout lists, which the pane can be switched among.
+	 */
+	public record Usage(Path archive, String layout, Bclyt.Pane pane, List<String> layoutFonts) {
 
+		/** The layout's own font for the pane, before any change. */
 		public String fontName() {
 			return pane.text().font();
 		}
@@ -160,8 +164,10 @@ public final class RomfsIndex {
 				}
 				layouts++;
 				layoutHomes.computeIfAbsent(file.getKey(), k -> new ArrayList<>()).add(archive);
-				for (Bclyt.Pane pane : Bclyt.read(file.getValue().data).textPanes()) {
-					Usage usage = new Usage(archive, file.getKey(), pane);
+				Bclyt.Layout layout = Bclyt.read(file.getValue().data);
+				List<String> layoutFonts = List.copyOf(layout.fonts());
+				for (Bclyt.Pane pane : layout.textPanes()) {
+					Usage usage = new Usage(archive, file.getKey(), pane, layoutFonts);
 					for (String key : pane.keys()) {
 						List<String> homes = own != null && own.strings().containsKey(key)
 								? List.of(own.name())
@@ -229,8 +235,8 @@ public final class RomfsIndex {
 	}
 
 	/**
-	 * The font {@code usage}'s pane draws with, or null when its archive does not carry it (the
-	 * system font). Loads every font of that archive on first use.
+	 * The layout's own font for {@code usage}'s pane, or null when its archive does not carry it
+	 * (the system font). Loads every font of that archive on first use.
 	 */
 	public Bcfnt font(Usage usage) throws IOException {
 		return font(usage.archive(), usage.fontName());
@@ -260,10 +266,14 @@ public final class RomfsIndex {
 
 	/**
 	 * The fonts that can lend {@code fontName} the English it lacks, nearest first: its copies in
-	 * other archives; the same family, weight and style at other sizes; then the same family and
-	 * style in another weight, nearest weight first. The style is never crossed, since it is baked
-	 * into the pixels, and closer sizes come first. Only copies holding English letters are kept.
-	 * Loaded on first use, which reads every archive that carries one.
+	 * other archives; the same family, weight and style at other sizes; the same family and style
+	 * in another weight, nearest weight first; and last the same family in another style. Closer
+	 * sizes come first. Only copies holding English letters are kept. Loaded on first use, which
+	 * reads every archive that carries one.
+	 *
+	 * <p>The style is baked into the pixels (an outline, a shade), so another style's glyphs do
+	 * not quite match; they are there for the fonts whose own style has no English anywhere in
+	 * the romfs, where they beat the blank the game would show.
 	 */
 	public synchronized List<Donor> donors(String fontName) {
 		List<Donor> cached = donors.get(fontName);
@@ -277,11 +287,12 @@ public final class RomfsIndex {
 			int size = Integer.parseInt(own.group(4));
 			for (String name : fontHomes.keySet()) {
 				Matcher m = FONT_NAME.matcher(name);
-				if (!name.equals(fontName) && m.matches() && m.group(1).equals(own.group(1))
-						&& m.group(3).equals(own.group(3))) {
+				if (!name.equals(fontName) && m.matches() && m.group(1).equals(own.group(1))) {
 					int sizes = Math.abs(Integer.parseInt(m.group(4)) - size);
-					rank.put(name, Objects.equals(m.group(2), own.group(2)) ? 1000 + sizes
-							: 2000 + 100 * weightDistance(m.group(2), own.group(2)) + sizes);
+					int weights = 100 * weightDistance(m.group(2), own.group(2));
+					rank.put(name, !m.group(3).equals(own.group(3)) ? 3000 + weights + sizes
+							: Objects.equals(m.group(2), own.group(2)) ? 1000 + sizes
+							: 2000 + weights + sizes);
 				}
 			}
 		}
@@ -289,7 +300,12 @@ public final class RomfsIndex {
 				.sorted(Comparator.comparing((String n) -> rank.get(n)).thenComparing(n -> n)).toList();
 		Map<Path, Map<String, Darc.Node>> archives = new HashMap<>();
 		List<Donor> found = new ArrayList<>();
+		boolean alphabet = false;
 		for (String name : names) {
+			if (rank.get(name) >= 3000 && alphabet) {
+				// another style is wanted only until a whole alphabet is found; reading the rest is slow
+				break;
+			}
 			for (Path archive : fontHomes.getOrDefault(name, List.of())) {
 				try {
 					Map<String, Darc.Node> files = archives.get(archive);
@@ -302,6 +318,7 @@ public final class RomfsIndex {
 							Bcfnt font = Bcfnt.parse(file.getValue().data);
 							if (hasEnglish(font)) {
 								found.add(new Donor(archive, name, font));
+								alphabet |= hasAlphabet(font);
 							}
 						}
 					}
@@ -315,11 +332,26 @@ public final class RomfsIndex {
 		return result;
 	}
 
+	/** {@code fontName}'s style ({@code 04a} of {@code SulaPro_B_04a_20.bcfnt}), or null if it names none. */
+	public static String style(String fontName) {
+		Matcher m = FONT_NAME.matcher(fontName);
+		return m.matches() ? m.group(3) : null;
+	}
+
 	/** How many steps apart two weights are; an unknown or missing weight counts as far. */
 	private static int weightDistance(String a, String b) {
 		int i = a == null ? -1 : WEIGHTS.indexOf(a);
 		int j = b == null ? -1 : WEIGHTS.indexOf(b);
 		return i < 0 || j < 0 ? WEIGHTS.size() : Math.abs(i - j);
+	}
+
+	private static boolean hasAlphabet(Bcfnt font) {
+		for (char c = 'A'; c <= 'Z'; c++) {
+			if (!font.has(c) || !font.has(Character.toLowerCase(c))) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	private static boolean hasEnglish(Bcfnt font) {

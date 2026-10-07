@@ -49,7 +49,8 @@ import psaro.text.ControlCodes;
  *
  * <p>The patch also writes the changes made to text panes' box and type settings
  * ({@link LayoutOverrides}) into every archive that carries the changed layout, and measuring
- * uses them through {@link #text}.
+ * uses them through {@link #text}. A pane switched to another of its layout's fonts is measured
+ * in that font, and that font gets the glyphs its English needs.
  */
 public final class FontPatcher {
 
@@ -204,6 +205,11 @@ public final class FontPatcher {
 		return overrides.apply(usage.layout(), usage.pane().name(), usage.pane().text());
 	}
 
+	/** The font {@code usage}'s pane draws with: the layout's own, or the one it was switched to. */
+	public String fontName(Usage usage) {
+		return text(usage).font();
+	}
+
 	public Path output() {
 		return output;
 	}
@@ -219,12 +225,13 @@ public final class FontPatcher {
 	 * that cannot be read.
 	 */
 	public Bcfnt current(Usage usage) {
-		Bcfnt written = written(outputPath(usage.archive())).fonts().get(usage.fontName());
+		String name = fontName(usage);
+		Bcfnt written = written(outputPath(usage.archive())).fonts().get(name);
 		if (written != null) {
 			return written;
 		}
 		try {
-			return index.font(usage);
+			return index.font(usage.archive(), name);
 		} catch (IOException | RuntimeException unreadable) {
 			return null;
 		}
@@ -235,7 +242,7 @@ public final class FontPatcher {
 	 * lend; null for the system font or an archive that cannot be read.
 	 */
 	public Bcfnt preview(Usage usage) {
-		Lent l = lent(usage.archive(), usage.fontName());
+		Lent l = lent(usage.archive(), fontName(usage));
 		return l == null ? null : l.font();
 	}
 
@@ -250,7 +257,7 @@ public final class FontPatcher {
 					List<Donor> donors = index.donors(fontName);
 					Bcfnt copy = Bcfnt.parse(original.toBytes());
 					built = new Lent(copy,
-							Lending.add(copy, Lending.lendableFrom(donors), donors, settings.extraSpace(fontName)));
+							Lending.add(fontName, copy, Lending.lendableFrom(donors), donors, settings.extraSpace(fontName)));
 				}
 			} catch (IOException | RuntimeException unreadable) {
 				// measured with the stand-in instead
@@ -285,7 +292,7 @@ public final class FontPatcher {
 		for (Text t : texts) {
 			Set<Integer> chars = characters(t.text());
 			for (Usage u : index.usages(t.table(), t.key())) {
-				String id = u.archive() + "!" + u.fontName();
+				String id = u.archive() + "!" + fontName(u);
 				used.computeIfAbsent(id, k -> new TreeSet<>()).addAll(chars);
 				where.putIfAbsent(id, u);
 			}
@@ -294,7 +301,7 @@ public final class FontPatcher {
 		Set<String> seen = new HashSet<>();
 		for (Map.Entry<String, Set<Integer>> e : used.entrySet()) {
 			Usage u = where.get(e.getKey());
-			FontChange c = change(u.archive(), u.fontName(), e.getValue());
+			FontChange c = change(u.archive(), fontName(u), e.getValue());
 			if (c != null) {
 				fonts.add(c);
 				seen.add(e.getKey());
@@ -474,7 +481,7 @@ public final class FontPatcher {
 				Set<Integer> codes = lend.get(name);
 				if (codes != null) {
 					Bcfnt font = Bcfnt.parse(file.getValue().data);
-					Lending.add(font, codes, index.donors(name), settings.extraSpace(name));
+					Lending.add(name, font, codes, index.donors(name), settings.extraSpace(name));
 					file.getValue().data = font.toBytes();
 				}
 				Map<String, TextOverride> panes = path.endsWith(".bclyt") ? overrides.forLayout(path) : Map.of();

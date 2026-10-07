@@ -41,6 +41,17 @@ class BclytTest {
 	}
 
 	@Test
+	void aPaneSwitchesToAnotherFontTheLayoutLists() {
+		byte[] layout = SampleRomfs.layout(List.of("a.bcfnt", "b.bcfnt"), SampleRomfs.pane("Txt_Yes", "menu_0001"),
+				SampleRomfs.pane("Txt_No", "menu_0002"));
+		byte[] changed = Bclyt.withText(layout, Map.of("Txt_Yes", TextOverride.NONE.withFont("b.bcfnt")));
+		assertEquals("b.bcfnt", text(changed, "Txt_Yes").font());
+		assertEquals("a.bcfnt", text(changed, "Txt_No").font());
+		// a font the layout does not list cannot be pointed to
+		assertArrayEquals(layout, Bclyt.withText(layout, Map.of("Txt_Yes", TextOverride.NONE.withFont("c.bcfnt"))));
+	}
+
+	@Test
 	void noChangeLeavesTheBytesAsTheyWere() {
 		assertArrayEquals(LAYOUT, Bclyt.withText(LAYOUT, Map.of("Txt_Yes", TextOverride.NONE)));
 		assertArrayEquals(LAYOUT, Bclyt.withText(LAYOUT, Map.of("Txt_Gone", new TextOverride(1f, 1f, 1f, 1f, 1f, 1f))));

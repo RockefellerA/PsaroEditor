@@ -129,7 +129,7 @@ public final class MainWindow {
 		frame.add(body, BorderLayout.CENTER);
 		frame.add(status, BorderLayout.SOUTH);
 
-		frame.setSize(1280, 820);
+		frame.setSize(1410, 985);
 		frame.setLocationRelativeTo(null);
 		refresh();
 	}

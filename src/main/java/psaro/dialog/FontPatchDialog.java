@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
+
 import javax.swing.BorderFactory;
 import javax.swing.BoxLayout;
 import javax.swing.JButton;
@@ -28,14 +29,17 @@ import javax.swing.KeyStroke;
 import javax.swing.SwingWorker;
 import javax.swing.border.EmptyBorder;
 import javax.swing.table.AbstractTableModel;
+
 import com.formdev.flatlaf.FlatClientProperties;
-import psaro.patch.FontPatcher;
+
 import psaro.format.Bclyt.TextOverride;
+import psaro.patch.FontPatcher;
 import psaro.patch.FontPatcher.FontChange;
 import psaro.patch.FontPatcher.LayoutChange;
 import psaro.patch.FontPatcher.Plan;
 import psaro.patch.FontPatcher.Text;
 import psaro.patch.PatchSettings;
+import psaro.romfs.RomfsIndex;
 import psaro.romfs.RomfsIndex.Donor;
 import psaro.ui.Fit;
 
@@ -110,7 +114,7 @@ public final class FontPatchDialog extends JDialog {
 		modsRow.add(copy);
 		modsRow.add(modsLabel);
 		modsRow.add(chooseMods);
-		JLabel modsNote = new JLabel("The mods folder is only written to, never read; nothing is ever removed from it.");
+		JLabel modsNote = new JLabel("The mods folder is only written to.");
 		modsNote.putClientProperty(FlatClientProperties.STYLE_CLASS, "small");
 		modsNote.putClientProperty(FlatClientProperties.STYLE, "foreground: $Label.disabledForeground");
 		modsNote.setBorder(new EmptyBorder(0, 10, 0, 0));
@@ -340,7 +344,7 @@ public final class FontPatchDialog extends JDialog {
 				case 3 -> change(f);
 				case EXTRA_SPACE -> patcher.settings().extraSpace(f.font());
 				case 5 -> f.unavailable().isEmpty() ? "" : Fit.describe(f.unavailable());
-				case 6 -> f.from().values().stream().map(FontPatchDialog::donorName)
+				case 6 -> f.from().values().stream().map(d -> donorName(d, f.font()))
 						.collect(Collectors.toCollection(LinkedHashSet::new)).stream().collect(Collectors.joining(", "));
 				default -> "";
 			};
@@ -397,9 +401,12 @@ public final class FontPatchDialog extends JDialog {
 		}
 	}
 
-	/** A layout change as "box 40×24, letters 1". */
+	/** A layout change as "SulaPro_B_04a_18, box 40×24, letters 1". */
 	private static String describe(TextOverride t) {
 		List<String> parts = new ArrayList<>();
+		if (t.font() != null) {
+			parts.add(t.font().replace(".bcfnt", ""));
+		}
 		if (t.boxWidth() != null || t.boxHeight() != null) {
 			parts.add("box " + number(t.boxWidth()) + "×" + number(t.boxHeight()));
 		}
@@ -420,7 +427,11 @@ public final class FontPatchDialog extends JDialog {
 		return v == null ? "–" : v == Math.rint(v) ? String.valueOf(v.intValue()) : Float.toString(v);
 	}
 
-	private static String donorName(Donor d) {
-		return d.archive().getFileName().toString().replace(".arc.lz", "") + " › " + d.name().replace(".bcfnt", "");
+	/** Where a donor is, marked when its style is not the font's own, so its glyphs only approximate. */
+	private static String donorName(Donor d, String font) {
+		String style = RomfsIndex.style(font);
+		boolean other = style != null && !style.equals(RomfsIndex.style(d.name()));
+		return d.archive().getFileName().toString().replace(".arc.lz", "") + " › " + d.name().replace(".bcfnt", "")
+				+ (other ? " (other style)" : "");
 	}
 }

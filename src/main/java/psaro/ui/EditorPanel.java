@@ -1,10 +1,14 @@
 package psaro.ui;
 
+import java.awt.BasicStroke;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
+import java.awt.Graphics;
+import java.awt.Graphics2D;
+import java.awt.RenderingHints;
 import java.awt.event.ActionEvent;
 import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
@@ -20,6 +24,7 @@ import javax.swing.AbstractAction;
 import javax.swing.BorderFactory;
 import javax.swing.DefaultListCellRenderer;
 import javax.swing.DefaultListModel;
+import javax.swing.Icon;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JComponent;
@@ -47,6 +52,7 @@ import javax.swing.table.AbstractTableModel;
 import javax.swing.table.DefaultTableCellRenderer;
 import javax.swing.table.TableRowSorter;
 import com.formdev.flatlaf.FlatClientProperties;
+import com.formdev.flatlaf.FlatLaf;
 import psaro.patch.FontPatcher;
 import psaro.project.CodeColors;
 import psaro.project.Translations;
@@ -64,6 +70,9 @@ import psaro.translate.GoogleTranslate;
 public final class EditorPanel extends JPanel {
 
 	private static final Color PROBLEM = new Color(0xE0, 0x55, 0x55);
+	/** A complete table's name: light blue on the dark theme, a deeper blue that reads on white. */
+	private static final Color COMPLETE_DARK = new Color(0x7F, 0xC4, 0xFF);
+	private static final Color COMPLETE_LIGHT = new Color(0x1E, 0x78, 0xC8);
 
 	private final RomfsIndex index;
 	private final Translations translations;
@@ -640,7 +649,10 @@ public final class EditorPanel extends JPanel {
 		}
 	}
 
-	/** A table's name with how many of its strings have English. */
+	/**
+	 * A table's name with how many of its strings have English; a complete table is blue with a
+	 * green check.
+	 */
 	private final class TableRenderer extends DefaultListCellRenderer {
 		@Override
 		public Component getListCellRendererComponent(JList<?> list, Object value, int i, boolean selected,
@@ -648,7 +660,13 @@ public final class EditorPanel extends JPanel {
 			StringTable t = (StringTable) value;
 			super.getListCellRendererComponent(list, t.name(), i, selected, focus);
 			int done = translations.translatedCount(t);
+			boolean complete = done >= t.strings().size();
 			setText(t.name() + "   " + done + " / " + t.strings().size());
+			// an empty icon on the rest keeps every name lined up
+			setIcon(complete ? CheckIcon.DONE : CheckIcon.BLANK);
+			if (complete && !selected) {
+				setForeground(FlatLaf.isLafDark() ? COMPLETE_DARK : COMPLETE_LIGHT);
+			}
 			if (unused.isUnused(t)) {
 				// greyed, not hidden: it can still be translated, it just does not count toward progress
 				if (!selected) {
@@ -660,6 +678,38 @@ public final class EditorPanel extends JPanel {
 				setToolTipText(null);
 			}
 			return this;
+		}
+	}
+
+	/** A green check, or the same room left empty. */
+	private enum CheckIcon implements Icon {
+		DONE, BLANK;
+
+		private static final int SIZE = 12;
+		private static final Color GREEN_DARK = new Color(0x5C, 0xC8, 0x60);
+		private static final Color GREEN_LIGHT = new Color(0x2E, 0x9E, 0x3E);
+
+		@Override
+		public void paintIcon(Component c, Graphics g, int x, int y) {
+			if (this == BLANK) {
+				return;
+			}
+			Graphics2D g2 = (Graphics2D) g.create();
+			g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+			g2.setColor(FlatLaf.isLafDark() ? GREEN_DARK : GREEN_LIGHT);
+			g2.setStroke(new BasicStroke(2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+			g2.drawPolyline(new int[] {x + 2, x + 5, x + 10}, new int[] {y + 6, y + 9, y + 3}, 3);
+			g2.dispose();
+		}
+
+		@Override
+		public int getIconWidth() {
+			return SIZE;
+		}
+
+		@Override
+		public int getIconHeight() {
+			return SIZE;
 		}
 	}
 

@@ -17,7 +17,8 @@ import psaro.project.Translations;
 
 /**
  * Changes to text panes' box and type settings, in {@code <romfs>.psaro/layouts.json} as
- * {@code {"blyt/common_btn_win_yes.bclyt": {"Txt_Btn": {"boxWidth": 40}}}}. A change is made
+ * {@code {"blyt/common_btn_win_yes.bclyt": {"Txt_Btn": {"boxWidth": 40, "font": "SulaPro_B_04a_18.bcfnt"}}}}.
+ * A change is made
  * per layout and pane, and so applies in every archive that carries that layout. The editor
  * measures with the changes at once; the patch writes them into the archives. Saved on every
  * change, and removed when nothing is changed.
@@ -25,6 +26,8 @@ import psaro.project.Translations;
 public final class LayoutOverrides {
 
 	private static final String[] FIELDS = {"boxWidth", "boxHeight", "fontSizeX", "fontSizeY", "charSpace", "lineSpace"};
+	/** Another of the layout's fonts, by file name. */
+	private static final String FONT = "font";
 
 	private final Path file;
 	/** Layout path to pane name to its change; never an empty change. */
@@ -48,7 +51,8 @@ public final class LayoutOverrides {
 						for (int i = 0; i < FIELDS.length; i++) {
 							v[i] = f.has(FIELDS[i]) ? (float) f.getDouble(FIELDS[i]) : null;
 						}
-						TextOverride t = new TextOverride(v[0], v[1], v[2], v[3], v[4], v[5]);
+						TextOverride t = new TextOverride(v[0], v[1], v[2], v[3], v[4], v[5],
+								f.has(FONT) ? f.getString(FONT) : null);
 						if (!t.isEmpty()) {
 							o.changes.computeIfAbsent(layout, k -> new TreeMap<>()).put(pane, t);
 						}
@@ -115,6 +119,9 @@ public final class LayoutOverrides {
 						// as written, so 2.1 reads 2.1 and not 2.0999999
 						f.put(FIELDS[i], new BigDecimal(Float.toString(v[i])));
 					}
+				}
+				if (t.font() != null) {
+					f.put(FONT, t.font());
 				}
 				p.put(pane, f);
 			});
