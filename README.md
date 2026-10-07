@@ -32,7 +32,7 @@ How the game puts text on screen, which shapes most of the design:
 
 ## Building
 
-Requires JDK 21 or newer and Maven.
+Requires JDK 25 or newer and Maven.
 
 ```
 mvn -q compile
@@ -48,6 +48,20 @@ mvn -q test -Dpsaro.romfs=C:/path/to/romfs
 ```
 
 or set the `PSARO_ROMFS` environment variable. Without either, those tests are skipped.
+
+## Releasing
+
+Pushing a version tag builds installers for Windows (`.msi`), macOS (`.dmg`) and Linux
+(`.deb`) and attaches them to a GitHub release:
+
+```
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The workflow can also be run by hand from the Actions tab. It refuses to publish until
+`psaro.MainWindow` exists. For an icon, add `src/main/resources/images/psaroeditor.png`
+(512×512); until then the installers use Java's default.
 
 ## Roadmap
 
