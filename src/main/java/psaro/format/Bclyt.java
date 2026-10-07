@@ -6,7 +6,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -25,7 +24,7 @@ import java.util.regex.Pattern;
  */
 public final class Bclyt {
 
-	private static final Pattern KEY = Pattern.compile("[a-z]{4}_\\d{4}");
+	private static final Pattern KEY = Pattern.compile("[a-z]{3,4}_\\d{4}");
 
 	/** Any pane. Text-pane fields are null / zero for other kinds. */
 	public record Pane(String kind, String name, List<String> keys, TextInfo text) {
@@ -135,10 +134,7 @@ public final class Bclyt {
 				}
 				case "usd1" -> {
 					if (!panes.isEmpty()) {
-						Matcher m = KEY.matcher(new String(d, o, size, StandardCharsets.ISO_8859_1));
-						while (m.find()) {
-							panes.get(panes.size() - 1).keys().add(m.group());
-						}
+						panes.get(panes.size() - 1).keys().addAll(textIds(d, o, size));
 					}
 				}
 				default -> {
@@ -147,6 +143,36 @@ public final class Bclyt {
 			o += size;
 		}
 		return new Layout(fonts, panes);
+	}
+
+	/**
+	 * The string keys in user data section {@code o}: the values of its {@code TextID} entries.
+	 * The section is a u16 count, then 12-byte entries of name offset u32 and data offset u32
+	 * (both from the entry), length u16, type u8 (0 string, 1 int, 2 float). Keys have three or
+	 * four letters ({@code cmn_0004}, {@code clsm_0110}); a {@code TextIDSet} instead names
+	 * lists the game fills the pane from at run time.
+	 */
+	private static List<String> textIds(byte[] d, int o, int size) {
+		List<String> out = new ArrayList<>();
+		int end = o + size;
+		int n = Bytes.u16(d, o + 8);
+		for (int i = 0; i < n; i++) {
+			int entry = o + 12 + 12 * i;
+			if (entry + 12 > end) {
+				break;
+			}
+			int name = entry + Bytes.u32(d, entry);
+			int data = entry + Bytes.u32(d, entry + 4);
+			int length = Bytes.u16(d, entry + 8);
+			if (Bytes.u8(d, entry + 10) == 0 && name < end && data + length <= end
+					&& Bytes.ascii(d, name).equals("TextID")) {
+				String key = new String(d, data, length, StandardCharsets.US_ASCII);
+				if (KEY.matcher(key).matches()) {
+					out.add(key);
+				}
+			}
+		}
+		return out;
 	}
 
 	/**

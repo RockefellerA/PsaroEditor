@@ -106,9 +106,21 @@ public final class SampleRomfs {
 		txt.position(0x58 - 8).putInt(0x74);
 		txt.position(0x64 - 8).putFloat(16f).putFloat(16f).putFloat(0f).putFloat(0f);
 		txt.position(0x74 - 8).put("*\0".getBytes(StandardCharsets.UTF_16LE));
-		ByteBuffer usd = le(24);
-		usd.position(8).put(key.getBytes(StandardCharsets.US_ASCII));
-		return concat(section("txt1", txt.array()), section("usd1", usd.array()));
+		return concat(section("txt1", txt.array()), section("usd1", textId(key)));
+	}
+
+	/**
+	 * A usd1 body as the game writes it: one entry, named TextID, whose string value is
+	 * {@code key}; the key follows the entry, then the name, padded to four bytes.
+	 */
+	private static byte[] textId(String key) {
+		byte[] k = key.getBytes(StandardCharsets.US_ASCII);
+		int nameAt = 12 + k.length + 1;
+		ByteBuffer usd = le((4 + nameAt + "TextID".length() + 1 + 3) / 4 * 4);
+		usd.putShort((short) 1).putShort((short) 0);
+		usd.putInt(nameAt).putInt(12).putShort((short) k.length).put((byte) 0).put((byte) 0);
+		usd.put(k).put((byte) 0).put("TextID".getBytes(StandardCharsets.US_ASCII));
+		return usd.array();
 	}
 
 	private static byte[] section(String tag, byte[] body) {

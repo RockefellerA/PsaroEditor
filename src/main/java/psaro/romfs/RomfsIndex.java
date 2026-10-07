@@ -221,6 +221,33 @@ public final class RomfsIndex {
 		return Collections.unmodifiableList(usages.getOrDefault(table.name() + "/" + key, List.of()));
 	}
 
+	/**
+	 * When no pane shows {@code key} from {@code table}, the first other table holding the same
+	 * key whose copy some pane does show; null otherwise. A layout's key is matched to its own
+	 * archive's table first, so a key two tables share ({@code cftp_1000} in config and
+	 * config_select) is matched to only one, though the game may read either.
+	 */
+	public StringTable sharedWith(StringTable table, String key) {
+		if (!usages(table, key).isEmpty()) {
+			return null;
+		}
+		for (StringTable other : tables.values()) {
+			if (other != table && other.strings().containsKey(key) && !usages(other, key).isEmpty()) {
+				return other;
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * The panes that show {@code key} from {@code table}, or, when none do, those that show the
+	 * same key from the table {@link #sharedWith} names.
+	 */
+	public List<Usage> panes(StringTable table, String key) {
+		StringTable other = sharedWith(table, key);
+		return usages(other != null ? other : table, key);
+	}
+
 	/** Text panes whose key no string table holds. */
 	public List<Usage> unresolved() {
 		return unresolved;
@@ -267,13 +294,15 @@ public final class RomfsIndex {
 	/**
 	 * The fonts that can lend {@code fontName} the English it lacks, nearest first: its copies in
 	 * other archives; the same family, weight and style at other sizes; the same family and style
-	 * in another weight, nearest weight first; and last the same family in another style. Closer
-	 * sizes come first. Only copies holding English letters are kept. Loaded on first use, which
-	 * reads every archive that carries one.
+	 * in another weight, nearest weight first; the same family in another style; then another
+	 * family in the same style, and last another family in another style. Closer sizes come
+	 * first. Only copies holding English letters are kept. Loaded on first use, which reads every
+	 * archive that carries one.
 	 *
 	 * <p>The style is baked into the pixels (an outline, a shade), so another style's glyphs do
-	 * not quite match; they are there for the fonts whose own style has no English anywhere in
-	 * the romfs, where they beat the blank the game would show.
+	 * not quite match, and another family's letters are another typeface; they are there for the
+	 * fonts whose own family has no whole alphabet anywhere in the romfs (TBMarugothic has no
+	 * lowercase at all), where they beat the blank the game would show.
 	 */
 	public synchronized List<Donor> donors(String fontName) {
 		List<Donor> cached = donors.get(fontName);
@@ -287,10 +316,16 @@ public final class RomfsIndex {
 			int size = Integer.parseInt(own.group(4));
 			for (String name : fontHomes.keySet()) {
 				Matcher m = FONT_NAME.matcher(name);
-				if (!name.equals(fontName) && m.matches() && m.group(1).equals(own.group(1))) {
-					int sizes = Math.abs(Integer.parseInt(m.group(4)) - size);
-					int weights = 100 * weightDistance(m.group(2), own.group(2));
-					rank.put(name, !m.group(3).equals(own.group(3)) ? 3000 + weights + sizes
+				if (name.equals(fontName) || !m.matches()) {
+					continue;
+				}
+				int sizes = Math.abs(Integer.parseInt(m.group(4)) - size);
+				int weights = 100 * weightDistance(m.group(2), own.group(2));
+				boolean sameStyle = m.group(3).equals(own.group(3));
+				if (!m.group(1).equals(own.group(1))) {
+					rank.put(name, (sameStyle ? 4000 : 5000) + weights + sizes);
+				} else {
+					rank.put(name, !sameStyle ? 3000 + weights + sizes
 							: Objects.equals(m.group(2), own.group(2)) ? 1000 + sizes
 							: 2000 + weights + sizes);
 				}
@@ -303,7 +338,7 @@ public final class RomfsIndex {
 		boolean alphabet = false;
 		for (String name : names) {
 			if (rank.get(name) >= 3000 && alphabet) {
-				// another style is wanted only until a whole alphabet is found; reading the rest is slow
+				// another style or family is wanted only until a whole alphabet is found; reading the rest is slow
 				break;
 			}
 			for (Path archive : fontHomes.getOrDefault(name, List.of())) {
@@ -336,6 +371,12 @@ public final class RomfsIndex {
 	public static String style(String fontName) {
 		Matcher m = FONT_NAME.matcher(fontName);
 		return m.matches() ? m.group(3) : null;
+	}
+
+	/** {@code fontName}'s family ({@code SulaPro} of {@code SulaPro_B_04a_20.bcfnt}), or null if it names none. */
+	public static String family(String fontName) {
+		Matcher m = FONT_NAME.matcher(fontName);
+		return m.matches() ? m.group(1) : null;
 	}
 
 	/** How many steps apart two weights are; an unknown or missing weight counts as far. */

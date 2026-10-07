@@ -38,6 +38,7 @@ import psaro.patch.FontPatcher.FontChange;
 import psaro.patch.FontPatcher.LayoutChange;
 import psaro.patch.FontPatcher.Plan;
 import psaro.patch.FontPatcher.Text;
+import psaro.patch.Lending;
 import psaro.patch.PatchSettings;
 import psaro.romfs.RomfsIndex;
 import psaro.romfs.RomfsIndex.Donor;
@@ -427,11 +428,14 @@ public final class FontPatchDialog extends JDialog {
 		return v == null ? "–" : v == Math.rint(v) ? String.valueOf(v.intValue()) : Float.toString(v);
 	}
 
-	/** Where a donor is, marked when its style is not the font's own, so its glyphs only approximate. */
+	/**
+	 * Where a donor is, marked when its family or style is not the font's own, so its glyphs only
+	 * approximate.
+	 */
 	private static String donorName(Donor d, String font) {
-		String style = RomfsIndex.style(font);
-		boolean other = style != null && !style.equals(RomfsIndex.style(d.name()));
+		String family = RomfsIndex.family(font);
+		boolean otherFamily = family != null && !family.equals(RomfsIndex.family(d.name()));
 		return d.archive().getFileName().toString().replace(".arc.lz", "") + " › " + d.name().replace(".bcfnt", "")
-				+ (other ? " (other style)" : "");
+				+ (otherFamily ? " (other font)" : Lending.otherLook(font, d.name()) ? " (other style)" : "");
 	}
 }

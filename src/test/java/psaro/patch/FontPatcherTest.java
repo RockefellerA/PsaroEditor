@@ -293,6 +293,33 @@ class FontPatcherTest {
 		assertEquals(Set.of("SulaPro_B_01a_18.bcfnt"), Set.copyOf(f.from().values().stream().map(d -> d.name()).toList()));
 	}
 
+	/**
+	 * A family with no whole alphabet anywhere (TBMarugothic has no lowercase) borrows from another
+	 * family, its own style first; a family that has one keeps to itself.
+	 */
+	@Test
+	void anotherFamilyLendsOnlyWhenTheFontsOwnFamilyHasNoAlphabet() throws IOException {
+		Path other = dir.resolve("other");
+		String maru = "TBMarugothic_H_04a_16.bcfnt";
+		SampleRomfs.table(other, "menu", Map.of("menu_0001", "はい"));
+		SampleRomfs.archive(other, "scene/menu/menu.arc.lz", "blyt/menu.bclyt", List.of(maru),
+				Map.of(maru, SampleRomfs.font("はいVC", 10)), SampleRomfs.pane("Txt_Btn", "menu_0001"));
+		SampleRomfs.archive(other, "scene/other/other.arc.lz", "blyt/other.bclyt", List.of("SulaPro_B_01a_16.bcfnt"),
+				Map.of("TBMarugothic_H_04a_20.bcfnt", SampleRomfs.font("ABC", 8), "SulaPro_B_01a_16.bcfnt",
+						SampleRomfs.font(ALPHABET, 7), "SulaPro_DB_04a_16.bcfnt", SampleRomfs.font(ALPHABET + " はい", 8)));
+		RomfsIndex idx = RomfsIndex.scan(other);
+		List<String> donors = idx.donors(maru).stream().map(d -> d.name()).toList();
+		assertEquals(List.of(maru, "TBMarugothic_H_04a_20.bcfnt", "SulaPro_DB_04a_16.bcfnt"), donors,
+				"own family first, then the other family's same style; nothing past the first alphabet");
+		assertFalse(idx.donors("SulaPro_B_01a_16.bcfnt").stream().anyMatch(d -> d.name().startsWith("TB")),
+				"a family with an alphabet keeps to itself");
+
+		FontPatcher p = new FontPatcher(idx, PatchSettings.open(other), LayoutOverrides.open(other));
+		FontChange f = p.plan(List.of(new Text(idx.table("menu"), "menu_0001", "View Cards"))).fonts().get(0);
+		assertTrue(f.unavailable().isEmpty(), "unavailable: " + f.unavailable());
+		assertEquals(Set.of("SulaPro_DB_04a_16.bcfnt"), Set.copyOf(f.from().values().stream().map(d -> d.name()).toList()));
+	}
+
 	@Test
 	void copiesToTheModsFolderWhenAsked() throws IOException {
 		Path mods = dir.resolve("mods/romfs");

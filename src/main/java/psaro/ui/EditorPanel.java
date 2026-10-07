@@ -380,7 +380,8 @@ public final class EditorPanel extends JPanel {
 			english.setEnabled(!kept);
 			english.setText(en == null ? "" : ControlCodes.toDisplay(en, colors.names()));
 			english.setCaretPosition(english.getDocument().getLength());
-			preview.showString(index.usages(table, k), jp, en);
+			StringTable shared = index.sharedWith(table, k);
+			preview.showString(index.panes(table, k), jp, en, shared == null ? null : shared.name());
 		} finally {
 			loading = false;
 		}
@@ -605,7 +606,7 @@ public final class EditorPanel extends JPanel {
 		}
 
 		private Fit fit(String k, String en) {
-			return fits.computeIfAbsent(k, x -> Fit.check(fonts, index.usages(table, k), en, table.strings().get(k)));
+			return fits.computeIfAbsent(k, x -> Fit.check(fonts, index.panes(table, k), en, table.strings().get(k)));
 		}
 
 		/** "~" marks an estimate: some characters were measured with the stand-in typeface. */

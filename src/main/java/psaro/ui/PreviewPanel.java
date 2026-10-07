@@ -74,6 +74,8 @@ final class PreviewPanel extends JPanel {
 	private Set<Usage> overflowing = Set.of();
 	private String japaneseRaw = "";
 	private String englishRaw;
+	/** The table whose copy of the key the panes show, when they are not matched to this one's. */
+	private String sharedFrom;
 
 	/** Run after a color code is renamed or recolored, so the editor can show the new tags. */
 	private final Runnable onCodesChanged;
@@ -144,12 +146,14 @@ final class PreviewPanel extends JPanel {
 	}
 
 	/**
-	 * Shows a string: the panes that use it, its Japanese, and its English (null if none). The
-	 * first pane the English does not fit is chosen, so the preview shows what the Fits column
-	 * flags.
+	 * Shows a string: the panes that use it, its Japanese, and its English (null if none).
+	 * {@code sharedFrom} names the table whose copy of the same key those panes are matched to,
+	 * when none is matched to this one's; else null. The first pane the English does not fit is
+	 * chosen, so the preview shows what the Fits column flags.
 	 */
-	void showString(List<Usage> all, String japaneseText, String englishText) {
+	void showString(List<Usage> all, String japaneseText, String englishText, String sharedFrom) {
 		usages = all;
+		this.sharedFrom = sharedFrom;
 		japaneseRaw = japaneseText;
 		englishRaw = englishText;
 		measure();
@@ -201,6 +205,7 @@ final class PreviewPanel extends JPanel {
 
 	void clear() {
 		usages = List.of();
+		sharedFrom = null;
 		overflowing = Set.of();
 		pane.removeAllItems();
 		pane.setEnabled(false);
@@ -235,6 +240,11 @@ final class PreviewPanel extends JPanel {
 		japanese.setIcon(new ImageIcon(jp.image()));
 
 		List<String> lines = new ArrayList<>();
+		if (sharedFrom != null) {
+			lines.add("No layout is matched to this table's copy of the key; these are the boxes that show the same "
+					+ "key from " + sharedFrom + ". The game may read either copy, so Patch gives these fonts the "
+					+ "characters of both.");
+		}
 		if (font == null) {
 			lines.add(fonts.fontName(u) + " is not in this archive (the 3DS system font is not part of the romfs), "
 					+ "so this pane is drawn with a stand-in typeface and its fit is approximate.");

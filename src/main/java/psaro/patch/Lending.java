@@ -51,14 +51,12 @@ public final class Lending {
 				}
 			}
 		}
-		String style = RomfsIndex.style(targetName);
 		for (Map.Entry<Donor, List<Integer>> e : byDonor.entrySet()) {
 			Bcfnt donor = e.getKey().font();
 			Bcfnt src;
-			boolean otherStyle = style != null && !style.equals(RomfsIndex.style(e.getKey().name()));
-			double ink = otherStyle ? inkRatio(target, donor) : Double.NaN;
+			double ink = otherLook(targetName, e.getKey().name()) ? inkRatio(target, donor) : Double.NaN;
 			if (!Double.isNaN(ink)) {
-				// another style sets its nominal size its own way: match the glyphs' real height instead
+				// another style or family sets its nominal size its own way: match the glyphs' real height instead
 				src = donor.scaledTo(target, e.getValue(), ink, ink);
 			} else {
 				boolean same = donor.width == target.width && donor.height == target.height;
@@ -74,6 +72,14 @@ public final class Lending {
 			}
 		}
 		return from;
+	}
+
+	/** Whether {@code donor} is another style or family than {@code target}, so its glyphs only approximate. */
+	public static boolean otherLook(String target, String donor) {
+		String style = RomfsIndex.style(target);
+		String family = RomfsIndex.family(target);
+		return style != null && !style.equals(RomfsIndex.style(donor))
+				|| family != null && !family.equals(RomfsIndex.family(donor));
 	}
 
 	/**

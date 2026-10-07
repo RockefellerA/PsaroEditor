@@ -60,6 +60,18 @@ class RomfsIndexTest {
 	}
 
 	@Test
+	void aKeyShownOnlyThroughAnotherTablesCopyBorrowsItsPanes() throws IOException {
+		RomfsIndex index = sample();
+		StringTable other = index.table("other");
+		assertEquals("menu", index.sharedWith(other, "menu_0001").name());
+		assertEquals(List.of("Txt_Yes"), index.panes(other, "menu_0001").stream().map(u -> u.pane().name()).toList());
+		// the table the pane is matched to shares with nobody; a key no pane shows has nothing to borrow
+		assertNull(index.sharedWith(index.table("menu"), "menu_0001"));
+		assertNull(index.sharedWith(index.table("menu"), "menu_0002"));
+		assertTrue(index.panes(index.table("menu"), "menu_0002").isEmpty());
+	}
+
+	@Test
 	void keyTheOwnTableLacksResolvesToTheTableThatHasIt() throws IOException {
 		RomfsIndex index = sample();
 		assertEquals("Txt_Enter", index.usages(index.table("common"), "comm_0001").get(0).pane().name());

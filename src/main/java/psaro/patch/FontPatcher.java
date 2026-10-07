@@ -291,7 +291,8 @@ public final class FontPatcher {
 		Map<String, Usage> where = new HashMap<>();
 		for (Text t : texts) {
 			Set<Integer> chars = characters(t.text());
-			for (Usage u : index.usages(t.table(), t.key())) {
+			// a key shown only through another table's copy may be read from this one: its fonts need these too
+			for (Usage u : index.panes(t.table(), t.key())) {
 				String id = u.archive() + "!" + fontName(u);
 				used.computeIfAbsent(id, k -> new TreeSet<>()).addAll(chars);
 				where.putIfAbsent(id, u);

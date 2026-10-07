@@ -52,6 +52,15 @@ class BclytTest {
 	}
 
 	@Test
+	void readsEachPanesKeyFromItsTextIdWithThreeOrFourLetters() {
+		byte[] layout = SampleRomfs.layout(List.of("a.bcfnt"), SampleRomfs.pane("Txt_Mons", "cmn_0004"),
+				SampleRomfs.pane("Txt_Line", "clsm_0110"));
+		var panes = Bclyt.read(layout).textPanes();
+		assertEquals(List.of("cmn_0004"), panes.get(0).keys());
+		assertEquals(List.of("clsm_0110"), panes.get(1).keys());
+	}
+
+	@Test
 	void noChangeLeavesTheBytesAsTheyWere() {
 		assertArrayEquals(LAYOUT, Bclyt.withText(LAYOUT, Map.of("Txt_Yes", TextOverride.NONE)));
 		assertArrayEquals(LAYOUT, Bclyt.withText(LAYOUT, Map.of("Txt_Gone", new TextOverride(1f, 1f, 1f, 1f, 1f, 1f))));
