@@ -27,6 +27,7 @@ import javax.swing.WindowConstants;
 import com.formdev.flatlaf.FlatClientProperties;
 import psaro.dialog.PreferencesDialog;
 import psaro.menu.HelpMenu;
+import psaro.project.CodeColors;
 import psaro.project.Translations;
 import psaro.romfs.RomfsIndex;
 import psaro.ui.EditorPanel;
@@ -161,8 +162,10 @@ public final class MainWindow {
 			return;
 		}
 		Translations loaded;
+		CodeColors colors;
 		try {
 			loaded = Translations.open(scanned);
+			colors = CodeColors.open(dir);
 		} catch (IOException e) {
 			// always reported: opening anyway could later save over the unreadable file
 			error("Could not read the translations for " + dir + ":\n" + e.getMessage());
@@ -171,7 +174,7 @@ public final class MainWindow {
 		index = scanned;
 		translations = loaded;
 		prefs.put(PREF_ROMFS, dir.toString());
-		setBody(new EditorPanel(index, translations, this::refresh));
+		setBody(new EditorPanel(index, translations, colors, this::refresh));
 		refresh();
 	}
 

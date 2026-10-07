@@ -2,6 +2,8 @@ package psaro.text;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
+import java.util.Map;
+
 import org.junit.jupiter.api.Test;
 
 class ControlCodesTest {
@@ -25,6 +27,20 @@ class ControlCodesTest {
 		String raw = "a\u0007b";
 		assertEquals("a{u0007}b", ControlCodes.toDisplay(raw));
 		assertEquals(raw, ControlCodes.toRaw("a{u0007}b"));
+	}
+
+	@Test
+	void namedCodesShowAsTagsAndEitherFormConvertsBack() {
+		Map<Integer, String> names = Map.of(0x01, "WHITE", 0x02, "GREEN");
+		String shown = ControlCodes.toDisplay(RAW, names);
+		assertEquals("<GREEN>Name<WHITE> is shown\nto {10}others{09}.", shown);
+		assertEquals(RAW, ControlCodes.toRaw(shown, names));
+		assertEquals("\u0002\u0002A\u0002\u0001", ControlCodes.toRaw("{02}A<WHITE>", names));
+	}
+
+	@Test
+	void tagsThatNameNoCodeStayAsTyped() {
+		assertEquals("<PURPLE>x<green>", ControlCodes.toRaw("<PURPLE>x<green>", Map.of(0x02, "GREEN")));
 	}
 
 	@Test

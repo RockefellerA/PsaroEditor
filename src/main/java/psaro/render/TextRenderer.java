@@ -29,8 +29,8 @@ import psaro.text.ControlCodes;
  * characters; each glyph cell sits with its baseline row on the line's baseline, which is the
  * font's ascent below the top of the line. Lines advance by the line feed plus the pane's line
  * spacing and break only at {@code \n}. The block of lines is placed in the box by the pane's
- * text position, and each line within the block by its line alignment. Colour codes take no
- * space; their colours here are stand-ins, since the game picks them in code.
+ * text position, and each line within the block by its line alignment. Color codes take no
+ * space; the game picks their colors in code, so the caller supplies them.
  *
  * <p>A character the font lacks would draw in the game as the font's fallback, a space. Here it
  * draws in a stand-in typeface at a matching size, underlined in red, so its width still counts
@@ -55,11 +55,6 @@ public final class TextRenderer {
 	private static final Font STAND_IN = new Font(Font.SANS_SERIF, Font.BOLD, 100);
 	private static final float STAND_IN_ASCENT = STAND_IN.getLineMetrics("Ag", FRC).getAscent();
 	private static final Color MISSING = new Color(0xFF, 0x55, 0x55);
-	/** Stand-ins for the game's colour codes; 01 and 09 return to the pane's own colour. */
-	private static final Map<Integer, Color> HIGHLIGHTS = Map.of(
-			0x02, new Color(0xFFB347), 0x03, new Color(0x7FC8FF), 0x05, new Color(0xFF8C8C),
-			0x06, new Color(0xFFD966), 0x07, new Color(0x9CF09C), 0x10, new Color(0xD9A6FF),
-			0x12, new Color(0xFF9CD9), 0x15, new Color(0x9CF0E6));
 	/** Slack before a block counts as not fitting, for float rounding. */
 	private static final double TOLERANCE = 0.5;
 
@@ -82,10 +77,18 @@ public final class TextRenderer {
 		return new Result(null, l.missing, l.tooWide, l.tooTall, l.bounds, font == null);
 	}
 
-	/** Draws {@code raw} in its pane at {@code zoom} times the pane's size. */
+	/** Draws {@code raw} in its pane at {@code zoom} times the pane's size, every code in the pane's color. */
 	public static Result render(Bcfnt font, TextInfo info, String raw, double zoom) {
+		return render(font, info, raw, zoom, Map.of());
+	}
+
+	/**
+	 * Draws {@code raw} in its pane at {@code zoom} times the pane's size. {@code colors} maps a
+	 * color code to its color; a code it lacks draws in the pane's own color.
+	 */
+	public static Result render(Bcfnt font, TextInfo info, String raw, double zoom, Map<Integer, Color> colors) {
 		Layout l = layout(font, info, raw);
-		return new Result(draw(font, info, l, zoom), l.missing, l.tooWide, l.tooTall, l.bounds, font == null);
+		return new Result(draw(font, info, l, zoom, colors), l.missing, l.tooWide, l.tooTall, l.bounds, font == null);
 	}
 
 	private static Layout layout(Bcfnt font, TextInfo info, String raw) {
@@ -143,7 +146,7 @@ public final class TextRenderer {
 				blockW > info.boxWidth() + TOLERANCE, blockH > info.boxHeight() + TOLERANCE);
 	}
 
-	private static BufferedImage draw(Bcfnt font, TextInfo info, Layout l, double zoom) {
+	private static BufferedImage draw(Bcfnt font, TextInfo info, Layout l, double zoom, Map<Integer, Color> colors) {
 		Rectangle2D box = new Rectangle2D.Double(0, 0, info.boxWidth(), info.boxHeight());
 		Rectangle2D all = box.createUnion(l.bounds);
 		double pad = 6 / zoom;
@@ -171,8 +174,7 @@ public final class TextRenderer {
 			double baseline = lineTop + l.ascent;
 			for (Placed p : l.lines.get(i).chars) {
 				double x = l.lineX[i] + p.x;
-				Color colour = p.colourCode == 0x01 || p.colourCode == 0x09
-						? base : HIGHLIGHTS.getOrDefault(p.colourCode, base);
+				Color colour = colors.getOrDefault(p.colourCode, base);
 				if (p.glyph != null) {
 					BufferedImage cell = cells.computeIfAbsent(System.identityHashCode(p.glyph) + ":" + colour.getRGB(),
 							k -> cell(font, p.glyph, colour));

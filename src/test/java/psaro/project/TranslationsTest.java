@@ -121,6 +121,47 @@ class TranslationsTest {
 	}
 
 	@Test
+	void keepingTheJapaneseCountsAsDoneAndIsSavedAsTrueNotACopy() throws IOException {
+		Translations t = Translations.open(index);
+		t.set(config, "cftp_1000", "Name");
+		t.setKeepsJapanese(config, "cftp_3000", true);
+		assertEquals("おわる", t.get(config, "cftp_3000"));
+		assertEquals(2, t.translatedCount(config));
+		t.save();
+		assertEquals("{\n  \"cftp_1000\": \"Name\",\n  \"cftp_3000\": true\n}\n",
+				Files.readString(file(), StandardCharsets.UTF_8));
+
+		Translations again = Translations.open(index);
+		assertTrue(again.keepsJapanese(config, "cftp_3000"));
+		assertEquals("おわる", again.get(config, "cftp_3000"));
+	}
+
+	@Test
+	void keepingTheJapaneseReplacesEnglishAndTypingEnglishClearsTheMark() throws IOException {
+		Translations t = Translations.open(index);
+		t.set(config, "cftp_1000", "Name");
+		t.setKeepsJapanese(config, "cftp_1000", true);
+		assertEquals("なまえ", t.get(config, "cftp_1000"));
+		assertEquals(1, t.translatedCount(config));
+		t.set(config, "cftp_1000", "Player name");
+		assertFalse(t.keepsJapanese(config, "cftp_1000"));
+		assertEquals("Player name", t.get(config, "cftp_1000"));
+		assertEquals(1, t.translatedCount(config));
+	}
+
+	@Test
+	void clearingTheMarkLeavesTheStringUntranslated() throws IOException {
+		Translations t = Translations.open(index);
+		t.setKeepsJapanese(config, "cftp_3000", true);
+		t.save();
+		t.setKeepsJapanese(config, "cftp_3000", false);
+		assertNull(t.get(config, "cftp_3000"));
+		assertTrue(t.isDirty());
+		t.save();
+		assertFalse(Files.exists(file()));
+	}
+
+	@Test
 	void unreadableFileIsReportedNotIgnored() throws IOException {
 		Files.createDirectories(file().getParent());
 		Files.writeString(file(), "{ not json", StandardCharsets.UTF_8);

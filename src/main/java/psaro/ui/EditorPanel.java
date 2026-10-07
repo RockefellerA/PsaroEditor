@@ -3,6 +3,7 @@ package psaro.ui;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
+import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.event.ActionEvent;
 import java.awt.event.InputEvent;
@@ -16,11 +17,14 @@ import javax.swing.AbstractAction;
 import javax.swing.BorderFactory;
 import javax.swing.DefaultListCellRenderer;
 import javax.swing.DefaultListModel;
+import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JComponent;
 import javax.swing.JLabel;
 import javax.swing.JList;
+import javax.swing.JOptionPane;
 import javax.swing.JPanel;
+import javax.swing.JProgressBar;
 import javax.swing.JScrollPane;
 import javax.swing.JSplitPane;
 import javax.swing.JTable;
@@ -29,16 +33,19 @@ import javax.swing.JTextField;
 import javax.swing.KeyStroke;
 import javax.swing.ListSelectionModel;
 import javax.swing.RowFilter;
+import javax.swing.SwingWorker;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
 import javax.swing.table.AbstractTableModel;
 import javax.swing.table.DefaultTableCellRenderer;
 import javax.swing.table.TableRowSorter;
 import com.formdev.flatlaf.FlatClientProperties;
+import psaro.project.CodeColors;
 import psaro.project.Translations;
 import psaro.romfs.RomfsIndex;
 import psaro.romfs.RomfsIndex.StringTable;
 import psaro.text.ControlCodes;
+import psaro.translate.GoogleTranslate;
 
 /**
  * The string editor: the string tables on the left, the chosen table's strings, and below them
@@ -52,6 +59,7 @@ public final class EditorPanel extends JPanel {
 	private final RomfsIndex index;
 	private final Translations translations;
 	private final Runnable onChange;
+	private final CodeColors colors;
 
 	private final JList<StringTable> tables;
 	private final StringsModel strings = new StringsModel();
@@ -61,7 +69,17 @@ public final class EditorPanel extends JPanel {
 	private final JCheckBox untranslatedOnly = new JCheckBox("Untranslated only");
 	private final JTextArea japanese = new JTextArea();
 	private final JTextArea english = new JTextArea();
+	/** Marks the string as needing no translation: the game keeps its Japanese. */
+	private final JCheckBox useJapanese = new JCheckBox("Use JP");
+	/** Share of all strings done, beside the "String tables" heading. */
+	private final JProgressBar progress = new JProgressBar(0, 1000);
 	private final PreviewPanel preview;
+	private static final String TRANSLATE = "Translate with Google";
+	private final JButton translate = new JButton(TRANSLATE);
+	/** The machine translation of the current string: shown, never saved. */
+	private final JTextArea machine = new JTextArea();
+	/** A machine translation is being fetched; one at a time. */
+	private boolean translating;
 
 	/** The string in the editor, or null. */
 	private StringTable table;
@@ -69,12 +87,13 @@ public final class EditorPanel extends JPanel {
 	/** Set while the editor's text is replaced programmatically, so it is not taken as an edit. */
 	private boolean loading;
 
-	public EditorPanel(RomfsIndex index, Translations translations, Runnable onChange) {
+	public EditorPanel(RomfsIndex index, Translations translations, CodeColors colors, Runnable onChange) {
 		super(new BorderLayout());
 		this.index = index;
 		this.translations = translations;
 		this.onChange = onChange;
-		this.preview = new PreviewPanel(index);
+		this.colors = colors;
+		this.preview = new PreviewPanel(index, colors, this::codesChanged);
 
 		DefaultListModel<StringTable> tableItems = new DefaultListModel<>();
 		index.tables().forEach(tableItems::addElement);
@@ -95,7 +114,15 @@ public final class EditorPanel extends JPanel {
 		right.setDividerLocation(280);
 		JScrollPane tableScroll = new JScrollPane(tables);
 		JPanel left = new JPanel(new BorderLayout());
-		left.add(caption("String tables"), BorderLayout.NORTH);
+		progress.setStringPainted(true);
+		progress.setPreferredSize(new Dimension(110, progress.getPreferredSize().height));
+		updateProgress();
+		JPanel leftHeader = new JPanel(new BorderLayout(6, 0));
+		leftHeader.add(caption("String tables"), BorderLayout.WEST);
+		JPanel progressBox = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 6));
+		progressBox.add(progress);
+		leftHeader.add(progressBox, BorderLayout.CENTER);
+		left.add(leftHeader, BorderLayout.NORTH);
 		left.add(tableScroll, BorderLayout.CENTER);
 		JSplitPane root = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, left, right);
 		root.setDividerLocation(240);
@@ -151,8 +178,9 @@ public final class EditorPanel extends JPanel {
 				"previous", () -> step(-1));
 		english.setEnabled(false);
 
-		JLabel hint = new JLabel("<html>Enter breaks a line (the game never wraps). {NN} is a colour code: {01} and {09} "
-				+ "return to the normal colour. Ctrl+Enter goes to the next string, Ctrl+Shift+Enter to the previous.</html>");
+		JLabel hint = new JLabel("<html>Enter breaks a line (the game never wraps). Tags like &lt;GREEN&gt; are color "
+				+ "codes, named under Colors… in the preview; an unnamed code shows as {10}. Ctrl+Enter goes to the next "
+				+ "string, Ctrl+Shift+Enter to the previous.</html>");
 		hint.putClientProperty(FlatClientProperties.STYLE_CLASS, "small");
 		hint.putClientProperty(FlatClientProperties.STYLE, "foreground: $Label.disabledForeground");
 
@@ -160,16 +188,99 @@ public final class EditorPanel extends JPanel {
 		jp.add(caption("Japanese"), BorderLayout.NORTH);
 		jp.add(new JScrollPane(japanese), BorderLayout.CENTER);
 		JPanel en = new JPanel(new BorderLayout());
-		en.add(caption("English"), BorderLayout.NORTH);
-		en.add(new JScrollPane(english), BorderLayout.CENTER);
-		en.add(hint, BorderLayout.SOUTH);
+		en.add(machineTranslation(), BorderLayout.NORTH);
+		JPanel enBody = new JPanel(new BorderLayout());
+		useJapanese.setToolTipText("This string needs no translation (a name, a number, \"？？？\"): the game keeps "
+				+ "the original Japanese, and the string counts as done.");
+		useJapanese.setEnabled(false);
+		useJapanese.addActionListener(e -> useJapaneseToggled());
+		JPanel enHeader = new JPanel(new BorderLayout());
+		enHeader.add(caption("English"), BorderLayout.WEST);
+		enHeader.add(useJapanese, BorderLayout.EAST);
+		enBody.add(enHeader, BorderLayout.NORTH);
+		enBody.add(new JScrollPane(english), BorderLayout.CENTER);
+		enBody.add(hint, BorderLayout.SOUTH);
+		en.add(enBody, BorderLayout.CENTER);
 		JSplitPane split = new JSplitPane(JSplitPane.VERTICAL_SPLIT, jp, en);
 		split.setResizeWeight(0.4);
 		split.setBorder(BorderFactory.createEmptyBorder());
 		return split;
 	}
 
+	/** The Translate button and its read-only result, between the Japanese and the English. */
+	private JComponent machineTranslation() {
+		translate.setToolTipText("Sends the Japanese (without its color codes) to Google Translate, the service behind translate.google.com, for a rough "
+				+ "English reading. The result is only a reference: it is never saved. (Ctrl+T)");
+		translate.setEnabled(false);
+		translate.addActionListener(e -> machineTranslate());
+		// anywhere in the editor, not only while one field has focus
+		getInputMap(WHEN_ANCESTOR_OF_FOCUSED_COMPONENT)
+				.put(KeyStroke.getKeyStroke(KeyEvent.VK_T, InputEvent.CTRL_DOWN_MASK), "translate");
+		getActionMap().put("translate", new AbstractAction() {
+			@Override
+			public void actionPerformed(ActionEvent e) {
+				if (translate.isEnabled()) {
+					machineTranslate();
+				}
+			}
+		});
+
+		machine.setEditable(false);
+		machine.setLineWrap(true);
+		machine.setWrapStyleWord(true);
+		machine.setRows(3);
+		machine.putClientProperty(FlatClientProperties.STYLE, "foreground: $Label.disabledForeground");
+
+		JPanel bar = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 4));
+		bar.add(translate);
+		JLabel note = new JLabel("Reference only, not saved");
+		note.putClientProperty(FlatClientProperties.STYLE_CLASS, "small");
+		note.putClientProperty(FlatClientProperties.STYLE, "foreground: $Label.disabledForeground");
+		bar.add(note);
+		JPanel panel = new JPanel(new BorderLayout());
+		panel.add(bar, BorderLayout.NORTH);
+		JScrollPane scroll = new JScrollPane(machine);
+		scroll.setBorder(BorderFactory.createEmptyBorder(0, 6, 4, 6));
+		panel.add(scroll, BorderLayout.CENTER);
+		return panel;
+	}
+
 	// ── Behaviour ────────────────────────────────────────────────────────────
+
+	/** Fetches a machine translation of the current string in the background. */
+	private void machineTranslate() {
+		if (table == null || key == null) {
+			return;
+		}
+		String forKey = key;
+		String jp = table.strings().get(key);
+		translating = true;
+		translate.setEnabled(false);
+		translate.setText("Translating…");
+		new SwingWorker<String, Void>() {
+			@Override
+			protected String doInBackground() throws Exception {
+				return GoogleTranslate.translate(jp);
+			}
+
+			@Override
+			protected void done() {
+				translating = false;
+				translate.setText(TRANSLATE);
+				translate.setEnabled(key != null);
+				if (!forKey.equals(key)) {
+					return; // the user moved on; the result is cached for when they come back
+				}
+				try {
+					machine.setText(get());
+				} catch (Exception ex) {
+					Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+					machine.setText(cause.getMessage());
+				}
+				machine.setCaretPosition(0);
+			}
+		}.execute();
+	}
 
 	private void openTable(StringTable t) {
 		table = t;
@@ -188,15 +299,27 @@ public final class EditorPanel extends JPanel {
 				japanese.setText("");
 				english.setText("");
 				english.setEnabled(false);
+				useJapanese.setSelected(false);
+				useJapanese.setEnabled(false);
+				machine.setText("");
+				translate.setEnabled(false);
 				preview.clear();
 				return;
 			}
 			String jp = table.strings().get(k);
 			String en = translations.get(table, k);
-			japanese.setText(ControlCodes.toDisplay(jp));
+			String known = GoogleTranslate.cached(jp);
+			machine.setText(known == null ? "" : known);
+			machine.setCaretPosition(0);
+			translate.setEnabled(!translating);
+			japanese.setText(ControlCodes.toDisplay(jp, colors.names()));
 			japanese.setCaretPosition(0);
-			english.setEnabled(true);
-			english.setText(en == null ? "" : ControlCodes.toDisplay(en));
+			boolean kept = translations.keepsJapanese(table, k);
+			useJapanese.setEnabled(true);
+			useJapanese.setSelected(kept);
+			// a string that keeps its Japanese shows it here, greyed out, and cannot be edited
+			english.setEnabled(!kept);
+			english.setText(en == null ? "" : ControlCodes.toDisplay(en, colors.names()));
 			english.setCaretPosition(english.getDocument().getLength());
 			preview.showString(index.usages(table, k), jp, en);
 		} finally {
@@ -208,11 +331,59 @@ public final class EditorPanel extends JPanel {
 		if (loading || table == null || key == null) {
 			return;
 		}
-		translations.set(table, key, ControlCodes.toRaw(english.getText()));
+		translations.set(table, key, ControlCodes.toRaw(english.getText(), colors.names()));
 		strings.changed(key);
 		tables.repaint();
+		updateProgress();
 		preview.setEnglish(translations.get(table, key));
 		onChange.run();
+	}
+
+	/** "Use JP" ticked or unticked: the string keeps its Japanese, or goes back to needing English. */
+	private void useJapaneseToggled() {
+		if (loading || table == null || key == null) {
+			return;
+		}
+		boolean keep = useJapanese.isSelected();
+		boolean hasEnglish = translations.get(table, key) != null && !translations.keepsJapanese(table, key);
+		if (keep && hasEnglish) {
+			int choice = JOptionPane.showConfirmDialog(this,
+					"Replace the English for " + key + " with the original Japanese?", "Use JP",
+					JOptionPane.OK_CANCEL_OPTION, JOptionPane.QUESTION_MESSAGE);
+			if (choice != JOptionPane.OK_OPTION) {
+				useJapanese.setSelected(false);
+				return;
+			}
+		}
+		translations.setKeepsJapanese(table, key, keep);
+		openString(key);
+		strings.changed(key);
+		tables.repaint();
+		updateProgress();
+		onChange.run();
+		if (!keep) {
+			english.requestFocusInWindow();
+		}
+	}
+
+	/** The share of all strings that are done: given English or marked to keep their Japanese. */
+	private void updateProgress() {
+		int done = translations.translatedCount();
+		int total = index.stringCount();
+		double share = total == 0 ? 0 : (double) done / total;
+		progress.setValue((int) Math.round(share * progress.getMaximum()));
+		progress.setString(String.format("%.1f%%", share * 100));
+		progress.setToolTipText(String.format("%,d of %,d strings translated or kept in Japanese", done, total));
+	}
+
+	/**
+	 * After a code is renamed or recolored: shows the current string with the new tags (the
+	 * stored text is unchanged, only how it reads) and redraws the preview.
+	 */
+	private void codesChanged() {
+		int caret = english.getCaretPosition();
+		openString(key);
+		english.setCaretPosition(Math.min(caret, english.getDocument().getLength()));
 	}
 
 	/** Moves the selection {@code delta} rows and puts the cursor in the English. */
@@ -296,7 +467,7 @@ public final class EditorPanel extends JPanel {
 			return switch (column) {
 				case KEY -> k;
 				case JAPANESE -> ControlCodes.summary(table.strings().get(k));
-				case ENGLISH -> en == null ? "" : ControlCodes.summary(en);
+				case ENGLISH -> en == null ? "" : (translations.keepsJapanese(table, k) ? "[JP] " : "") + ControlCodes.summary(en);
 				case FITS -> en == null ? "" : fitsText(fit(k, en));
 				case GLYPHS -> en == null ? "" : glyphsText(fit(k, en));
 				default -> "";

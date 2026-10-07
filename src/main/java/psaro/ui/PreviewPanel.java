@@ -15,12 +15,16 @@ import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
 import javax.swing.ImageIcon;
+import javax.swing.JButton;
 import javax.swing.JComboBox;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JTextArea;
+import javax.swing.SwingUtilities;
+import psaro.dialog.ColorCodesDialog;
 import psaro.format.Bcfnt;
+import psaro.project.CodeColors;
 import psaro.render.TextRenderer;
 import psaro.romfs.RomfsIndex;
 import psaro.romfs.RomfsIndex.Usage;
@@ -46,6 +50,7 @@ final class PreviewPanel extends JPanel {
 	}
 
 	private final RomfsIndex index;
+	private final CodeColors colors;
 	private final JComboBox<Choice> pane = new JComboBox<>();
 	private final JComboBox<String> zoom = new JComboBox<>(new String[] {"1×", "2×", "3×", "4×"});
 	private final JLabel japanese = new JLabel();
@@ -56,12 +61,21 @@ final class PreviewPanel extends JPanel {
 	private String japaneseRaw = "";
 	private String englishRaw;
 
-	PreviewPanel(RomfsIndex index) {
+	/** Run after a color code is renamed or recolored, so the editor can show the new tags. */
+	private final Runnable onCodesChanged;
+	private ColorCodesDialog colorDialog;
+
+	PreviewPanel(RomfsIndex index, CodeColors colors, Runnable onCodesChanged) {
 		super(new BorderLayout());
 		this.index = index;
+		this.colors = colors;
+		this.onCodesChanged = onCodesChanged;
 		zoom.setSelectedIndex(1);
 		pane.addActionListener(e -> redraw());
 		zoom.addActionListener(e -> redraw());
+		JButton colorButton = new JButton("Colors…");
+		colorButton.setToolTipText("Match the game's color codes to the colors it shows");
+		colorButton.addActionListener(e -> showColors());
 
 		// the pane picker takes whatever width is left, so a long pane name cannot push Zoom away
 		JPanel bar = new JPanel(new BorderLayout(6, 0));
@@ -71,6 +85,7 @@ final class PreviewPanel extends JPanel {
 		JPanel zoomBox = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
 		zoomBox.add(new JLabel("Zoom:"));
 		zoomBox.add(zoom);
+		zoomBox.add(colorButton);
 		bar.add(zoomBox, BorderLayout.EAST);
 		pane.setPrototypeDisplayValue(null);
 		pane.setMinimumSize(new Dimension(80, pane.getPreferredSize().height));
@@ -119,6 +134,15 @@ final class PreviewPanel extends JPanel {
 		redraw();
 	}
 
+	/** Opens the color mapping, or brings it forward if it is already open. */
+	private void showColors() {
+		if (colorDialog == null || !colorDialog.isDisplayable()) {
+			colorDialog = new ColorCodesDialog(SwingUtilities.getWindowAncestor(this), index, colors, onCodesChanged);
+		}
+		colorDialog.setVisible(true);
+		colorDialog.toFront();
+	}
+
 	void clear() {
 		usages = List.of();
 		pane.removeAllItems();
@@ -146,7 +170,7 @@ final class PreviewPanel extends JPanel {
 		double z = ZOOMS[Math.max(zoom.getSelectedIndex(), 0)];
 		Bcfnt font = Fit.font(index, u);
 
-		TextRenderer.Result jp = TextRenderer.render(font, u.pane().text(), japaneseRaw, z);
+		TextRenderer.Result jp = TextRenderer.render(font, u.pane().text(), japaneseRaw, z, colors.palette());
 		japanese.setText(null);
 		japanese.setIcon(new ImageIcon(jp.image()));
 
@@ -159,7 +183,7 @@ final class PreviewPanel extends JPanel {
 			english.setIcon(null);
 			english.setText("Not translated yet.");
 		} else {
-			TextRenderer.Result en = TextRenderer.render(font, u.pane().text(), englishRaw, z);
+			TextRenderer.Result en = TextRenderer.render(font, u.pane().text(), englishRaw, z, colors.palette());
 			english.setText(null);
 			english.setIcon(new ImageIcon(en.image()));
 			describeFit(Fit.judge(font, u.pane().text(), englishRaw, japaneseRaw), lines);
