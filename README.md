@@ -60,8 +60,8 @@ git push origin v0.1.0
 ```
 
 The workflow can also be run by hand from the Actions tab. It refuses to publish until
-`psaro.MainWindow` exists. For an icon, add `src/main/resources/images/psaroeditor.png`
-(512×512); until then the installers use Java's default.
+`psaro.MainWindow` exists. The installers' icon is made from
+`src/main/resources/images/psaroeditor.png` (512×512).
 
 ## Roadmap
 
@@ -71,7 +71,3 @@ The workflow can also be run by hand from the Actions tab. It refuses to publish
 3. Automatic font building from donor fonts inside the romfs
 4. Glyph generation from TrueType fonts, styled to match each game font
 5. Export: a LayeredFS folder for Luma3DS / Citra, and xdelta patches
-
-## License
-
-MIT; see [LICENSE](LICENSE).
