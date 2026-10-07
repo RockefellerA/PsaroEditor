@@ -1,0 +1,19 @@
+target/
+.idea/
+.vscode/
+*.iml
+
+# Game data never belongs in this repository: it is copyrighted, and every test that
+# needs it reads a romfs from outside the tree (see README).
+romfs/
+exefs/
+*.3ds
+*.cia
+*.cxi
+*.app
+*.lz
+*.arc
+*.bcfnt
+*.bclyt
+*.bclim
+*.tdt
