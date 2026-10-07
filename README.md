@@ -1,6 +1,6 @@
 # PsaroEditor
 
-A translation workbench for the Nintendo 3DS game *Theatrhythm Dragon Quest*. Point it at
+A translation workbench for Nintendo 3DS games. Point it at
 an extracted romfs and it reads the game's string tables, layouts, archives and fonts,
 and writes them back, including adding the English glyphs the game's Japanese-only
 fonts lack.
