@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.awt.geom.Rectangle2D;
+import java.util.List;
 import java.util.Set;
 
 import org.junit.jupiter.api.Test;
@@ -82,7 +83,7 @@ class TextRendererTest {
 
 	@Test
 	void reportsTextTooWideOrTooTallForTheBox() {
-		Result wide = TextRenderer.measure(font(), pane(25, 30, 0, 0, 0, 0), "ABW");
+		Result wide = TextRenderer.measure(font(), pane(25, 60, 0, 0, 0, 0), "ABW");
 		assertTrue(wide.tooWide());
 		assertFalse(wide.tooTall());
 		Result tall = TextRenderer.measure(font(), pane(200, 30, 0, 0, 0, 0), "A\nB");
@@ -91,10 +92,45 @@ class TextRendererTest {
 	}
 
 	@Test
+	void aCharacterThatWouldCrossTheBoxEdgeStartsANewLineAsInTheGame() {
+		// A 10 + 2 + B 10 = 22 fits 25; + 2 + W 18 would not, so W starts the next line
+		Result r = TextRenderer.measure(font(), pane(25, 60, 0, 0, 2, 3), "ABW");
+		assertEquals(List.of("AB"), r.breaks());
+		assertTrue(r.tooWide());
+		assertEquals(22, r.textBounds().getWidth(), 1e-9);
+		assertEquals(24 + 3 + 24, r.textBounds().getHeight(), 1e-9);
+		// exactly filling the box is not a break
+		assertTrue(TextRenderer.measure(font(), pane(22, 60, 0, 0, 2, 0), "AB").breaks().isEmpty());
+	}
+
+	@Test
 	void missingGlyphsAreReportedButStillTakeSpace() {
 		Result r = TextRenderer.measure(font(), pane(200, 30, 0, 0, 0, 0), "AxyA");
 		assertEquals(Set.of((int) 'x', (int) 'y'), r.missing());
 		assertTrue(r.textBounds().getWidth() > 20);
+	}
+
+	@Test
+	void missingGlyphsAreMeasuredFromADonorAtTheDonorsOwnScale() {
+		// twice the font's proportions, so its 'x' (advance 16) comes out 8 wide in the pane
+		Bcfnt donor = font();
+		donor.width = 40;
+		donor.height = 40;
+		donor.cmap.put((int) 'x', donor.glyphs.size());
+		donor.glyphs.add(new Bcfnt.Glyph(new int[donor.cellW * donor.cellH], 0, 8, 16));
+		Result r = TextRenderer.measure(font(), () -> List.of(donor), pane(200, 30, 0, 0, 0, 0), "AxyA");
+		assertEquals(Set.of((int) 'x', (int) 'y'), r.missing());
+		assertEquals(Set.of((int) 'y'), r.standIn());
+		double y = TextRenderer.measure(font(), pane(200, 30, 0, 0, 0, 0), "y").textBounds().getWidth();
+		assertEquals(10 + 8 + y + 10, r.textBounds().getWidth(), 1e-9);
+	}
+
+	@Test
+	void donorsAreNotAskedForWhenNothingIsMissing() {
+		Result r = TextRenderer.measure(font(), () -> {
+			throw new AssertionError("donors looked up");
+		}, pane(200, 30, 0, 0, 0, 0), "AB");
+		assertTrue(r.missing().isEmpty());
 	}
 
 	@Test

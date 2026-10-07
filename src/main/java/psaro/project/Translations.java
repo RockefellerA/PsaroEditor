@@ -6,6 +6,7 @@ import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -24,12 +25,13 @@ import psaro.romfs.RomfsIndex.StringTable;
  * {@code <romfs>.psaro/english/<table>.json}, one JSON object per string table mapping keys to
  * English.
  *
- * <p>A file holds only translated strings, in the table's own order so diffs stay readable, and
- * no Japanese: the folder can be shared or put in git without carrying any game text. A string
- * that needs no translation (a name, a number, "？？？") is marked to keep its Japanese, stored as
- * {@code true} rather than a copy of the text. Keys a file has but its table lacks are kept as
- * they are. Nothing is written until {@link #save}, and a table left with no translations has its
- * file removed.
+ * <p>A file holds only translated strings, in the table's own order so diffs stay readable. A
+ * string that needs no translation (a name, a number, "？？？") is marked to keep its Japanese,
+ * stored as {@code true} rather than a copy of the text, which is how it differs from a string not
+ * translated yet. Keys a file has but its table lacks are kept as they are. Nothing is written
+ * until {@link #save}, and a table left with no translations has its file removed. These files
+ * are the record of the work; the game's own tables are built from them
+ * ({@link psaro.patch.TextExport}).
  */
 public final class Translations {
 
@@ -139,6 +141,11 @@ public final class Translations {
 
 	public int translatedCount() {
 		return index.tables().stream().mapToInt(this::translatedCount).sum();
+	}
+
+	/** How many strings in {@code tables} are done. */
+	public int translatedCountIn(Collection<StringTable> tables) {
+		return tables.stream().mapToInt(this::translatedCount).sum();
 	}
 
 	public boolean isDirty() {

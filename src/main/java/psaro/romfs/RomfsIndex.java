@@ -1,16 +1,24 @@
 package psaro.romfs;
 
 import java.io.IOException;
+import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.TreeMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 import psaro.format.Archive;
 import psaro.format.Bclyt;
@@ -30,7 +38,13 @@ import psaro.format.Tdt;
  * always wins.
  *
  * <p>A pane's font is a {@code .bcfnt} inside the same archive, except for the 3DS system font,
- * which no romfs carries; {@link #font} returns null for those.
+ * which no romfs carries; {@link #font} returns null for those. Each archive's font is a subset
+ * holding only the characters its Japanese needs, so {@link #donors} finds the other copies and
+ * sizes of a font that do hold English letters.
+ *
+ * <p>Archives are found anywhere under the root except inside another romfs: a folder named
+ * {@code romfs} or one with string tables of its own. A working folder often keeps rebuilt or
+ * test copies of the romfs beside the original, and their layouts and fonts are not the game's.
  */
 public final class RomfsIndex {
 
@@ -46,8 +60,35 @@ public final class RomfsIndex {
 		}
 	}
 
+	/** A pane and the Japanese it shows. */
+	public record Shown(Usage usage, String japanese) {
+	}
+
+	/** What decides how much room text takes in a pane, whatever its position or colour. */
+	private record Shape(String font, float boxWidth, float boxHeight, float fontSizeX, float fontSizeY,
+			float charSpace, float lineSpace) {
+
+		static Shape of(Bclyt.TextInfo t) {
+			return new Shape(t.font(), t.boxWidth(), t.boxHeight(), t.fontSizeX(), t.fontSizeY(), t.charSpace(),
+					t.lineSpace());
+		}
+	}
+
 	private static final String TABLE_SUFFIX = "_Japanese.tdt";
 	private static final String ARCHIVE_SUFFIX = ".arc.lz";
+	/**
+	 * {@code SulaPro_B_04a_22_C.bcfnt}: family, weight (some fonts have none), style (the look
+	 * baked into the pixels: {@code 04a} is white with a black outline), size, then any variant.
+	 */
+	private static final Pattern FONT_NAME =
+			Pattern.compile("([^_]+)_(?:([A-Z]+)_)?(\\d+[a-z])_(\\d+)(?:_\\w+)?\\.bcfnt");
+
+	/** Font weights from lightest to heaviest, as the names spell them. */
+	private static final List<String> WEIGHTS = List.of("EL", "L", "R", "M", "DB", "B", "EB", "H", "U");
+
+	/** A font that can lend glyphs: the archive it is in, its file name, and the font. */
+	public record Donor(Path archive, String name, Bcfnt font) {
+	}
 
 	private final Path root;
 	private final Map<String, StringTable> tables;
@@ -55,16 +96,27 @@ public final class RomfsIndex {
 	private final Map<String, List<Usage>> usages;
 	private final List<Usage> unresolved;
 	private final int layoutCount;
+	/** Font file name to the archives that carry a copy of it. */
+	private final Map<String, List<Path>> fontHomes;
+	/** Layout path inside an archive to the archives that carry a copy of it. */
+	private final Map<String, List<Path>> layoutHomes;
+	private final Map<Shape, List<Shown>> shapes;
 	/** Keyed by archive path + "!" + font name; empty when the archive does not carry the font. */
 	private final Map<String, Optional<Bcfnt>> fonts = new HashMap<>();
+	/** Keyed by font name. */
+	private final Map<String, List<Donor>> donors = new HashMap<>();
 
 	private RomfsIndex(Path root, Map<String, StringTable> tables, Map<String, List<Usage>> usages,
-			List<Usage> unresolved, int layoutCount) {
+			List<Usage> unresolved, int layoutCount, Map<String, List<Path>> fontHomes,
+			Map<String, List<Path>> layoutHomes, Map<Shape, List<Shown>> shapes) {
 		this.root = root;
 		this.tables = tables;
 		this.usages = usages;
 		this.unresolved = unresolved;
 		this.layoutCount = layoutCount;
+		this.fontHomes = fontHomes;
+		this.layoutHomes = layoutHomes;
+		this.shapes = shapes;
 	}
 
 	/** Whether {@code dir} has the string tables an index is built from. */
@@ -87,8 +139,11 @@ public final class RomfsIndex {
 
 		Map<String, List<Usage>> usages = new HashMap<>();
 		List<Usage> unresolved = new ArrayList<>();
+		Map<String, List<Path>> fontHomes = new HashMap<>();
+		Map<String, List<Path>> layoutHomes = new HashMap<>();
+		Map<Shape, List<Shown>> shapes = new HashMap<>();
 		int layouts = 0;
-		for (Path archive : files(root, ARCHIVE_SUFFIX)) {
+		for (Path archive : archives(root)) {
 			StringTable own = tables.get(strip(archive, ARCHIVE_SUFFIX));
 			Darc.Node darc;
 			try {
@@ -97,10 +152,14 @@ public final class RomfsIndex {
 				continue;
 			}
 			for (Map.Entry<String, Darc.Node> file : Darc.files(darc).entrySet()) {
+				if (file.getKey().endsWith(".bcfnt")) {
+					fontHomes.computeIfAbsent(fileName(file.getKey()), k -> new ArrayList<>()).add(archive);
+				}
 				if (!file.getKey().endsWith(".bclyt")) {
 					continue;
 				}
 				layouts++;
+				layoutHomes.computeIfAbsent(file.getKey(), k -> new ArrayList<>()).add(archive);
 				for (Bclyt.Pane pane : Bclyt.read(file.getValue().data).textPanes()) {
 					Usage usage = new Usage(archive, file.getKey(), pane);
 					for (String key : pane.keys()) {
@@ -112,16 +171,34 @@ public final class RomfsIndex {
 						}
 						for (String home : homes) {
 							usages.computeIfAbsent(home + "/" + key, k -> new ArrayList<>()).add(usage);
+							shapes.computeIfAbsent(Shape.of(pane.text()), k -> new ArrayList<>())
+									.add(new Shown(usage, tables.get(home).strings().get(key)));
 						}
 					}
 				}
 			}
 		}
-		return new RomfsIndex(root, Collections.unmodifiableMap(tables), usages, List.copyOf(unresolved), layouts);
+		shapes.replaceAll((shape, shown) -> List.copyOf(shown));
+		return new RomfsIndex(root, Collections.unmodifiableMap(tables), usages, List.copyOf(unresolved), layouts,
+				fontHomes, layoutHomes, shapes);
 	}
 
 	public Path root() {
 		return root;
+	}
+
+	/** Every archive that carries layout {@code layout} (its path inside the archive). */
+	public List<Path> archivesWithLayout(String layout) {
+		return List.copyOf(layoutHomes.getOrDefault(layout, List.of()));
+	}
+
+	/**
+	 * Every pane, in any archive, with the same box, font, size and spacing as {@code usage}'s,
+	 * with the Japanese each shows: room the game already gives text in one of them is there in
+	 * all of them. The same list each time for panes of one shape, so it can key a cache.
+	 */
+	public List<Shown> sameShape(Usage usage) {
+		return shapes.getOrDefault(Shape.of(usage.pane().text()), List.of());
 	}
 
 	/** Every string table, by name. */
@@ -155,22 +232,107 @@ public final class RomfsIndex {
 	 * The font {@code usage}'s pane draws with, or null when its archive does not carry it (the
 	 * system font). Loads every font of that archive on first use.
 	 */
-	public synchronized Bcfnt font(Usage usage) throws IOException {
-		String id = usage.archive() + "!" + usage.fontName();
+	public Bcfnt font(Usage usage) throws IOException {
+		return font(usage.archive(), usage.fontName());
+	}
+
+	/**
+	 * The font {@code name} in {@code archive}, or null when the archive does not carry it. Loads
+	 * every font of that archive on first use. The font is shared: copy it before changing it.
+	 */
+	public synchronized Bcfnt font(Path archive, String name) throws IOException {
+		String id = archive + "!" + name;
 		if (!fonts.containsKey(id)) {
 			Map<String, Bcfnt> found = new LinkedHashMap<>();
-			for (Map.Entry<String, Darc.Node> file : Darc.files(Archive.load(usage.archive())).entrySet()) {
+			for (Map.Entry<String, Darc.Node> file : Darc.files(Archive.load(archive)).entrySet()) {
 				String path = file.getKey();
 				if (path.endsWith(".bcfnt")) {
-					found.put(path.substring(path.lastIndexOf('/') + 1), Bcfnt.parse(file.getValue().data));
+					found.put(fileName(path), Bcfnt.parse(file.getValue().data));
 				}
 			}
 			for (Map.Entry<String, Bcfnt> f : found.entrySet()) {
-				fonts.put(usage.archive() + "!" + f.getKey(), Optional.of(f.getValue()));
+				fonts.put(archive + "!" + f.getKey(), Optional.of(f.getValue()));
 			}
 			fonts.putIfAbsent(id, Optional.empty());
 		}
 		return fonts.get(id).orElse(null);
+	}
+
+	/**
+	 * The fonts that can lend {@code fontName} the English it lacks, nearest first: its copies in
+	 * other archives; the same family, weight and style at other sizes; then the same family and
+	 * style in another weight, nearest weight first. The style is never crossed, since it is baked
+	 * into the pixels, and closer sizes come first. Only copies holding English letters are kept.
+	 * Loaded on first use, which reads every archive that carries one.
+	 */
+	public synchronized List<Donor> donors(String fontName) {
+		List<Donor> cached = donors.get(fontName);
+		if (cached != null) {
+			return cached;
+		}
+		Matcher own = FONT_NAME.matcher(fontName);
+		Map<String, Integer> rank = new HashMap<>();
+		rank.put(fontName, 0);
+		if (own.matches()) {
+			int size = Integer.parseInt(own.group(4));
+			for (String name : fontHomes.keySet()) {
+				Matcher m = FONT_NAME.matcher(name);
+				if (!name.equals(fontName) && m.matches() && m.group(1).equals(own.group(1))
+						&& m.group(3).equals(own.group(3))) {
+					int sizes = Math.abs(Integer.parseInt(m.group(4)) - size);
+					rank.put(name, Objects.equals(m.group(2), own.group(2)) ? 1000 + sizes
+							: 2000 + 100 * weightDistance(m.group(2), own.group(2)) + sizes);
+				}
+			}
+		}
+		List<String> names = rank.keySet().stream()
+				.sorted(Comparator.comparing((String n) -> rank.get(n)).thenComparing(n -> n)).toList();
+		Map<Path, Map<String, Darc.Node>> archives = new HashMap<>();
+		List<Donor> found = new ArrayList<>();
+		for (String name : names) {
+			for (Path archive : fontHomes.getOrDefault(name, List.of())) {
+				try {
+					Map<String, Darc.Node> files = archives.get(archive);
+					if (files == null) {
+						files = Darc.files(Archive.load(archive));
+						archives.put(archive, files);
+					}
+					for (Map.Entry<String, Darc.Node> file : files.entrySet()) {
+						if (fileName(file.getKey()).equals(name)) {
+							Bcfnt font = Bcfnt.parse(file.getValue().data);
+							if (hasEnglish(font)) {
+								found.add(new Donor(archive, name, font));
+							}
+						}
+					}
+				} catch (IOException | RuntimeException unreadable) {
+					// a broken copy just lends nothing
+				}
+			}
+		}
+		List<Donor> result = List.copyOf(found);
+		donors.put(fontName, result);
+		return result;
+	}
+
+	/** How many steps apart two weights are; an unknown or missing weight counts as far. */
+	private static int weightDistance(String a, String b) {
+		int i = a == null ? -1 : WEIGHTS.indexOf(a);
+		int j = b == null ? -1 : WEIGHTS.indexOf(b);
+		return i < 0 || j < 0 ? WEIGHTS.size() : Math.abs(i - j);
+	}
+
+	private static boolean hasEnglish(Bcfnt font) {
+		for (int c = 'A'; c <= 'z'; c++) {
+			if (Character.isLetter(c) && font.has(c)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static String fileName(String darcPath) {
+		return darcPath.substring(darcPath.lastIndexOf('/') + 1);
 	}
 
 	private static List<Path> tableFiles(Path root) throws IOException {
@@ -183,10 +345,29 @@ public final class RomfsIndex {
 		}
 	}
 
-	private static List<Path> files(Path root, String suffix) throws IOException {
-		try (Stream<Path> files = Files.walk(root)) {
-			return files.filter(p -> p.getFileName().toString().endsWith(suffix)).sorted().toList();
-		}
+	/** Every archive under {@code root}, leaving out any other romfs nested inside it. */
+	private static List<Path> archives(Path root) throws IOException {
+		List<Path> found = new ArrayList<>();
+		Files.walkFileTree(root, new SimpleFileVisitor<>() {
+			@Override
+			public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException {
+				return dir.equals(root) || !isNestedRomfs(dir) ? FileVisitResult.CONTINUE : FileVisitResult.SKIP_SUBTREE;
+			}
+
+			@Override
+			public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
+				if (file.getFileName().toString().endsWith(ARCHIVE_SUFFIX)) {
+					found.add(file);
+				}
+				return FileVisitResult.CONTINUE;
+			}
+		});
+		Collections.sort(found);
+		return found;
+	}
+
+	private static boolean isNestedRomfs(Path dir) throws IOException {
+		return dir.getFileName().toString().toLowerCase(Locale.ROOT).equals("romfs") || looksLikeRomfs(dir);
 	}
 
 	private static String strip(Path p, String suffix) {

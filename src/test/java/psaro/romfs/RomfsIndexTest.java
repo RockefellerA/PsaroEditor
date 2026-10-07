@@ -6,11 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
@@ -20,8 +16,6 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-import psaro.format.Archive;
-import psaro.format.Darc;
 import psaro.format.Tdt;
 import psaro.romfs.RomfsIndex.StringTable;
 import psaro.romfs.RomfsIndex.Usage;
@@ -84,6 +78,35 @@ class RomfsIndexTest {
 		assertNull(index.font(index.usages(index.table("menu"), "menu_0001").get(0)));
 	}
 
+	/**
+	 * A rebuilt copy in {@code build/romfs} and a test copy with its own string tables carry the
+	 * same layout; only the root's own archive counts.
+	 */
+	@Test
+	void romfsCopiesNestedInsideAreLeftOut() throws IOException {
+		sample();
+		archive("build/romfs/scene/menu/menu.arc.lz", "blyt/menu.bclyt", List.of("a.bcfnt"), pane("Txt_Yes", "menu_0001"));
+		archive("test_swap/scene/menu/menu.arc.lz", "blyt/menu.bclyt", List.of("a.bcfnt"), pane("Txt_Yes", "menu_0001"));
+		Files.createDirectories(romfs.resolve("test_swap/text"));
+		Files.write(romfs.resolve("test_swap/text/menu_Japanese.tdt"), Tdt.write(new LinkedHashMap<>(Map.of("menu_0001", "はい"))));
+		RomfsIndex index = RomfsIndex.scan(romfs);
+		List<Usage> yes = index.usages(index.table("menu"), "menu_0001");
+		assertEquals(1, yes.size());
+		assertEquals(romfs.resolve("scene/menu/menu.arc.lz"), yes.get(0).archive());
+		assertEquals(1, index.layoutCount());
+	}
+
+	@Test
+	void panesOfTheSameShapeAreGroupedWithTheirJapaneseAcrossArchives() throws IOException {
+		sample();
+		archive("scene/common/common.arc.lz", "blyt/ok.bclyt", List.of("a.bcfnt"), pane("Txt_Ok", "comm_0001"));
+		RomfsIndex index = RomfsIndex.scan(romfs);
+		Usage yes = index.usages(index.table("menu"), "menu_0001").get(0);
+		List<String> shown = index.sameShape(yes).stream().map(RomfsIndex.Shown::japanese).sorted().toList();
+		assertEquals(List.of("はい", "決定", "決定"), shown);
+		assertTrue(index.sameShape(yes) == index.sameShape(index.usages(index.table("common"), "comm_0001").get(0)));
+	}
+
 	@Test
 	void folderWithoutStringTablesIsNotARomfs() throws IOException {
 		assertFalse(RomfsIndex.looksLikeRomfs(romfs));
@@ -117,67 +140,14 @@ class RomfsIndexTest {
 	// ── Synthetic romfs ──────────────────────────────────────────────────────
 
 	private void table(String name, Map<String, String> strings) throws IOException {
-		Files.createDirectories(romfs.resolve("text"));
-		Files.write(romfs.resolve("text/" + name + "_Japanese.tdt"), Tdt.write(new LinkedHashMap<>(strings)));
+		SampleRomfs.table(romfs, name, strings);
 	}
 
 	private void archive(String path, String layoutPath, List<String> fonts, byte[]... panes) throws IOException {
-		Darc.Node root = Darc.Node.dir("");
-		Darc.Node dot = Darc.Node.dir(".");
-		Darc.Node blyt = Darc.Node.dir(layoutPath.substring(0, layoutPath.indexOf('/')));
-		blyt.children.add(Darc.Node.file(layoutPath.substring(layoutPath.indexOf('/') + 1), layout(fonts, panes)));
-		dot.children.add(blyt);
-		root.children.add(dot);
-		Archive.save(root, romfs.resolve(path));
+		SampleRomfs.archive(romfs, path, layoutPath, fonts, Map.of(), panes);
 	}
 
-	/** A CLYT with an fnl1 font list, then each pane's txt1 + usd1 sections. */
-	private static byte[] layout(List<String> fonts, byte[]... panes) {
-		ByteArrayOutputStream body = new ByteArrayOutputStream();
-		ByteArrayOutputStream names = new ByteArrayOutputStream();
-		ByteBuffer offsets = le(4 * fonts.size());
-		for (String font : fonts) {
-			offsets.putInt(4 * fonts.size() + names.size());
-			names.writeBytes((font + "\0").getBytes(StandardCharsets.US_ASCII));
-		}
-		byte[] fnl1Body = concat(le(4).putInt(fonts.size()).array(), offsets.array(), names.toByteArray());
-		body.writeBytes(section("fnl1", fnl1Body));
-		for (byte[] pane : panes) {
-			body.writeBytes(pane);
-		}
-		ByteBuffer header = le(0x14);
-		header.put("CLYT".getBytes(StandardCharsets.US_ASCII)).putShort((short) 0xFEFF).putShort((short) 0x14);
-		return concat(header.array(), body.toByteArray());
-	}
-
-	/** A txt1 pane using font 0, followed by the usd1 that carries its key. */
 	private static byte[] pane(String name, String key) {
-		ByteBuffer txt = le(0x74 - 8 + 4);
-		txt.position(0x0C - 8).put(name.getBytes(StandardCharsets.US_ASCII));
-		txt.position(0x44 - 8).putFloat(120f).putFloat(24f).putShort((short) 4).putShort((short) 4);
-		txt.position(0x52 - 8).putShort((short) 0);
-		txt.position(0x58 - 8).putInt(0x74);
-		txt.position(0x64 - 8).putFloat(16f).putFloat(16f).putFloat(0f).putFloat(0f);
-		txt.position(0x74 - 8).put("*\0".getBytes(StandardCharsets.UTF_16LE));
-		ByteBuffer usd = le(24);
-		usd.position(8).put(key.getBytes(StandardCharsets.US_ASCII));
-		return concat(section("txt1", txt.array()), section("usd1", usd.array()));
-	}
-
-	private static byte[] section(String tag, byte[] body) {
-		ByteBuffer head = le(8).put(tag.getBytes(StandardCharsets.US_ASCII)).putInt(8 + body.length);
-		return concat(head.array(), body);
-	}
-
-	private static ByteBuffer le(int size) {
-		return ByteBuffer.allocate(size).order(ByteOrder.LITTLE_ENDIAN);
-	}
-
-	private static byte[] concat(byte[]... parts) {
-		ByteArrayOutputStream out = new ByteArrayOutputStream();
-		for (byte[] p : parts) {
-			out.writeBytes(p);
-		}
-		return out.toByteArray();
+		return SampleRomfs.pane(name, key);
 	}
 }

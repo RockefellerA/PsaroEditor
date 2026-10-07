@@ -8,6 +8,9 @@ import java.awt.FlowLayout;
 import java.awt.event.ActionEvent;
 import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -22,8 +25,10 @@ import javax.swing.JCheckBox;
 import javax.swing.JComponent;
 import javax.swing.JLabel;
 import javax.swing.JList;
+import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
+import javax.swing.JPopupMenu;
 import javax.swing.JProgressBar;
 import javax.swing.JScrollPane;
 import javax.swing.JSplitPane;
@@ -33,15 +38,19 @@ import javax.swing.JTextField;
 import javax.swing.KeyStroke;
 import javax.swing.ListSelectionModel;
 import javax.swing.RowFilter;
+import javax.swing.SwingUtilities;
 import javax.swing.SwingWorker;
+import javax.swing.UIManager;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
 import javax.swing.table.AbstractTableModel;
 import javax.swing.table.DefaultTableCellRenderer;
 import javax.swing.table.TableRowSorter;
 import com.formdev.flatlaf.FlatClientProperties;
+import psaro.patch.FontPatcher;
 import psaro.project.CodeColors;
 import psaro.project.Translations;
+import psaro.project.UnusedTables;
 import psaro.romfs.RomfsIndex;
 import psaro.romfs.RomfsIndex.StringTable;
 import psaro.text.ControlCodes;
@@ -60,6 +69,12 @@ public final class EditorPanel extends JPanel {
 	private final Translations translations;
 	private final Runnable onChange;
 	private final CodeColors colors;
+	/** Tables marked as never shown by the game: greyed and left out of the progress. */
+	private final UnusedTables unused;
+	/** The fonts the fit is measured in, as the font patch would leave them. */
+	private final FontPatcher fonts;
+	/** The window's Save and Patch buttons, shown at the right of the bar above the strings. */
+	private final JComponent actions;
 
 	private final JList<StringTable> tables;
 	private final StringsModel strings = new StringsModel();
@@ -87,13 +102,17 @@ public final class EditorPanel extends JPanel {
 	/** Set while the editor's text is replaced programmatically, so it is not taken as an edit. */
 	private boolean loading;
 
-	public EditorPanel(RomfsIndex index, Translations translations, CodeColors colors, Runnable onChange) {
+	public EditorPanel(FontPatcher fonts, Translations translations, CodeColors colors, UnusedTables unused,
+			JComponent actions, Runnable onChange) {
 		super(new BorderLayout());
-		this.index = index;
+		this.index = fonts.index();
+		this.fonts = fonts;
 		this.translations = translations;
 		this.onChange = onChange;
 		this.colors = colors;
-		this.preview = new PreviewPanel(index, colors, this::codesChanged);
+		this.unused = unused;
+		this.actions = actions;
+		this.preview = new PreviewPanel(fonts, colors, this::codesChanged, this::layoutChanged);
 
 		DefaultListModel<StringTable> tableItems = new DefaultListModel<>();
 		index.tables().forEach(tableItems::addElement);
@@ -103,6 +122,32 @@ public final class EditorPanel extends JPanel {
 		tables.addListSelectionListener(e -> {
 			if (!e.getValueIsAdjusting()) {
 				openTable(tables.getSelectedValue());
+			}
+		});
+		tables.addMouseListener(new MouseAdapter() {
+			@Override
+			public void mousePressed(MouseEvent e) {
+				if (e.isPopupTrigger() || SwingUtilities.isRightMouseButton(e)) {
+					int i = tables.locationToIndex(e.getPoint());
+					if (i >= 0 && tables.getCellBounds(i, i).contains(e.getPoint())) {
+						tables.setSelectedIndex(i);
+						tableMenu(tables.getModel().getElementAt(i)).show(tables, e.getX(), e.getY());
+					}
+				}
+			}
+		});
+		// the keyboard's menu key and Shift+F10 open the same menu for the selected table
+		for (String stroke : new String[] {"CONTEXT_MENU", "shift F10"}) {
+			tables.getInputMap().put(KeyStroke.getKeyStroke(stroke), "tableMenu");
+		}
+		tables.getActionMap().put("tableMenu", new AbstractAction() {
+			@Override
+			public void actionPerformed(ActionEvent e) {
+				int i = tables.getSelectedIndex();
+				if (i >= 0) {
+					var cell = tables.getCellBounds(i, i);
+					tableMenu(tables.getSelectedValue()).show(tables, cell.x + 20, cell.y + cell.height);
+				}
 			}
 		});
 
@@ -159,9 +204,14 @@ public final class EditorPanel extends JPanel {
 		filter.getDocument().addDocumentListener(onAnyChange(this::applyFilter));
 		untranslatedOnly.addActionListener(e -> applyFilter());
 
-		JPanel bar = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 4));
-		bar.add(filter);
-		bar.add(untranslatedOnly);
+		JPanel filters = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 4));
+		filters.add(filter);
+		filters.add(untranslatedOnly);
+		JPanel saveBox = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 4));
+		saveBox.add(actions);
+		JPanel bar = new JPanel(new BorderLayout());
+		bar.add(filters, BorderLayout.CENTER);
+		bar.add(saveBox, BorderLayout.EAST);
 		JPanel panel = new JPanel(new BorderLayout());
 		panel.add(bar, BorderLayout.NORTH);
 		panel.add(new JScrollPane(stringTable), BorderLayout.CENTER);
@@ -178,7 +228,7 @@ public final class EditorPanel extends JPanel {
 				"previous", () -> step(-1));
 		english.setEnabled(false);
 
-		JLabel hint = new JLabel("<html>Enter breaks a line (the game never wraps). Tags like &lt;GREEN&gt; are color "
+		JLabel hint = new JLabel("<html>Enter breaks a line; the game breaks one only where it runs past the box, even mid-word. Tags like &lt;GREEN&gt; are color "
 				+ "codes, named under Colors… in the preview; an unnamed code shows as {10}. Ctrl+Enter goes to the next "
 				+ "string, Ctrl+Shift+Enter to the previous.</html>");
 		hint.putClientProperty(FlatClientProperties.STYLE_CLASS, "small");
@@ -366,20 +416,80 @@ public final class EditorPanel extends JPanel {
 		}
 	}
 
+	/** A table's right-click menu: mark it used or unused. */
+	private JPopupMenu tableMenu(StringTable t) {
+		boolean isUnused = unused.isUnused(t);
+		JMenuItem toggle = new JMenuItem(isUnused ? "Mark as used" : "Mark as unused");
+		toggle.setToolTipText(isUnused ? "Count this table in the progress again"
+				: "This table is never shown by the game: grey it out and leave it out of the progress");
+		toggle.addActionListener(e -> {
+			try {
+				unused.setUnused(t, !isUnused);
+			} catch (IOException ex) {
+				JOptionPane.showMessageDialog(this, "Could not save which tables are unused:\n" + ex.getMessage(),
+						"Mark as unused", JOptionPane.ERROR_MESSAGE);
+			}
+			tables.repaint();
+			updateProgress();
+			onChange.run();
+		});
+		JPopupMenu menu = new JPopupMenu();
+		menu.add(toggle);
+		return menu;
+	}
+
 	/** The share of all strings that are done: given English or marked to keep their Japanese. */
 	private void updateProgress() {
-		int done = translations.translatedCount();
-		int total = index.stringCount();
+		List<StringTable> inUse = unused.inUse(index.tables());
+		int done = translations.translatedCountIn(inUse);
+		int total = inUse.stream().mapToInt(t -> t.strings().size()).sum();
 		double share = total == 0 ? 0 : (double) done / total;
 		progress.setValue((int) Math.round(share * progress.getMaximum()));
 		progress.setString(String.format("%.1f%%", share * 100));
-		progress.setToolTipText(String.format("%,d of %,d strings translated or kept in Japanese", done, total));
+		progress.setToolTipText(String.format("%,d of %,d strings translated or kept in Japanese (tables marked unused are not counted)", done, total));
 	}
 
 	/**
 	 * After a code is renamed or recolored: shows the current string with the new tags (the
 	 * stored text is unchanged, only how it reads) and redraws the preview.
 	 */
+	/**
+	 * Opens string {@code k} of table {@code t}, clearing the filter if it hides it, and puts the
+	 * cursor in the English.
+	 */
+	public void showString(StringTable t, String k) {
+		if (table != t) {
+			tables.setSelectedValue(t, true);
+		}
+		int row = strings.indexOf(k);
+		if (row < 0) {
+			return;
+		}
+		if (stringTable.convertRowIndexToView(row) < 0) {
+			filter.setText("");
+			untranslatedOnly.setSelected(false);
+			applyFilter();
+		}
+		int view = stringTable.convertRowIndexToView(row);
+		stringTable.setRowSelectionInterval(view, view);
+		stringTable.scrollRectToVisible(stringTable.getCellRect(view, 0, true));
+		english.requestFocusInWindow();
+	}
+
+	/** Measures every string again, after the font patch settings change. */
+	public void fontsChanged() {
+		strings.remeasure();
+		if (key != null) {
+			codesChanged();
+		}
+	}
+
+	/** After a pane's box or type settings change: every fit again, and the window's patch check. */
+	private void layoutChanged() {
+		strings.remeasure();
+		onChange.run();
+	}
+
 	private void codesChanged() {
 		int caret = english.getCaretPosition();
 		openString(key);
@@ -437,6 +547,17 @@ public final class EditorPanel extends JPanel {
 			return keys.get(row);
 		}
 
+		int indexOf(String k) {
+			return keys.indexOf(k);
+		}
+
+		void remeasure() {
+			fits.clear();
+			if (!keys.isEmpty()) {
+				fireTableRowsUpdated(0, keys.size() - 1);
+			}
+		}
+
 		void changed(String k) {
 			fits.remove(k);
 			int row = keys.indexOf(k);
@@ -475,7 +596,7 @@ public final class EditorPanel extends JPanel {
 		}
 
 		private Fit fit(String k, String en) {
-			return fits.computeIfAbsent(k, x -> Fit.check(index, index.usages(table, k), en, table.strings().get(k)));
+			return fits.computeIfAbsent(k, x -> Fit.check(fonts, index.usages(table, k), en, table.strings().get(k)));
 		}
 
 		/** "~" marks an estimate: some characters were measured with the stand-in typeface. */
@@ -487,8 +608,12 @@ public final class EditorPanel extends JPanel {
 			return f.estimate() ? "~" + verdict : verdict;
 		}
 
+		/** "+N": the font lacks N characters Patch can add; "N missing": no donor has them. */
 		private static String glyphsText(Fit f) {
-			return !f.shown() ? "—" : f.missing().isEmpty() ? "✓" : f.missing().size() + " missing";
+			return !f.shown() ? "—"
+					: f.missing().isEmpty() ? "✓"
+					: f.unpatchable().isEmpty() ? "+" + f.missing().size()
+					: f.unpatchable().size() + " missing";
 		}
 	}
 
@@ -500,7 +625,7 @@ public final class EditorPanel extends JPanel {
 			super.getTableCellRendererComponent(t, value, selected, focus, row, column);
 			String s = String.valueOf(value);
 			String verdict = s.startsWith("~") ? s.substring(1) : s;
-			boolean problem = !verdict.isEmpty() && !verdict.equals("✓") && !verdict.equals("—");
+			boolean problem = !verdict.isEmpty() && !verdict.equals("✓") && !verdict.equals("—") && !verdict.startsWith("+");
 			if (problem && !selected) {
 				setForeground(PROBLEM);
 			} else if (!selected) {
@@ -508,6 +633,8 @@ public final class EditorPanel extends JPanel {
 			}
 			setToolTipText(s.equals("—") ? "No layout shows this string; the game draws it from code."
 					: s.startsWith("~") ? "An estimate: characters the font lacks were measured with a stand-in typeface."
+					: s.startsWith("+") ? "The game's font lacks these characters; Patch adds them."
+					: s.endsWith(" missing") ? "No font in the romfs has these characters, so Patch cannot add them."
 					: null);
 			return this;
 		}
@@ -522,6 +649,16 @@ public final class EditorPanel extends JPanel {
 			super.getListCellRendererComponent(list, t.name(), i, selected, focus);
 			int done = translations.translatedCount(t);
 			setText(t.name() + "   " + done + " / " + t.strings().size());
+			if (unused.isUnused(t)) {
+				// greyed, not hidden: it can still be translated, it just does not count toward progress
+				if (!selected) {
+					setForeground(UIManager.getColor("Label.disabledForeground"));
+				}
+				setToolTipText("Marked as unused: not counted in the progress, but it can still be translated. "
+						+ "Right-click to change.");
+			} else {
+				setToolTipText(null);
+			}
 			return this;
 		}
 	}

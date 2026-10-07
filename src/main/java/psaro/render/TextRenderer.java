@@ -15,6 +15,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Supplier;
 import psaro.format.Bclyt.TextInfo;
 import psaro.format.Bcfnt;
 import psaro.format.Texture;
@@ -28,23 +29,30 @@ import psaro.text.ControlCodes;
  * Each character advances by its char width, with the pane's character spacing between
  * characters; each glyph cell sits with its baseline row on the line's baseline, which is the
  * font's ascent below the top of the line. Lines advance by the line feed plus the pane's line
- * spacing and break only at {@code \n}. The block of lines is placed in the box by the pane's
+ * spacing and break at {@code \n}, and, as in the game, wherever the next character would cross
+ * the box's right edge, mid-word or not (so "Yes" in a box too narrow shows as "Ye", then "s").
+ * The block of lines is placed in the box by the pane's
  * text position, and each line within the block by its line alignment. Color codes take no
  * space; the game picks their colors in code, so the caller supplies them.
  *
  * <p>A character the font lacks would draw in the game as the font's fallback, a space. Here it
- * draws in a stand-in typeface at a matching size, underlined in red, so its width still counts
- * toward the fit. A null font (the 3DS system font, which no romfs carries) draws everything in the
- * stand-in, so measurements with it are estimates.
+ * draws underlined in red, so its width still counts toward the fit: borrowed from the first
+ * donor font that has it (another copy or size of the same font, which is where a patched font
+ * would get it), scaled the way the pane would scale that donor, or else in a stand-in typeface
+ * at a matching size, whose width is only an estimate. A null font (the 3DS system font, which no
+ * romfs carries) draws everything in the stand-in.
  */
 public final class TextRenderer {
 
 	/**
 	 * {@code textBounds} is the block of lines in box coordinates (the box spans 0..width,
-	 * 0..height). {@code image} is null from {@link #measure}.
+	 * 0..height). {@code image} is null from {@link #measure}. {@code missing} are the characters
+	 * the font lacks; {@code standIn} those of them no donor has either, drawn in the stand-in.
+	 * {@code breaks} holds, for each line the game breaks because it runs past the box, the part
+	 * that stays on it ("Ye" of "Yes"); {@code tooWide} is true when there is any.
 	 */
-	public record Result(BufferedImage image, Set<Integer> missing, boolean tooWide, boolean tooTall,
-			Rectangle2D textBounds, boolean standInOnly) {
+	public record Result(BufferedImage image, Set<Integer> missing, Set<Integer> standIn, List<String> breaks,
+			boolean tooWide, boolean tooTall, Rectangle2D textBounds, boolean standInOnly) {
 
 		public boolean overflows() {
 			return tooWide || tooTall;
@@ -58,14 +66,16 @@ public final class TextRenderer {
 	/** Slack before a block counts as not fitting, for float rounding. */
 	private static final double TOLERANCE = 0.5;
 
-	private record Placed(double x, int codePoint, Bcfnt.Glyph glyph, int colourCode) {
+	/** {@code source} is the font {@code glyph} comes from: the pane's, a donor, or null for the stand-in. */
+	private record Placed(double x, int codePoint, Bcfnt source, Bcfnt.Glyph glyph, int colourCode) {
 	}
 
 	private record Line(List<Placed> chars, double width) {
 	}
 
 	private record Layout(List<Line> lines, double sx, double sy, double ascent, double lineFeed, Font standIn,
-			Set<Integer> missing, Rectangle2D bounds, double[] lineX, boolean tooWide, boolean tooTall) {
+			Set<Integer> missing, Set<Integer> unborrowed, List<String> breaks, Rectangle2D bounds, double[] lineX,
+			boolean tooWide, boolean tooTall) {
 	}
 
 	private TextRenderer() {
@@ -73,25 +83,37 @@ public final class TextRenderer {
 
 	/** Where {@code raw} lands in the pane and what does not fit, without drawing it. */
 	public static Result measure(Bcfnt font, TextInfo info, String raw) {
-		Layout l = layout(font, info, raw);
-		return new Result(null, l.missing, l.tooWide, l.tooTall, l.bounds, font == null);
+		return measure(font, List::of, info, raw);
+	}
+
+	/**
+	 * Where {@code raw} lands in the pane and what does not fit, without drawing it. A character
+	 * {@code font} lacks is measured from the first of {@code donors} that has it; the donors are
+	 * asked for only then.
+	 */
+	public static Result measure(Bcfnt font, Supplier<List<Bcfnt>> donors, TextInfo info, String raw) {
+		Layout l = layout(font, donors, info, raw);
+		return new Result(null, l.missing, l.unborrowed, l.breaks, l.tooWide, l.tooTall, l.bounds, font == null);
 	}
 
 	/** Draws {@code raw} in its pane at {@code zoom} times the pane's size, every code in the pane's color. */
 	public static Result render(Bcfnt font, TextInfo info, String raw, double zoom) {
-		return render(font, info, raw, zoom, Map.of());
+		return render(font, List::of, info, raw, zoom, Map.of());
 	}
 
 	/**
-	 * Draws {@code raw} in its pane at {@code zoom} times the pane's size. {@code colors} maps a
-	 * color code to its color; a code it lacks draws in the pane's own color.
+	 * Draws {@code raw} in its pane at {@code zoom} times the pane's size, borrowing what
+	 * {@code font} lacks from {@code donors} as {@link #measure} does. {@code colors} maps a color
+	 * code to its color; a code it lacks draws in the pane's own color.
 	 */
-	public static Result render(Bcfnt font, TextInfo info, String raw, double zoom, Map<Integer, Color> colors) {
-		Layout l = layout(font, info, raw);
-		return new Result(draw(font, info, l, zoom, colors), l.missing, l.tooWide, l.tooTall, l.bounds, font == null);
+	public static Result render(Bcfnt font, Supplier<List<Bcfnt>> donors, TextInfo info, String raw, double zoom,
+			Map<Integer, Color> colors) {
+		Layout l = layout(font, donors, info, raw);
+		return new Result(draw(font, info, l, zoom, colors), l.missing, l.unborrowed, l.breaks, l.tooWide, l.tooTall,
+				l.bounds, font == null);
 	}
 
-	private static Layout layout(Bcfnt font, TextInfo info, String raw) {
+	private static Layout layout(Bcfnt font, Supplier<List<Bcfnt>> donors, TextInfo info, String raw) {
 		double sx = font == null ? 1 : info.fontSizeX() / font.width;
 		double sy = font == null ? 1 : info.fontSizeY() / font.height;
 		double ascent = font == null ? info.fontSizeY() * 0.8 : font.ascent * sy;
@@ -100,6 +122,9 @@ public final class TextRenderer {
 
 		List<Line> lines = new ArrayList<>();
 		Set<Integer> missing = new LinkedHashSet<>();
+		Set<Integer> unborrowed = new LinkedHashSet<>();
+		List<String> breaks = new ArrayList<>();
+		List<Bcfnt> donorFonts = null;
 		for (String text : raw.split("\n", -1)) {
 			List<Placed> chars = new ArrayList<>();
 			double x = 0;
@@ -114,16 +139,37 @@ public final class TextRenderer {
 				if (cp < 0x20) {
 					continue;
 				}
+				Bcfnt source = font;
+				Bcfnt.Glyph glyph = font == null ? null : font.glyph(cp);
+				if (font != null && glyph == null) {
+					missing.add(cp);
+					if (donorFonts == null) {
+						donorFonts = donors.get();
+					}
+					source = donorFonts.stream().filter(d -> d.has(cp)).findFirst().orElse(null);
+					if (source != null) {
+						glyph = source.glyph(cp);
+					} else {
+						unborrowed.add(cp);
+					}
+				}
+				double advance = glyph != null ? glyph.charWidth * info.fontSizeX() / source.width
+						: standIn.getStringBounds(Character.toString(cp), FRC).getWidth();
+				if (!first && x + info.charSpace() + advance > info.boxWidth() + TOLERANCE) {
+					// the game carries a character that would cross the box's edge to a new line
+					breaks.add(chars.stream().collect(StringBuilder::new, (s, p) -> s.appendCodePoint(p.codePoint()),
+							StringBuilder::append).toString());
+					lines.add(new Line(chars, x));
+					chars = new ArrayList<>();
+					x = 0;
+					first = true;
+				}
 				if (!first) {
 					x += info.charSpace();
 				}
 				first = false;
-				Bcfnt.Glyph glyph = font == null ? null : font.glyph(cp);
-				if (font != null && glyph == null) {
-					missing.add(cp);
-				}
-				chars.add(new Placed(x, cp, glyph, colour));
-				x += glyph != null ? glyph.charWidth * sx : standIn.getStringBounds(Character.toString(cp), FRC).getWidth();
+				chars.add(new Placed(x, cp, glyph == null ? null : source, glyph, colour));
+				x += advance;
 			}
 			lines.add(new Line(chars, x));
 		}
@@ -141,9 +187,9 @@ public final class TextRenderer {
 			double slack = blockW - lines.get(i).width;
 			lineX[i] = bx + (align == 0 ? 0 : align == 1 ? slack / 2 : slack);
 		}
-		return new Layout(lines, sx, sy, ascent, lineFeed, standIn, missing,
+		return new Layout(lines, sx, sy, ascent, lineFeed, standIn, missing, unborrowed, List.copyOf(breaks),
 				new Rectangle2D.Double(bx, by, blockW, blockH), lineX,
-				blockW > info.boxWidth() + TOLERANCE, blockH > info.boxHeight() + TOLERANCE);
+				!breaks.isEmpty() || blockW > info.boxWidth() + TOLERANCE, blockH > info.boxHeight() + TOLERANCE);
 	}
 
 	private static BufferedImage draw(Bcfnt font, TextInfo info, Layout l, double zoom, Map<Integer, Color> colors) {
@@ -176,12 +222,22 @@ public final class TextRenderer {
 				double x = l.lineX[i] + p.x;
 				Color colour = colors.getOrDefault(p.colourCode, base);
 				if (p.glyph != null) {
+					// a donor is scaled by its own proportions, as the pane would scale it
+					Bcfnt src = p.source;
+					double gsx = info.fontSizeX() / src.width;
+					double gsy = info.fontSizeY() / src.height;
 					BufferedImage cell = cells.computeIfAbsent(System.identityHashCode(p.glyph) + ":" + colour.getRGB(),
-							k -> cell(font, p.glyph, colour));
-					double dx = ox + (x + p.glyph.left * l.sx) * zoom;
-					double dy = oy + (baseline - font.baseline * l.sy) * zoom;
-					AffineTransform at = new AffineTransform(l.sx * zoom, 0, 0, l.sy * zoom, dx, dy);
+							k -> cell(src, p.glyph, colour));
+					double dx = ox + (x + p.glyph.left * gsx) * zoom;
+					double dy = oy + (baseline - src.baseline * gsy) * zoom;
+					AffineTransform at = new AffineTransform(gsx * zoom, 0, 0, gsy * zoom, dx, dy);
 					g.drawImage(cell, at, null);
+					if (src != font) {
+						// borrowed: the game's own font lacks it
+						g.setColor(MISSING);
+						g.fill(new Rectangle2D.Double(ox + x * zoom, oy + (baseline + 2) * zoom,
+								p.glyph.charWidth * gsx * zoom, Math.max(1.5, zoom)));
+					}
 				} else {
 					Font f = l.standIn.deriveFont((float) (l.standIn.getSize2D() * zoom));
 					String s = Character.toString(p.codePoint);

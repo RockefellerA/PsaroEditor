@@ -1,8 +1,11 @@
 package psaro.format;
 
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -17,7 +20,8 @@ import java.util.regex.Pattern;
  *
  * <p>The text a layout stores is a placeholder ({@code *}); the game fills panes from the
  * {@code .tdt} that shares the archive's name, keyed by ids held in the pane's user data
- * (usd1). The game does not wrap: lines break only at {@code \n}.
+ * (usd1). Lines break at {@code \n}, and wherever the next character would cross the box's
+ * right edge, mid-word or not.
  */
 public final class Bclyt {
 
@@ -45,6 +49,32 @@ public final class Bclyt {
 	public record Layout(List<String> fonts, List<Pane> panes) {
 		public List<Pane> textPanes() {
 			return panes.stream().filter(Pane::isText).toList();
+		}
+	}
+
+	/**
+	 * New values for a text pane's box and type settings; a null field keeps the layout's own.
+	 * Character spacing and line spacing are in the same units as the box.
+	 */
+	public record TextOverride(Float boxWidth, Float boxHeight, Float fontSizeX, Float fontSizeY, Float charSpace,
+			Float lineSpace) {
+
+		public static final TextOverride NONE = new TextOverride(null, null, null, null, null, null);
+
+		public boolean isEmpty() {
+			return equals(NONE);
+		}
+
+		/** {@code info} with this override's values in place of its own. */
+		public TextInfo apply(TextInfo info) {
+			return new TextInfo(info.font(), or(boxWidth, info.boxWidth()), or(boxHeight, info.boxHeight()),
+					info.bufferBytes(), or(fontSizeX, info.fontSizeX()), or(fontSizeY, info.fontSizeY()),
+					or(charSpace, info.charSpace()), or(lineSpace, info.lineSpace()), info.placeholder(),
+					info.textPosition(), info.lineAlignment(), info.topColor(), info.bottomColor());
+		}
+
+		private static float or(Float value, float original) {
+			return value != null ? value : original;
 		}
 	}
 
@@ -105,6 +135,42 @@ public final class Bclyt {
 			o += size;
 		}
 		return new Layout(fonts, panes);
+	}
+
+	/**
+	 * A copy of layout {@code d} with each text pane named in {@code overrides} given its new
+	 * settings. Only those floats change; every other byte stays as it was.
+	 */
+	public static byte[] withText(byte[] d, Map<String, TextOverride> overrides) {
+		byte[] out = d.clone();
+		ByteBuffer b = ByteBuffer.wrap(out).order(ByteOrder.LITTLE_ENDIAN);
+		int o = Bytes.u16(d, 6);
+		while (o < d.length - 8) {
+			int size = Bytes.u32(d, o + 4);
+			if (size == 0) {
+				break;
+			}
+			if (Bytes.magic(d, o, "txt1")) {
+				String name = Bytes.ascii(d, o + 12);
+				TextOverride t = overrides.get(name.length() > 16 ? name.substring(0, 16) : name);
+				if (t != null) {
+					put(b, o + 0x44, t.boxWidth());
+					put(b, o + 0x48, t.boxHeight());
+					put(b, o + 0x64, t.fontSizeX());
+					put(b, o + 0x68, t.fontSizeY());
+					put(b, o + 0x6C, t.charSpace());
+					put(b, o + 0x70, t.lineSpace());
+				}
+			}
+			o += size;
+		}
+		return out;
+	}
+
+	private static void put(ByteBuffer b, int at, Float value) {
+		if (value != null) {
+			b.putFloat(at, value);
+		}
 	}
 
 	/** Four bytes r, g, b, a as RGBA with red in the top byte. */

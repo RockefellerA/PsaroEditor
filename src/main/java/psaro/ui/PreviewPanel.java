@@ -24,6 +24,7 @@ import javax.swing.JTextArea;
 import javax.swing.SwingUtilities;
 import psaro.dialog.ColorCodesDialog;
 import psaro.format.Bcfnt;
+import psaro.patch.FontPatcher;
 import psaro.project.CodeColors;
 import psaro.render.TextRenderer;
 import psaro.romfs.RomfsIndex;
@@ -37,19 +38,30 @@ final class PreviewPanel extends JPanel {
 
 	private static final double[] ZOOMS = {1, 2, 3, 4};
 
-	/** A pane in the picker. */
-	private record Choice(Usage usage) {
+	/** A pane in the picker, with its box as changed. */
+	private final class Choice {
+		private final Usage usage;
+
+		Choice(Usage usage) {
+			this.usage = usage;
+		}
+
+		Usage usage() {
+			return usage;
+		}
+
 		@Override
 		public String toString() {
 			String archive = usage.archive().getFileName().toString().replace(".arc.lz", "");
 			String layout = usage.layout().substring(usage.layout().lastIndexOf('/') + 1);
-			var t = usage.pane().text();
+			var t = fonts.text(usage);
 			return String.format("%s › %s › %s  (%.0f×%.0f, %s)", archive, layout, usage.pane().name(),
 					t.boxWidth(), t.boxHeight(), usage.fontName());
 		}
 	}
 
 	private final RomfsIndex index;
+	private final FontPatcher fonts;
 	private final CodeColors colors;
 	private final JComboBox<Choice> pane = new JComboBox<>();
 	private final JComboBox<String> zoom = new JComboBox<>(new String[] {"1×", "2×", "3×", "4×"});
@@ -57,6 +69,7 @@ final class PreviewPanel extends JPanel {
 	private final JLabel english = new JLabel();
 	private final JTextArea notes = new JTextArea(4, 40);
 	private final JPanel content = new JPanel();
+	private final PaneSettingsBar settings;
 	private List<Usage> usages = List.of();
 	private String japaneseRaw = "";
 	private String englishRaw;
@@ -65,9 +78,19 @@ final class PreviewPanel extends JPanel {
 	private final Runnable onCodesChanged;
 	private ColorCodesDialog colorDialog;
 
-	PreviewPanel(RomfsIndex index, CodeColors colors, Runnable onCodesChanged) {
+	/**
+	 * {@code onCodesChanged} runs after a color code is renamed or recolored; {@code onLayoutChanged}
+	 * after a pane's box or type settings change, so the editor can measure every string again.
+	 */
+	PreviewPanel(FontPatcher fonts, CodeColors colors, Runnable onCodesChanged, Runnable onLayoutChanged) {
 		super(new BorderLayout());
-		this.index = index;
+		this.index = fonts.index();
+		this.fonts = fonts;
+		this.settings = new PaneSettingsBar(fonts, () -> {
+			pane.repaint();
+			redraw();
+			onLayoutChanged.run();
+		});
 		this.colors = colors;
 		this.onCodesChanged = onCodesChanged;
 		zoom.setSelectedIndex(1);
@@ -105,7 +128,10 @@ final class PreviewPanel extends JPanel {
 		notes.setOpaque(false);
 		notes.setBorder(BorderFactory.createEmptyBorder(6, 8, 8, 8));
 
-		add(bar, BorderLayout.NORTH);
+		JPanel top = new JPanel(new BorderLayout());
+		top.add(bar, BorderLayout.NORTH);
+		top.add(settings, BorderLayout.CENTER);
+		add(top, BorderLayout.NORTH);
 		JScrollPane scroll = new JScrollPane(content);
 		scroll.setBorder(BorderFactory.createEmptyBorder());
 		scroll.getVerticalScrollBar().setUnitIncrement(16);
@@ -164,13 +190,16 @@ final class PreviewPanel extends JPanel {
 					: "Select a string to preview it.");
 			english.setText(" ");
 			notes.setText("");
+			settings.clear();
 			return;
 		}
 		Usage u = choice.usage();
+		settings.show(u, usages);
 		double z = ZOOMS[Math.max(zoom.getSelectedIndex(), 0)];
-		Bcfnt font = Fit.font(index, u);
+		Bcfnt font = fonts.current(u);
 
-		TextRenderer.Result jp = TextRenderer.render(font, u.pane().text(), japaneseRaw, z, colors.palette());
+		var donors = Fit.donors(fonts, u);
+		TextRenderer.Result jp = TextRenderer.render(font, donors, fonts.text(u), japaneseRaw, z, colors.palette());
 		japanese.setText(null);
 		japanese.setIcon(new ImageIcon(jp.image()));
 
@@ -183,10 +212,10 @@ final class PreviewPanel extends JPanel {
 			english.setIcon(null);
 			english.setText("Not translated yet.");
 		} else {
-			TextRenderer.Result en = TextRenderer.render(font, u.pane().text(), englishRaw, z, colors.palette());
+			TextRenderer.Result en = TextRenderer.render(font, donors, fonts.text(u), englishRaw, z, colors.palette());
 			english.setText(null);
 			english.setIcon(new ImageIcon(en.image()));
-			describeFit(Fit.judge(font, u.pane().text(), englishRaw, japaneseRaw), lines);
+			describeFit(Fit.judge(fonts, u, englishRaw, japaneseRaw), lines);
 			describeMissing(lines);
 		}
 		notes.setText(lines.stream().map(s -> "• " + s).collect(Collectors.joining("\n")));
@@ -194,41 +223,60 @@ final class PreviewPanel extends JPanel {
 
 	private static void describeFit(Fit.Judgement j, List<String> lines) {
 		var bounds = j.english().textBounds();
-		String approx = j.estimate() ? " (approximate: some characters are drawn with a stand-in)" : "";
+		String approx = j.estimate() ? " (approximate: some characters are drawn with a stand-in typeface)" : "";
 		if (j.tooWide()) {
-			lines.add(String.format("Too wide: the text is %.0f px wide and %s %.0f px%s. The game does not wrap; "
-					+ "break lines with Enter.", bounds.getWidth(),
-					j.widthRelaxed() ? "the original Japanese uses" : "the box is", j.limitWidth(), approx));
+			List<String> breaks = j.english().breaks();
+			lines.add(String.format("Too wide: the box is %.0f px across, so the game breaks %s, mid-word if need be%s. "
+					+ "Shorten it, or break the line yourself with Enter.", j.boxWidth(),
+					breaks.isEmpty() ? "the line" : breaks.stream().map(b -> "after “" + b.strip() + "”")
+							.collect(Collectors.joining(" and ")), approx));
 		}
 		if (j.tooTall()) {
 			lines.add(String.format("Too tall: the lines need %.0f px and %s %.0f px%s.", bounds.getHeight(),
-					j.heightRelaxed() ? "the original Japanese uses" : "the box is", j.limitHeight(), approx));
+					limitSource(j.heightBy()), j.limitHeight(), approx));
 		}
 		if (!j.overflows()) {
 			lines.add("Fits this pane" + approx + ".");
 		}
-		if (j.widthRelaxed() || j.heightRelaxed()) {
-			lines.add("The original Japanese runs past this box and the game shows it, so the English is held "
-					+ "to the Japanese's " + (j.widthRelaxed() && j.heightRelaxed() ? "size"
-					: j.widthRelaxed() ? "width" : "height") + " instead.");
+		if (j.heightBy() == Fit.Limit.JAPANESE) {
+			lines.add("The original Japanese runs below this box and the game shows it, so the English is held to "
+					+ "the Japanese's height instead.");
+		} else if (j.heightBy() == Fit.Limit.SAME_SHAPE) {
+			lines.add("Japanese in another pane of this size and font runs below its box and the game shows it, so "
+					+ "the English is held to that height instead.");
 		}
+	}
+
+	private static String limitSource(Fit.Limit by) {
+		return switch (by) {
+			case BOX -> "the box is";
+			case JAPANESE -> "the original Japanese uses";
+			case SAME_SHAPE -> "Japanese in a pane of the same size uses";
+		};
 	}
 
 	/** Missing characters per font, over every pane including shadows. */
 	private void describeMissing(List<String> lines) {
 		Map<String, Set<Integer>> byFont = new LinkedHashMap<>();
+		Map<String, Set<Integer>> noDonor = new LinkedHashMap<>();
 		for (Usage u : usages) {
-			Bcfnt font = Fit.font(index, u);
+			Bcfnt font = fonts.current(u);
 			if (font != null) {
-				Set<Integer> m = TextRenderer.measure(font, u.pane().text(), englishRaw).missing();
-				if (!m.isEmpty()) {
-					byFont.computeIfAbsent(u.fontName(), k -> new LinkedHashSet<>()).addAll(m);
+				TextRenderer.Result r = TextRenderer.measure(font, Fit.donors(fonts, u), fonts.text(u), englishRaw);
+				if (!r.missing().isEmpty()) {
+					byFont.computeIfAbsent(u.fontName(), k -> new LinkedHashSet<>()).addAll(r.missing());
+				}
+				if (!r.standIn().isEmpty()) {
+					noDonor.computeIfAbsent(u.fontName(), k -> new LinkedHashSet<>()).addAll(r.standIn());
 				}
 			}
 		}
 		for (Map.Entry<String, Set<Integer>> e : byFont.entrySet()) {
-			lines.add(e.getKey() + " lacks: " + Fit.describe(e.getValue())
-					+ ". The game would show nothing for these; here they are drawn in a stand-in typeface, underlined in red.");
+			Set<Integer> none = noDonor.getOrDefault(e.getKey(), Set.of());
+			lines.add(e.getKey() + " lacks: " + Fit.describe(e.getValue()) + ". The game shows nothing for these until "
+					+ "Patch adds them; here they are underlined in red and drawn as the patch would add them."
+					+ (none.isEmpty() ? "" : " No font in the romfs has " + Fit.describe(none)
+							+ ", so the patch cannot add it; it is drawn in a stand-in typeface."));
 		}
 	}
 
