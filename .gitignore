@@ -6,6 +6,9 @@ target/
 # Game data never belongs in this repository: it is copyrighted, and every test that
 # needs it reads a romfs from outside the tree (see README).
 romfs/
+# ...but not the psaro.romfs source package, which only reads romfs folders
+!src/main/java/psaro/romfs/
+!src/test/java/psaro/romfs/
 exefs/
 *.3ds
 *.cia

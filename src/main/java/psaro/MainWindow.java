@@ -9,9 +9,7 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.List;
 import java.util.prefs.Preferences;
-import java.util.stream.Stream;
 import javax.swing.BorderFactory;
 import javax.swing.JFileChooser;
 import javax.swing.JFrame;
@@ -26,6 +24,8 @@ import javax.swing.WindowConstants;
 import com.formdev.flatlaf.FlatClientProperties;
 import psaro.dialog.PreferencesDialog;
 import psaro.menu.HelpMenu;
+import psaro.project.Translations;
+import psaro.romfs.RomfsIndex;
 
 /** The application window. For now: open a romfs and report what it holds. */
 public final class MainWindow {
@@ -37,6 +37,9 @@ public final class MainWindow {
 	private final JFrame frame = new JFrame(TITLE);
 	private final JLabel body = new JLabel("", SwingConstants.CENTER);
 	private final JLabel status = new JLabel(" ");
+	/** The open romfs and its English, or null. */
+	private RomfsIndex index;
+	private Translations translations;
 
 	public static void main(String[] args) {
 		EventQueue.invokeLater(() -> {
@@ -120,28 +123,37 @@ public final class MainWindow {
 	 * reopened at launch fails quietly instead.
 	 */
 	private void open(Path dir, boolean explain) {
-		List<Path> tables;
-		List<Path> archives;
+		RomfsIndex scanned;
 		try {
-			tables = list(dir.resolve("text"), "_Japanese.tdt");
-			archives = list(dir, ".arc.lz");
-		} catch (IOException | UncheckedIOException e) {
+			if (!RomfsIndex.looksLikeRomfs(dir)) {
+				if (explain) {
+					error("No string tables were found in " + dir + ".\n"
+							+ "PsaroEditor looks for text/*_Japanese.tdt inside an extracted romfs.");
+				}
+				return;
+			}
+			scanned = RomfsIndex.scan(dir);
+		} catch (IOException | UncheckedIOException | IllegalArgumentException e) {
 			if (explain) {
 				error("Could not read " + dir + ":\n" + e.getMessage());
 			}
 			return;
 		}
-		if (tables.isEmpty()) {
-			if (explain) {
-				error("No string tables were found in " + dir + ".\n"
-						+ "PsaroEditor looks for text/*_Japanese.tdt inside an extracted romfs.");
-			}
+		Translations loaded;
+		try {
+			loaded = Translations.open(scanned);
+		} catch (IOException e) {
+			// always reported: opening anyway could later save over the unreadable file
+			error("Could not read the translations for " + dir + ":\n" + e.getMessage());
 			return;
 		}
+		index = scanned;
+		translations = loaded;
 		prefs.put(PREF_ROMFS, dir.toString());
 		frame.setTitle(TITLE + " — " + dir);
-		body.setText(archives.size() + " archives, " + tables.size() + " string tables");
-		status.setText(dir.toString());
+		body.setText(String.format("%,d string tables · %,d strings · %,d translated · %,d layouts",
+				index.tables().size(), index.stringCount(), translations.translatedCount(), index.layoutCount()));
+		status.setText("Translations: " + translations.folder());
 	}
 
 	private void showEmpty() {
@@ -151,16 +163,6 @@ public final class MainWindow {
 
 	private void error(String message) {
 		JOptionPane.showMessageDialog(frame, message, TITLE, JOptionPane.ERROR_MESSAGE);
-	}
-
-	/** Files under {@code dir}, at any depth, whose names end with {@code suffix}. */
-	private static List<Path> list(Path dir, String suffix) throws IOException {
-		if (!Files.isDirectory(dir)) {
-			return List.of();
-		}
-		try (Stream<Path> files = Files.walk(dir)) {
-			return files.filter(p -> p.getFileName().toString().endsWith(suffix)).sorted().toList();
-		}
 	}
 
 	/**
