@@ -30,10 +30,3 @@ How the game puts text on screen, which shapes most of the design:
   key stored in the pane's user data.
 - The game does not wrap lines; `\n` breaks them. Strings may carry colour switches
   (`\u0002\u0001` .. `\u0002\u0003`).
-
-## Where translations are saved
-
-The romfs is only read, never changed. English text is saved beside it, in
-`<romfs>.psaro/english/<table>.json`: one file per string table, holding only the strings
-translated so far, keyed by string ID. The files contain no Japanese, so the folder can be
-backed up, shared or kept in git without carrying any game text.
