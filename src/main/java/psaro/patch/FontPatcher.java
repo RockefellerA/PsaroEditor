@@ -255,9 +255,14 @@ public final class FontPatcher {
 				Bcfnt original = index.font(archive, fontName);
 				if (original != null) {
 					List<Donor> donors = index.donors(fontName);
+					Typeface face = settings.lettersFrom(fontName);
+					Set<Integer> lendable = new TreeSet<>(Lending.lendableFrom(donors));
+					if (face.bundled()) {
+						lendable.addAll(face.drawable(Typeface.weightFor(fontName)));
+					}
 					Bcfnt copy = Bcfnt.parse(original.toBytes());
 					built = new Lent(copy,
-							Lending.add(fontName, copy, Lending.lendableFrom(donors), donors, settings.extraSpace(fontName)));
+							Lending.add(fontName, copy, lendable, donors, settings.extraSpace(fontName), face));
 				}
 			} catch (IOException | RuntimeException unreadable) {
 				// measured with the stand-in instead
@@ -492,7 +497,7 @@ public final class FontPatcher {
 				Set<Integer> codes = lend.get(name);
 				if (codes != null) {
 					Bcfnt font = Bcfnt.parse(file.getValue().data);
-					Lending.add(name, font, codes, index.donors(name), settings.extraSpace(name));
+					Lending.add(name, font, codes, index.donors(name), settings.extraSpace(name), settings.lettersFrom(name));
 					file.getValue().data = font.toBytes();
 				}
 				Map<String, TextOverride> panes = path.endsWith(".bclyt") ? overrides.forLayout(path) : Map.of();

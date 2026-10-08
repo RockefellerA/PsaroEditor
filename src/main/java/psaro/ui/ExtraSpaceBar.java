@@ -2,6 +2,7 @@ package psaro.ui;
 
 import java.awt.FlowLayout;
 import java.io.IOException;
+import javax.swing.JComboBox;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
@@ -11,18 +12,21 @@ import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
 import com.formdev.flatlaf.FlatClientProperties;
 import psaro.patch.FontPatcher;
+import psaro.patch.Typeface;
 import psaro.romfs.RomfsIndex.Usage;
 
 /**
- * The letters that get an extra pixel of space after them in the previewed pane's font, the same
- * per-font setting the Patch dialog lists: a letter borrowed from another font can crowd the next
- * one, its outline included. Saved a moment after typing stops, and on Enter; the fit and the
- * preview follow at once.
+ * How Patch adds letters to the previewed pane's font, both per-font settings: where they come
+ * from (the game's fonts, or a bundled {@link Typeface} drawn in the font's look), and which get
+ * an extra pixel of space after them, the same letters the Patch dialog lists (a letter from
+ * another font can crowd the next one, its outline included). The letters are saved a moment
+ * after typing stops, and on Enter; the source at once. The fit and the preview follow.
  */
 final class ExtraSpaceBar extends JPanel {
 
 	private final FontPatcher fonts;
 	private final Runnable onChange;
+	private final JComboBox<Typeface> source = new JComboBox<>(Typeface.values());
 	private final JTextField letters = new JTextField(10);
 	private final JLabel font = new JLabel();
 	/** Saves what was typed once typing pauses. */
@@ -64,10 +68,39 @@ final class ExtraSpaceBar extends JPanel {
 				+ "and shows in the Patch list.";
 		label.setToolTipText(tip);
 		letters.setToolTipText(tip);
+		JLabel from = new JLabel("Letters from:");
+		String fromTip = "Where Patch gets the letters this font lacks: copied from the game's other fonts, or drawn "
+				+ "from a bundled typeface (SIL Open Font License) in this font's size and outline. Applies to "
+				+ "this font everywhere it is used; characters the typeface lacks still come from the game's fonts.";
+		from.setToolTipText(fromTip);
+		source.setToolTipText(fromTip);
+		source.addActionListener(e -> sourceChosen());
+		add(from);
+		add(source);
 		add(label);
 		add(letters);
 		add(font);
 		show(null);
+	}
+
+	/** Saves the chosen source for the font, then measures again. */
+	private void sourceChosen() {
+		Typeface t = (Typeface) source.getSelectedItem();
+		if (loading || fontName == null || t == null || t == fonts.settings().lettersFrom(fontName)) {
+			return;
+		}
+		try {
+			fonts.settings().setLettersFrom(fontName, t);
+		} catch (IOException e) {
+			JOptionPane.showMessageDialog(this, "Could not save the font patch settings:\n" + e.getMessage(),
+					"Letters from", JOptionPane.ERROR_MESSAGE);
+			loading = true;
+			source.setSelectedItem(fonts.settings().lettersFrom(fontName));
+			loading = false;
+			return;
+		}
+		fonts.settingsChanged();
+		onChange.run();
 	}
 
 	/** Edits the letters of {@code u}'s font as drawn now; none when null. */
@@ -85,16 +118,19 @@ final class ExtraSpaceBar extends JPanel {
 		}
 		loading = true;
 		letters.setText(name == null ? "" : fonts.settings().extraSpace(name));
+		source.setSelectedItem(name == null ? Typeface.GAME : fonts.settings().lettersFrom(name));
 		loading = false;
 		letters.setEnabled(name != null);
+		source.setEnabled(name != null);
 		font.setText(name == null ? "" : "in " + name.replace(".bcfnt", ""));
 	}
 
-	/** Shows the font's letters as saved, after they were changed elsewhere (the Patch list). */
+	/** Shows the font's settings as saved, after they were changed elsewhere (the Patch list). */
 	void reload() {
 		pause.stop();
 		loading = true;
 		letters.setText(fontName == null ? "" : fonts.settings().extraSpace(fontName));
+		source.setSelectedItem(fontName == null ? Typeface.GAME : fonts.settings().lettersFrom(fontName));
 		loading = false;
 	}
 

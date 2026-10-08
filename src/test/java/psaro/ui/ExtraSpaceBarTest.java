@@ -11,6 +11,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 
+import javax.swing.JComboBox;
 import javax.swing.JLabel;
 import javax.swing.JTextField;
 
@@ -21,6 +22,7 @@ import psaro.format.Bclyt.TextOverride;
 import psaro.patch.FontPatcher;
 import psaro.patch.LayoutOverrides;
 import psaro.patch.PatchSettings;
+import psaro.patch.Typeface;
 import psaro.romfs.RomfsIndex;
 import psaro.romfs.RomfsIndex.Usage;
 import psaro.romfs.SampleRomfs;
@@ -56,12 +58,21 @@ class ExtraSpaceBarTest {
 		assertEquals(1, changes[0]);
 		assertEquals("ty", PatchSettings.open(romfs).extraSpace("a.bcfnt"), "saved for the Patch list");
 
+		@SuppressWarnings("unchecked")
+		JComboBox<Typeface> source = (JComboBox<Typeface>) Arrays.stream(bar.getComponents())
+				.filter(c -> c instanceof JComboBox).findFirst().orElseThrow();
+		assertEquals(Typeface.GAME, source.getSelectedItem());
+		source.setSelectedItem(Typeface.M_PLUS_ROUNDED);
+		assertEquals(Typeface.M_PLUS_ROUNDED, PatchSettings.open(romfs).lettersFrom("a.bcfnt"));
+		assertEquals(2, changes[0]);
+
 		// the pane switched to the layout's other font: the bar edits that one, saving what was typed first
 		field.setText("tyl");
 		fonts.overrides().set("blyt/menu.bclyt", List.of("Txt_Yes"), TextOverride.NONE.withFont("b.bcfnt"));
 		bar.show(u);
 		assertEquals("tyl", fonts.settings().extraSpace("a.bcfnt"));
 		assertEquals("", field.getText());
+		assertEquals(Typeface.GAME, source.getSelectedItem(), "b's own setting");
 		assertTrue(label(bar).endsWith("b"));
 
 		// changed in the Patch list: the bar shows it

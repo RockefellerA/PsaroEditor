@@ -1,5 +1,6 @@
 package psaro.patch;
 
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
@@ -36,9 +37,29 @@ public final class Lending {
 	 */
 	public static Map<Integer, Donor> add(String targetName, Bcfnt target, Collection<Integer> codes,
 			List<Donor> donors, String extraSpace) {
+		return add(targetName, target, codes, donors, extraSpace, Typeface.GAME);
+	}
+
+	/**
+	 * As {@link #add(String, Bcfnt, Collection, List, String)}, but with {@code face} bundled the
+	 * codes it has are drawn from it ({@link GlyphDrawing}); only the rest are borrowed. The
+	 * drawing reads the target before anything is added to it, so it comes out the same whichever
+	 * codes are asked for.
+	 */
+	public static Map<Integer, Donor> add(String targetName, Bcfnt target, Collection<Integer> codes,
+			List<Donor> donors, String extraSpace, Typeface face) {
+		Map<Integer, Donor> from = new TreeMap<>();
+		Bcfnt drawn = null;
+		if (face.bundled()) {
+			List<Integer> wanted = codes.stream().filter(c -> !target.has(c)).distinct().toList();
+			drawn = GlyphDrawing.draw(face, targetName, target, wanted);
+			Donor typeface = new Donor(Path.of(face.fileName(Typeface.weightFor(targetName))), face.label(), drawn);
+			for (int c : drawn.cmap.keySet()) {
+				from.put(c, typeface);
+			}
+		}
 		List<Donor> order = primaryFirst(donors);
 		Map<Donor, List<Integer>> byDonor = new LinkedHashMap<>();
-		Map<Integer, Donor> from = new TreeMap<>();
 		for (int c : codes) {
 			if (target.has(c) || from.containsKey(c)) {
 				continue;
@@ -63,6 +84,9 @@ public final class Lending {
 				src = same ? donor : donor.scaledTo(target, e.getValue());
 			}
 			target.addGlyphsFrom(src, e.getValue(), false);
+		}
+		if (drawn != null) {
+			target.addGlyphsFrom(drawn, drawn.cmap.keySet(), false);
 		}
 		for (int c : from.keySet()) {
 			if (extraSpace.codePoints().anyMatch(s -> s == c)) {

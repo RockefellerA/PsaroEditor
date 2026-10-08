@@ -1,5 +1,6 @@
 package psaro.patch;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -118,6 +119,33 @@ class FontPatcherTest {
 		FontChange f = patcher.plan(english("Yes[キャラクター名]")).fonts().get(0);
 		assertEquals(codes("Yes"), f.needed());
 		assertTrue(f.unavailable().isEmpty());
+	}
+
+	/**
+	 * A font set to a bundled typeface gets its letters drawn from it, even one no game font has,
+	 * and the patch writes what the preview measured.
+	 */
+	@Test
+	void aFontSetToABundledTypefaceGetsItsLettersDrawnFromIt() throws IOException {
+		settings.setLettersFrom(FONT, Typeface.NOTO_SANS);
+		patcher.settingsChanged();
+		FontChange f = patcher.plan(english("Yes!")).fonts().get(0);
+		assertTrue(f.unavailable().isEmpty(), "Noto Sans has the '!' no game font has");
+		assertEquals(Set.of("Noto Sans"), Set.copyOf(f.from().values().stream().map(d -> d.name()).toList()));
+
+		patcher.write(patcher.plan(english("Yes!")), step -> { });
+		Bcfnt preview = patcher.preview(index.usages(index.table("menu"), "menu_0001").get(0));
+		for (char c : "Yes!".toCharArray()) {
+			assertTrue(written().has(c));
+			assertArrayEquals(preview.glyph(c).pixels, written().glyph(c).pixels, "as previewed: " + c);
+		}
+		assertFalse(patcher.plan(english("Yes!")).hasWork());
+
+		// back to the game's fonts: the drawn glyphs are rebuilt as borrowed ones
+		settings.setLettersFrom(FONT, Typeface.GAME);
+		patcher.settingsChanged();
+		assertTrue(patcher.plan(english("Yes")).hasWork());
+		assertEquals(Typeface.GAME, PatchSettings.open(romfs).lettersFrom(FONT));
 	}
 
 	@Test

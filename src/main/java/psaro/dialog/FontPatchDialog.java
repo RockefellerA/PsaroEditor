@@ -433,6 +433,10 @@ public final class FontPatchDialog extends JDialog {
 	 * approximate.
 	 */
 	private static String donorName(Donor d, String font) {
+		if (d.archive().toString().endsWith(".ttf")) {
+			// drawn from a bundled typeface, not borrowed from the game
+			return d.name() + " (" + d.archive() + ")";
+		}
 		String family = RomfsIndex.family(font);
 		boolean otherFamily = family != null && !family.equals(RomfsIndex.family(d.name()));
 		return d.archive().getFileName().toString().replace(".arc.lz", "") + " › " + d.name().replace(".bcfnt", "")

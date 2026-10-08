@@ -373,6 +373,12 @@ public final class RomfsIndex {
 		return m.matches() ? m.group(3) : null;
 	}
 
+	/** {@code fontName}'s weight ({@code B} of {@code SulaPro_B_04a_20.bcfnt}), or null if it names none. */
+	public static String weight(String fontName) {
+		Matcher m = FONT_NAME.matcher(fontName);
+		return m.matches() ? m.group(2) : null;
+	}
+
 	/** {@code fontName}'s family ({@code SulaPro} of {@code SulaPro_B_04a_20.bcfnt}), or null if it names none. */
 	public static String family(String fontName) {
 		Matcher m = FONT_NAME.matcher(fontName);

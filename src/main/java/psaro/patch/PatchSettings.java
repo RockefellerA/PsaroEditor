@@ -14,8 +14,9 @@ import psaro.project.Translations;
 
 /**
  * How the font patch builds, in {@code <romfs>.psaro/fonts.json}: per font, the letters that get
- * an extra pixel of advance when they are added to it, and whether to copy the patched archives
- * into a mods folder. Written on every change.
+ * an extra pixel of advance when they are added to it and the typeface they are drawn from
+ * ({@link Typeface}), and whether to copy the patched archives into a mods folder. Written on
+ * every change.
  *
  * <p>Older settings gave every font the same letters (one string, "ty" when unset). That value is
  * kept as {@link #legacyExtraSpace} until {@link FontPatcher} hands it to the fonts it was used
@@ -29,6 +30,8 @@ public final class PatchSettings {
 	private final Path file;
 	/** Font file name to its letters; a font not here gets none. */
 	private final Map<String, String> extraSpace = new TreeMap<>();
+	/** Font file name to the typeface its added letters come from; a font not here borrows from the game's. */
+	private final Map<String, Typeface> lettersFrom = new TreeMap<>();
 	/** The one value all fonts shared before, until it is handed out; null once it has been. */
 	private String legacy = OLD_DEFAULT;
 	private boolean copyToMods;
@@ -51,6 +54,15 @@ public final class PatchSettings {
 				} else if (space instanceof String all) {
 					s.legacy = all;
 				}
+				JSONObject from = json.optJSONObject("lettersFrom");
+				if (from != null) {
+					from.keySet().forEach(font -> {
+						Typeface t = Typeface.of(from.getString(font));
+						if (t.bundled()) {
+							s.lettersFrom.put(font, t);
+						}
+					});
+				}
 				s.copyToMods = json.optBoolean("copyToMods", false);
 				String mods = json.optString("modsFolder", "");
 				s.modsFolder = mods.isEmpty() ? null : Path.of(mods);
@@ -64,6 +76,21 @@ public final class PatchSettings {
 	/** The characters that get one more pixel of advance when they are added to {@code font}. */
 	public synchronized String extraSpace(String font) {
 		return extraSpace.getOrDefault(font, "");
+	}
+
+	/** Where the letters added to {@code font} come from: the game's fonts unless set. */
+	public synchronized Typeface lettersFrom(String font) {
+		return lettersFrom.getOrDefault(font, Typeface.GAME);
+	}
+
+	/** Sets where the letters added to {@code font} come from. */
+	public synchronized void setLettersFrom(String font, Typeface typeface) throws IOException {
+		if (typeface.bundled()) {
+			lettersFrom.put(font, typeface);
+		} else {
+			lettersFrom.remove(font);
+		}
+		save();
 	}
 
 	/** The letters every font shared under the older settings, or null once handed out. */
@@ -114,6 +141,11 @@ public final class PatchSettings {
 		JSONObject space = new JSONObject();
 		extraSpace.forEach(space::put);
 		json.put("extraSpace", legacy != null ? legacy : space);
+		if (!lettersFrom.isEmpty()) {
+			JSONObject from = new JSONObject();
+			lettersFrom.forEach((font, t) -> from.put(font, t.id()));
+			json.put("lettersFrom", from);
+		}
 		json.put("copyToMods", copyToMods);
 		if (modsFolder != null) {
 			json.put("modsFolder", modsFolder.toString());
