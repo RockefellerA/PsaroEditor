@@ -300,6 +300,37 @@ public final class Bcfnt {
 
 	// --------------------------------------------------------------- editing
 
+	/** A copy to change without touching this one: its own glyphs and pixels, the same CMAP blocks. */
+	public Bcfnt copy() {
+		Bcfnt c = new Bcfnt();
+		c.fontType = fontType;
+		c.lineFeed = lineFeed;
+		c.altIndex = altIndex;
+		c.defaultLeft = defaultLeft;
+		c.defaultGlyphWidth = defaultGlyphWidth;
+		c.defaultCharWidth = defaultCharWidth;
+		c.encoding = encoding;
+		c.height = height;
+		c.width = width;
+		c.ascent = ascent;
+		c.cellW = cellW;
+		c.cellH = cellH;
+		c.baseline = baseline;
+		c.maxCharWidth = maxCharWidth;
+		c.format = format;
+		c.sheetW = sheetW;
+		c.sheetH = sheetH;
+		c.cols = cols;
+		c.rows = rows;
+		c.pad = pad;
+		for (Glyph g : glyphs) {
+			c.glyphs.add(new Glyph(g.pixels.clone(), g.left, g.glyphWidth, g.charWidth));
+		}
+		c.cmap.putAll(cmap);
+		c.cmapBlocks = cmapBlocks;
+		return c;
+	}
+
 	public boolean has(int codePoint) {
 		return cmap.containsKey(codePoint);
 	}

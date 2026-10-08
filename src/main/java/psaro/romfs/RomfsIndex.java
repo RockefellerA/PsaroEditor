@@ -193,6 +193,11 @@ public final class RomfsIndex {
 		return root;
 	}
 
+	/** Every archive that carries a copy of font {@code font} (its file name). */
+	public List<Path> archivesWithFont(String font) {
+		return List.copyOf(fontHomes.getOrDefault(font, List.of()));
+	}
+
 	/** Every archive that carries layout {@code layout} (its path inside the archive). */
 	public List<Path> archivesWithLayout(String layout) {
 		return List.copyOf(layoutHomes.getOrDefault(layout, List.of()));
@@ -333,7 +338,6 @@ public final class RomfsIndex {
 		}
 		List<String> names = rank.keySet().stream()
 				.sorted(Comparator.comparing((String n) -> rank.get(n)).thenComparing(n -> n)).toList();
-		Map<Path, Map<String, Darc.Node>> archives = new HashMap<>();
 		List<Donor> found = new ArrayList<>();
 		boolean alphabet = false;
 		for (String name : names) {
@@ -343,19 +347,11 @@ public final class RomfsIndex {
 			}
 			for (Path archive : fontHomes.getOrDefault(name, List.of())) {
 				try {
-					Map<String, Darc.Node> files = archives.get(archive);
-					if (files == null) {
-						files = Darc.files(Archive.load(archive));
-						archives.put(archive, files);
-					}
-					for (Map.Entry<String, Darc.Node> file : files.entrySet()) {
-						if (fileName(file.getKey()).equals(name)) {
-							Bcfnt font = Bcfnt.parse(file.getValue().data);
-							if (hasEnglish(font)) {
-								found.add(new Donor(archive, name, font));
-								alphabet |= hasAlphabet(font);
-							}
-						}
+					// through the per-archive cache, so each archive is unpacked once for every font's donors
+					Bcfnt font = font(archive, name);
+					if (font != null && hasEnglish(font)) {
+						found.add(new Donor(archive, name, font));
+						alphabet |= hasAlphabet(font);
 					}
 				} catch (IOException | RuntimeException unreadable) {
 					// a broken copy just lends nothing

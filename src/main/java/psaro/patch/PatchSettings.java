@@ -83,6 +83,11 @@ public final class PatchSettings {
 		return lettersFrom.getOrDefault(font, Typeface.GAME);
 	}
 
+	/** Every font set to a bundled typeface, with it. */
+	public synchronized Map<String, Typeface> fontsDrawnFrom() {
+		return Map.copyOf(lettersFrom);
+	}
+
 	/** Sets where the letters added to {@code font} come from. */
 	public synchronized void setLettersFrom(String font, Typeface typeface) throws IOException {
 		if (typeface.bundled()) {

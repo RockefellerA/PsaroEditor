@@ -122,29 +122,55 @@ class FontPatcherTest {
 	}
 
 	/**
-	 * A font set to a bundled typeface gets its letters drawn from it, even one no game font has,
-	 * and the patch writes what the preview measured.
+	 * A font set to a bundled typeface is left as the game ships it: beside every copy of it the
+	 * patch adds a font drawn from the typeface, holding that copy's characters and the English
+	 * (kana drawn from M PLUS Rounded 1c, which Noto Sans lacks), and the layouts name that font
+	 * instead. The written glyphs are those measured; going back to the game font takes it all out.
 	 */
 	@Test
-	void aFontSetToABundledTypefaceGetsItsLettersDrawnFromIt() throws IOException {
+	void aFontSetToABundledTypefaceIsDrawnAnewBesideTheGameFont() throws IOException {
+		String drawn = "NotoSans_B_04a_20.bcfnt";
+		assertEquals(drawn, FreeFont.name(FONT, Typeface.NOTO_SANS));
 		settings.setLettersFrom(FONT, Typeface.NOTO_SANS);
 		patcher.settingsChanged();
-		FontChange f = patcher.plan(english("Yes!")).fonts().get(0);
-		assertTrue(f.unavailable().isEmpty(), "Noto Sans has the '!' no game font has");
-		assertEquals(Set.of("Noto Sans"), Set.copyOf(f.from().values().stream().map(d -> d.name()).toList()));
+		Plan plan = patcher.plan(english("Yes!"));
+		assertTrue(plan.fonts().stream().noneMatch(f -> f.font().equals(FONT)), "the game font is not changed");
+		FontChange free = plan.fonts().stream().filter(f -> f.archive().equals(menu())).findFirst().orElseThrow();
+		assertEquals(drawn, free.font());
+		assertEquals(FONT, free.drawnFor());
+		assertTrue(free.unavailable().isEmpty(), "Noto Sans has the '!' no game font has");
+		assertEquals(codes("Yes! はい"), free.lent());
+		assertEquals("Noto Sans", free.from().get((int) 'Y').name());
+		assertEquals("M PLUS Rounded 1c", free.from().get((int) 'は').name());
+		// plaza carries the font too, so it gets one with what its copy holds
+		assertTrue(plan.fonts().stream().anyMatch(f -> f.font().equals(drawn) && !f.archive().equals(menu())));
+		LayoutChange menuLayout = plan.layouts().stream().filter(l -> l.archive().equals(menu())).findFirst().orElseThrow();
+		assertEquals(Map.of(FONT, drawn), menuLayout.fonts());
 
-		patcher.write(patcher.plan(english("Yes!")), step -> { });
-		Bcfnt preview = patcher.preview(index.usages(index.table("menu"), "menu_0001").get(0));
+		patcher.write(plan, step -> { });
+		Map<String, Darc.Node> files = Darc.files(Archive.load(patcher.outputPath(menu())));
+		assertArrayEquals(Darc.files(Archive.load(menu())).get("font/" + FONT).data, files.get("font/" + FONT).data,
+				"the game font is written as it was");
+		Bcfnt writtenFree = Bcfnt.parse(files.get("font/" + drawn).data);
+		assertEquals(codes("Yes! はい"), writtenFree.cmap.keySet());
+		assertEquals(writtenFree.cmap.get((int) ' '), writtenFree.altIndex, "what it lacks draws as a space");
+		assertEquals(drawn, Bclyt.read(files.get("blyt/menu.bclyt").data).textPanes().get(0).text().font());
+		Usage u = index.usages(index.table("menu"), "menu_0001").get(0);
 		for (char c : "Yes!".toCharArray()) {
-			assertTrue(written().has(c));
-			assertArrayEquals(preview.glyph(c).pixels, written().glyph(c).pixels, "as previewed: " + c);
+			assertArrayEquals(patcher.current(u).glyph(c).pixels, writtenFree.glyph(c).pixels, "as measured: " + c);
 		}
 		assertFalse(patcher.plan(english("Yes!")).hasWork());
 
-		// back to the game's fonts: the drawn glyphs are rebuilt as borrowed ones
+		// back to the game font: the drawn fonts and the new names go, and it is lent what it lacks
 		settings.setLettersFrom(FONT, Typeface.GAME);
 		patcher.settingsChanged();
 		assertTrue(patcher.plan(english("Yes")).hasWork());
+		patcher.write(patcher.plan(english("Yes")), step -> { });
+		files = Darc.files(Archive.load(patcher.outputPath(menu())));
+		assertFalse(files.containsKey("font/" + drawn));
+		assertEquals(FONT, Bclyt.read(files.get("blyt/menu.bclyt").data).textPanes().get(0).text().font());
+		assertTrue(written().has('Y'));
+		assertFalse(patcher.plan(english("Yes")).hasWork());
 		assertEquals(Typeface.GAME, PatchSettings.open(romfs).lettersFrom(FONT));
 	}
 

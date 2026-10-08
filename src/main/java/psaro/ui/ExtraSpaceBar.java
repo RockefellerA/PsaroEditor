@@ -16,11 +16,12 @@ import psaro.patch.Typeface;
 import psaro.romfs.RomfsIndex.Usage;
 
 /**
- * How Patch adds letters to the previewed pane's font, both per-font settings: where they come
- * from (the game's fonts, or a bundled {@link Typeface} drawn in the font's look), and which get
- * an extra pixel of space after them, the same letters the Patch dialog lists (a letter from
- * another font can crowd the next one, its outline included). The letters are saved a moment
- * after typing stops, and on Enter; the source at once. The fit and the preview follow.
+ * How Patch treats the previewed pane's font, both per-font settings: what it draws with (the
+ * game font, given what it lacks from the game's others; or a font drawn from a bundled
+ * {@link Typeface} in its look, which Patch adds in its place), and which letters get an extra
+ * pixel of space after them, the same letters the Patch dialog lists (a letter from another font
+ * can crowd the next one, its outline included). The letters are saved a moment after typing
+ * stops, and on Enter; the typeface at once. The fit and the preview follow.
  */
 final class ExtraSpaceBar extends JPanel {
 
@@ -68,10 +69,12 @@ final class ExtraSpaceBar extends JPanel {
 				+ "and shows in the Patch list.";
 		label.setToolTipText(tip);
 		letters.setToolTipText(tip);
-		JLabel from = new JLabel("Letters from:");
-		String fromTip = "Where Patch gets the letters this font lacks: copied from the game's other fonts, or drawn "
-				+ "from a bundled typeface (SIL Open Font License) in this font's size and outline. Applies to "
-				+ "this font everywhere it is used; characters the typeface lacks still come from the game's fonts.";
+		JLabel from = new JLabel("Draw with:");
+		String fromTip = "<html>Game font: Patch adds the letters this font lacks to it, copied from the game's other "
+				+ "fonts.<br>A bundled typeface (SIL Open Font License): Patch leaves the game's font as it is and adds a "
+				+ "new font drawn from the typeface, in this font's size and outline, beside it in every archive that "
+				+ "carries it, then points the layouts at the new one. It holds what the game's font holds plus the "
+				+ "English; Noto Sans has no Japanese, so that is drawn from M PLUS Rounded 1c.</html>";
 		from.setToolTipText(fromTip);
 		source.setToolTipText(fromTip);
 		source.addActionListener(e -> sourceChosen());

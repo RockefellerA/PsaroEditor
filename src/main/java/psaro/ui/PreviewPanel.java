@@ -26,6 +26,8 @@ import javax.swing.SwingUtilities;
 import psaro.dialog.ColorCodesDialog;
 import psaro.format.Bcfnt;
 import psaro.patch.FontPatcher;
+import psaro.patch.FreeFont;
+import psaro.patch.Typeface;
 import psaro.project.CodeColors;
 import psaro.render.TextRenderer;
 import psaro.romfs.RomfsIndex;
@@ -251,6 +253,7 @@ final class PreviewPanel extends JPanel {
 		Usage u = choice.usage();
 		settings.show(u, usages);
 		double z = ZOOMS[Math.max(zoom.getSelectedIndex(), 0)];
+		fonts.prepare(u, englishRaw);
 		Bcfnt font = fonts.current(u);
 
 		var donors = Fit.donors(fonts, u);
@@ -269,6 +272,12 @@ final class PreviewPanel extends JPanel {
 			lines.add("No layout is matched to this table's copy of the key; these are the boxes that show the same "
 					+ "key from " + sharedFrom + ". The game may read either copy, so Patch gives these fonts the "
 					+ "characters of both.");
+		}
+		Typeface face = fonts.settings().lettersFrom(fonts.fontName(u));
+		if (face.bundled() && font != null) {
+			lines.add("Drawn from " + face.label() + ": Patch adds " + FreeFont.name(fonts.fontName(u), face) + " beside "
+					+ fonts.fontName(u) + " in each archive that carries it and points the layouts at it, leaving the "
+					+ "game's font as it is.");
 		}
 		if (font == null) {
 			lines.add(fonts.fontName(u) + " is not in this archive (the 3DS system font is not part of the romfs), "
@@ -348,6 +357,7 @@ final class PreviewPanel extends JPanel {
 		Map<String, Set<Integer>> byFont = new LinkedHashMap<>();
 		Map<String, Set<Integer>> noDonor = new LinkedHashMap<>();
 		for (Usage u : usages) {
+			fonts.prepare(u, englishRaw);
 			Bcfnt font = fonts.current(u);
 			if (font != null) {
 				TextRenderer.Result r = TextRenderer.measure(font, Fit.donors(fonts, u), fonts.text(u), englishRaw);

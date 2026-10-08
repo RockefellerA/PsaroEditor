@@ -172,6 +172,47 @@ public final class Darc {
 		return files(root).get(path);
 	}
 
+	/**
+	 * Adds file {@code name} to the directory holding {@code sibling} (replacing one of that name
+	 * there), in name order when that directory is already in name order, else last. Returns false
+	 * when {@code sibling} is not in the archive.
+	 */
+	public static boolean addBeside(Node root, Node sibling, String name, byte[] data) {
+		Node dir = parentOf(root, sibling);
+		if (dir == null) {
+			return false;
+		}
+		dir.children.removeIf(c -> !c.isDir() && c.name.equals(name));
+		boolean sorted = true;
+		for (int i = 1; i < dir.children.size(); i++) {
+			sorted &= dir.children.get(i - 1).name.compareTo(dir.children.get(i).name) <= 0;
+		}
+		int at = dir.children.size();
+		if (sorted) {
+			at = 0;
+			while (at < dir.children.size() && dir.children.get(at).name.compareTo(name) < 0) {
+				at++;
+			}
+		}
+		dir.children.add(at, Node.file(name, data));
+		return true;
+	}
+
+	private static Node parentOf(Node dir, Node child) {
+		for (Node c : dir.children) {
+			if (c == child) {
+				return dir;
+			}
+			if (c.isDir()) {
+				Node found = parentOf(c, child);
+				if (found != null) {
+					return found;
+				}
+			}
+		}
+		return null;
+	}
+
 	private static int alignmentFor(String name) {
 		String lower = name.toLowerCase();
 		return lower.endsWith(".bclim") || lower.endsWith(".bcfnt") ? 0x80 : 4;

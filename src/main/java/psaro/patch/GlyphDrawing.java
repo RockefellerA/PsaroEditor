@@ -45,44 +45,64 @@ public final class GlyphDrawing {
 	}
 
 	/**
+	 * A typeface made ready to draw for one game font: sized, in its look, with its cell. Making
+	 * one reads the game font's glyphs, so a font drawn in several goes keeps one.
+	 */
+	public static final class Pen {
+		private final Font sized;
+		private final Look look;
+		private final Bcfnt target;
+		private final int pad;
+		private final int above;
+		private final int below;
+		private final int width;
+
+		Pen(Typeface face, String targetName, Bcfnt target) {
+			String weight = Typeface.weightFor(targetName);
+			this.target = target;
+			this.look = look(target);
+			this.sized = face.font(weight).deriveFont((float) emSize(target, look, weight));
+			// one cell size per font: tall enough for the typeface, wide enough for its ASCII
+			this.pad = (int) Math.ceil(look.radius) + 1;
+			var lm = sized.getLineMetrics("Ag", FRC);
+			this.above = Math.max(target.baseline, (int) Math.ceil(lm.getAscent()) + pad);
+			this.below = Math.max(target.cellH - target.baseline, (int) Math.ceil(lm.getDescent()) + pad);
+			int w = target.cellW;
+			for (int c = 0x21; c <= 0x7E; c++) {
+				w = Math.max(w, (int) Math.ceil(outline(sized, c, 0, 0).getBounds2D().getWidth()) + 2 * pad);
+			}
+			this.width = w;
+		}
+
+		/** A font in the game font's format holding {@code codes} as drawn; a code the typeface lacks is left out. */
+		public Bcfnt draw(Collection<Integer> codes) {
+			Bcfnt out = new Bcfnt();
+			out.format = target.format;
+			out.pad = target.pad;
+			out.width = target.width;
+			out.height = target.height;
+			out.ascent = target.ascent;
+			out.lineFeed = target.lineFeed;
+			out.cellW = width;
+			out.cellH = above + below;
+			out.baseline = above;
+			for (int c : codes) {
+				if (sized.canDisplay(c)) {
+					out.cmap.put(c, out.glyphs.size());
+					out.glyphs.add(glyph(sized, c, look, target.format, width, above, below, pad));
+					out.maxCharWidth = Math.max(out.maxCharWidth, out.glyphs.get(out.glyphs.size() - 1).charWidth);
+				}
+			}
+			return out;
+		}
+	}
+
+	/**
 	 * A font in {@code target}'s format holding {@code codes} as {@code face} draws them for the
 	 * game font {@code targetName}; a code the typeface lacks is left out.
 	 */
 	public static Bcfnt draw(Typeface face, String targetName, Bcfnt target, Collection<Integer> codes) {
-		String weight = Typeface.weightFor(targetName);
-		Font font = face.font(weight);
-		Look look = look(target);
-		float size = (float) emSize(target, look, weight);
-		Font sized = font.deriveFont(size);
-
-		// one cell size per font: tall enough for the typeface, wide enough for its ASCII
-		int pad = (int) Math.ceil(look.radius) + 1;
-		var lm = sized.getLineMetrics("Ag", FRC);
-		int above = Math.max(target.baseline, (int) Math.ceil(lm.getAscent()) + pad);
-		int below = Math.max(target.cellH - target.baseline, (int) Math.ceil(lm.getDescent()) + pad);
-		int width = target.cellW;
-		for (int c = 0x21; c <= 0x7E; c++) {
-			width = Math.max(width, (int) Math.ceil(outline(sized, c, 0, 0).getBounds2D().getWidth()) + 2 * pad);
-		}
-
-		Bcfnt out = new Bcfnt();
-		out.format = target.format;
-		out.pad = target.pad;
-		out.width = target.width;
-		out.height = target.height;
-		out.ascent = target.ascent;
-		out.lineFeed = target.lineFeed;
-		out.cellW = width;
-		out.cellH = above + below;
-		out.baseline = above;
-		for (int c : codes) {
-			if (font.canDisplay(c)) {
-				out.cmap.put(c, out.glyphs.size());
-				out.glyphs.add(glyph(sized, c, look, target.format, width, above, below, pad));
-				out.maxCharWidth = Math.max(out.maxCharWidth, out.glyphs.get(out.glyphs.size() - 1).charWidth);
-			}
-		}
-		return out;
+		return new Pen(face, targetName, target).draw(codes);
 	}
 
 	/** One letter, its pen at x = {@code pad} and its baseline on row {@code above}, cropped to its ink. */

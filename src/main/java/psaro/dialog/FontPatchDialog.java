@@ -331,7 +331,10 @@ public final class FontPatchDialog extends JDialog {
 				return switch (column) {
 					case 0 -> patcher.index().root().relativize(l.archive()).toString().replace(".arc.lz", "");
 					case 1 -> l.layout().substring(l.layout().lastIndexOf('/') + 1);
-					case 2 -> l.panes().entrySet().stream().map(e -> e.getKey() + ": " + describe(e.getValue()))
+					case 2 -> java.util.stream.Stream.concat(
+							l.fonts().entrySet().stream()
+									.map(e -> e.getKey().replace(".bcfnt", "") + " → " + e.getValue().replace(".bcfnt", "")),
+							l.panes().entrySet().stream().map(e -> e.getKey() + ": " + describe(e.getValue())))
 							.collect(Collectors.joining("; "));
 					case 3 -> !l.hasWork() ? "up to date" : l.changed() ? "write" : "put back as it was";
 					default -> "";
@@ -340,10 +343,10 @@ public final class FontPatchDialog extends JDialog {
 			FontChange f = rows.get(row);
 			return switch (column) {
 				case 0 -> patcher.index().root().relativize(f.archive()).toString().replace(".arc.lz", "");
-				case 1 -> f.font().replace(".bcfnt", "");
-				case 2 -> f.lent().size() + (f.lent().isEmpty() ? "" : ": " + text(f.lent()));
+				case 1 -> f.font().replace(".bcfnt", "") + (f.free() ? " (for " + f.drawnFor().replace(".bcfnt", "") + ")" : "");
+				case 2 -> f.free() ? drawn(f.lent()) : f.lent().size() + (f.lent().isEmpty() ? "" : ": " + text(f.lent()));
 				case 3 -> change(f);
-				case EXTRA_SPACE -> patcher.settings().extraSpace(f.font());
+				case EXTRA_SPACE -> patcher.settings().extraSpace(f.settingsFont());
 				case 5 -> f.unavailable().isEmpty() ? "" : Fit.describe(f.unavailable());
 				case 6 -> f.from().values().stream().map(d -> donorName(d, f.font()))
 						.collect(Collectors.toCollection(LinkedHashSet::new)).stream().collect(Collectors.joining(", "));
@@ -362,7 +365,7 @@ public final class FontPatchDialog extends JDialog {
 		 */
 		@Override
 		public void setValueAt(Object value, int row, int column) {
-			String font = rows.get(row).font();
+			String font = rows.get(row).settingsFont();
 			String chars = String.valueOf(value);
 			if (chars.equals(patcher.settings().extraSpace(font))) {
 				return;
@@ -383,11 +386,12 @@ public final class FontPatchDialog extends JDialog {
 				return "up to date";
 			}
 			StringBuilder s = new StringBuilder();
+			// a drawn font holds hundreds of kana and kanji: counts, not the characters
 			if (!f.add().isEmpty()) {
-				s.append("+").append(text(f.add()));
+				s.append("+").append(f.free() ? f.add().size() : text(f.add()));
 			}
 			if (!f.remove().isEmpty()) {
-				s.append(s.isEmpty() ? "" : "  ").append("−").append(text(f.remove()));
+				s.append(s.isEmpty() ? "" : "  ").append("−").append(f.free() ? f.remove().size() : text(f.remove()));
 			}
 			if (f.stale()) {
 				s.append(s.isEmpty() ? "" : "  ").append("rebuild");
@@ -399,6 +403,14 @@ public final class FontPatchDialog extends JDialog {
 			StringBuilder s = new StringBuilder();
 			codes.forEach(c -> s.appendCodePoint(c == ' ' ? '␣' : c));
 			return s.toString();
+		}
+
+		/** A drawn font's characters: how many, its Latin and symbols, and a count of the rest. */
+		private String drawn(Set<Integer> codes) {
+			Set<Integer> latin = new java.util.TreeSet<>();
+			codes.stream().filter(c -> c < 0x3000).forEach(latin::add);
+			int japanese = codes.size() - latin.size();
+			return codes.size() + " drawn: " + text(latin) + (japanese > 0 ? " + " + japanese + " Japanese" : "");
 		}
 	}
 

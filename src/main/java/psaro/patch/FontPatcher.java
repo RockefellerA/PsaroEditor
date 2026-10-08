@@ -64,12 +64,31 @@ public final class FontPatcher {
 	 * and {@code remove} what the patch would change against what was last written; {@code stale}
 	 * that glyphs already written differ from what the patch would write now (the extra-space
 	 * letters changed, say). {@code from} names each lendable character's donor.
+	 *
+	 * <p>A {@link FreeFont} the patch adds has {@code drawnFor}, the game font it stands in for;
+	 * its {@code needed} is all it holds, what that font holds and what the English adds.
 	 */
 	public record FontChange(Path archive, String font, Set<Integer> needed, Set<Integer> unavailable,
-			Set<Integer> add, Set<Integer> remove, boolean stale, Map<Integer, Donor> from) {
+			Set<Integer> add, Set<Integer> remove, boolean stale, Map<Integer, Donor> from, String drawnFor) {
+
+		/** A change to a game font, which lends it what it lacks. */
+		public FontChange(Path archive, String font, Set<Integer> needed, Set<Integer> unavailable, Set<Integer> add,
+				Set<Integer> remove, boolean stale, Map<Integer, Donor> from) {
+			this(archive, font, needed, unavailable, add, remove, stale, from, null);
+		}
 
 		public boolean hasWork() {
 			return !add.isEmpty() || !remove.isEmpty() || stale;
+		}
+
+		/** True for a font drawn from a bundled typeface, which the patch adds beside the game's. */
+		public boolean free() {
+			return drawnFor != null;
+		}
+
+		/** The font whose settings (the extra-space letters) this one is built with. */
+		public String settingsFont() {
+			return drawnFor != null ? drawnFor : font;
 		}
 
 		/** What the patched font gets: the needed characters some donor has. */
@@ -82,11 +101,12 @@ public final class FontPatcher {
 
 	/**
 	 * What the patch does to one layout in one archive: {@code panes} are its changes (none when
-	 * a previous patch's change was undone), {@code changed} whether they leave it different from
-	 * the romfs's, and {@code hasWork} whether what was last written differs from that.
+	 * a previous patch's change was undone), {@code fonts} the game fonts it now names by their
+	 * free fonts' names, {@code changed} whether these leave it different from the romfs's, and
+	 * {@code hasWork} whether what was last written differs from that.
 	 */
-	public record LayoutChange(Path archive, String layout, Map<String, TextOverride> panes, boolean changed,
-			boolean hasWork) {
+	public record LayoutChange(Path archive, String layout, Map<String, TextOverride> panes, Map<String, String> fonts,
+			boolean changed, boolean hasWork) {
 	}
 
 	/**
@@ -128,6 +148,10 @@ public final class FontPatcher {
 	private record Lent(Bcfnt font, Map<Integer, Donor> from) {
 	}
 
+	/** A font lent only what the English needs, for a plan, with that set. */
+	private record PlanLent(Set<Integer> needed, Lent lent) {
+	}
+
 	/** A written archive's fonts and layouts, as of its modification time. */
 	private record Written(FileTime time, Map<String, Bcfnt> fonts, Map<String, byte[]> layouts) {
 	}
@@ -140,6 +164,10 @@ public final class FontPatcher {
 	private final Path output;
 	/** Keyed by archive + "!" + font; empty for a font the archive does not carry. */
 	private final Map<String, Optional<Lent>> previews = new HashMap<>();
+	/** The last plan's lending, keyed by archive + "!" + font. */
+	private final Map<String, PlanLent> planLents = new HashMap<>();
+	/** Keyed by game font + "!" + typeface; empty for a font no archive carries. Kept across settings. */
+	private final Map<String, Optional<FreeFont>> freeFonts = new HashMap<>();
 	private final Map<Path, Written> written = new HashMap<>();
 	/** Each romfs archive's layouts by path, as read; they never change. */
 	private final Map<Path, Map<String, byte[]>> originalLayouts = new HashMap<>();
@@ -214,18 +242,54 @@ public final class FontPatcher {
 		return output;
 	}
 
-	/** Forgets the previews, after the settings they are built with change. */
+	/**
+	 * Forgets the previews, after the settings they are built with change; the free fonts' glyphs
+	 * are kept, given the new extra-space letters.
+	 */
 	public synchronized void settingsChanged() {
 		previews.clear();
+		planLents.clear();
+		freeFonts.values().forEach(f -> f.ifPresent(ff -> ff.setExtraSpace(settings.extraSpace(ff.gameFont()))));
+	}
+
+	/**
+	 * The font drawn from a bundled typeface for game font {@code gameFont}, when it is set to
+	 * one and some archive carries it; else null. Measured on the copy with the most glyphs.
+	 */
+	public synchronized FreeFont freeFont(String gameFont) {
+		Typeface face = settings.lettersFrom(gameFont);
+		if (!face.bundled()) {
+			return null;
+		}
+		return freeFonts.computeIfAbsent(gameFont + "!" + face.id(), k -> {
+			Bcfnt reference = null;
+			for (Path archive : index.archivesWithFont(gameFont)) {
+				try {
+					Bcfnt copy = index.font(archive, gameFont);
+					if (copy != null && (reference == null || copy.cmap.size() > reference.cmap.size())) {
+						reference = copy;
+					}
+				} catch (IOException | RuntimeException unreadable) {
+					// another copy will do
+				}
+			}
+			return Optional.ofNullable(reference)
+					.map(r -> new FreeFont(gameFont, face, r, settings.extraSpace(gameFont)));
+		}).orElse(null);
 	}
 
 	/**
 	 * The font {@code usage}'s pane draws with in the game as patched so far: the last patch's
-	 * copy when one was written, else the romfs's own. Null for the system font or an archive
-	 * that cannot be read.
+	 * copy when one was written, else the romfs's own. For a font set to a bundled typeface, the
+	 * font drawn from it instead, which the patch puts in its place. Null for the system font or
+	 * an archive that cannot be read.
 	 */
 	public Bcfnt current(Usage usage) {
 		String name = fontName(usage);
+		FreeFont free = freeFont(name);
+		if (free != null) {
+			return free.preview();
+		}
 		Bcfnt written = written(outputPath(usage.archive())).fonts().get(name);
 		if (written != null) {
 			return written;
@@ -242,8 +306,23 @@ public final class FontPatcher {
 	 * lend; null for the system font or an archive that cannot be read.
 	 */
 	public Bcfnt preview(Usage usage) {
+		FreeFont free = freeFont(fontName(usage));
+		if (free != null) {
+			return free.preview();
+		}
 		Lent l = lent(usage.archive(), fontName(usage));
 		return l == null ? null : l.font();
+	}
+
+	/**
+	 * Has the font drawn for {@code usage}'s pane, when it is drawn from a bundled typeface, draw
+	 * the characters of {@code text}, so they can be measured.
+	 */
+	public void prepare(Usage usage, String text) {
+		FreeFont free = freeFont(fontName(usage));
+		if (free != null && text != null) {
+			free.draw(characters(text));
+		}
 	}
 
 	private synchronized Lent lent(Path archive, String fontName) {
@@ -255,14 +334,9 @@ public final class FontPatcher {
 				Bcfnt original = index.font(archive, fontName);
 				if (original != null) {
 					List<Donor> donors = index.donors(fontName);
-					Typeface face = settings.lettersFrom(fontName);
-					Set<Integer> lendable = new TreeSet<>(Lending.lendableFrom(donors));
-					if (face.bundled()) {
-						lendable.addAll(face.drawable(Typeface.weightFor(fontName)));
-					}
-					Bcfnt copy = Bcfnt.parse(original.toBytes());
+					Bcfnt copy = original.copy();
 					built = new Lent(copy,
-							Lending.add(fontName, copy, lendable, donors, settings.extraSpace(fontName), face));
+							Lending.add(fontName, copy, Lending.lendableFrom(donors), donors, settings.extraSpace(fontName)));
 				}
 			} catch (IOException | RuntimeException unreadable) {
 				// measured with the stand-in instead
@@ -304,11 +378,18 @@ public final class FontPatcher {
 	public Plan plan(List<Text> texts) {
 		Map<String, Set<Integer>> used = new TreeMap<>();
 		Map<String, Usage> where = new HashMap<>();
+		// what the English adds to the fonts drawn from a typeface, by archive and game font
+		Map<String, Set<Integer>> usedFree = new HashMap<>();
 		for (Text t : texts) {
 			Set<Integer> chars = characters(t.text());
 			// a key shown only through another table's copy may be read from this one: its fonts need these too
 			for (Usage u : index.panes(t.table(), t.key())) {
-				String id = u.archive() + "!" + fontName(u);
+				String name = fontName(u);
+				String id = u.archive() + "!" + name;
+				if (settings.lettersFrom(name).bundled()) {
+					usedFree.computeIfAbsent(id, k -> new TreeSet<>()).addAll(chars);
+					continue;
+				}
 				used.computeIfAbsent(id, k -> new TreeSet<>()).addAll(chars);
 				where.putIfAbsent(id, u);
 			}
@@ -323,12 +404,30 @@ public final class FontPatcher {
 				seen.add(e.getKey());
 			}
 		}
-		// fonts a previous patch wrote that no English uses any more
+		// a font drawn from a typeface beside every copy of the game font set to it
+		for (String gameFont : settings.fontsDrawnFrom().keySet()) {
+			FreeFont free = freeFont(gameFont);
+			if (free == null) {
+				continue;
+			}
+			for (Path archive : index.archivesWithFont(gameFont)) {
+				FontChange c = freeChange(archive, free, usedFree.getOrDefault(archive + "!" + gameFont, Set.of()));
+				if (c != null) {
+					fonts.add(c);
+					seen.add(archive + "!" + c.font());
+				}
+			}
+		}
+		// fonts a previous patch wrote that no English uses any more, and drawn fonts no longer wanted
 		for (Path archive : writtenArchives()) {
 			Path original = index.root().resolve(output.relativize(archive).toString());
-			for (String font : written(archive).fonts().keySet()) {
-				if (!seen.contains(original + "!" + font)) {
-					FontChange c = change(original, font, Set.of());
+			for (Map.Entry<String, Bcfnt> font : written(archive).fonts().entrySet()) {
+				if (!seen.contains(original + "!" + font.getKey())) {
+					FontChange c = change(original, font.getKey(), Set.of());
+					if (c == null && !carries(original, font.getKey())) {
+						c = new FontChange(original, font.getKey(), Set.of(), Set.of(), Set.of(),
+								Set.copyOf(font.getValue().cmap.keySet()), false, Map.of());
+					}
 					if (c != null && !c.remove().isEmpty()) {
 						fonts.add(c);
 					}
@@ -338,6 +437,74 @@ public final class FontPatcher {
 		return new Plan(List.copyOf(fonts), layoutChanges());
 	}
 
+	/** Whether {@code archive} in the romfs carries font {@code name}. */
+	private boolean carries(Path archive, String name) {
+		try {
+			return index.font(archive, name) != null;
+		} catch (IOException | RuntimeException unreadable) {
+			return false;
+		}
+	}
+
+	/**
+	 * The free font beside {@code archive}'s copy of the game font: all that copy holds and what
+	 * the English adds ({@code english}), drawn; against the one last written there.
+	 */
+	private FontChange freeChange(Path archive, FreeFont free, Set<Integer> english) {
+		Bcfnt own;
+		try {
+			own = index.font(archive, free.gameFont());
+		} catch (IOException | RuntimeException unreadable) {
+			own = null;
+		}
+		if (own == null) {
+			return null;
+		}
+		Set<Integer> needed = new TreeSet<>(own.cmap.keySet());
+		needed.addAll(english);
+		needed.add((int) ' ');
+		needed.removeIf(c -> c < 0x20);
+		Set<Integer> unavailable = free.draw(needed);
+		Set<Integer> lent = new TreeSet<>(needed);
+		lent.removeAll(unavailable);
+		Bcfnt out = written(outputPath(archive)).fonts().get(free.name());
+		Set<Integer> have = out == null ? Set.of() : out.cmap.keySet();
+		Set<Integer> add = new TreeSet<>(lent);
+		add.removeAll(have);
+		Set<Integer> remove = new TreeSet<>(have);
+		remove.removeAll(lent);
+		boolean stale = false;
+		Map<Typeface, Donor> donors = new HashMap<>();
+		Map<Integer, Donor> from = new TreeMap<>();
+		String weight = Typeface.weightFor(free.gameFont());
+		for (int c : lent) {
+			if (have.contains(c) && !sameGlyph(out.glyph(c), free.glyph(c))) {
+				stale = true;
+			}
+			Typeface t = free.drawnBy(c);
+			if (t != null) {
+				from.put(c, donors.computeIfAbsent(t, k -> new Donor(Path.of(k.fileName(weight)), k.label(), free.preview())));
+			}
+		}
+		return new FontChange(archive, free.name(), Collections.unmodifiableSet(needed),
+				Collections.unmodifiableSet(unavailable), Collections.unmodifiableSet(add),
+				Collections.unmodifiableSet(remove), stale, Collections.unmodifiableMap(from), free.gameFont());
+	}
+
+	/**
+	 * The game fonts {@code archive} carries that are set to a bundled typeface, by the names of
+	 * the fonts drawn for them, which its layouts name instead.
+	 */
+	private Map<String, String> freeNames(Path archive) {
+		Map<String, String> out = new TreeMap<>();
+		settings.fontsDrawnFrom().forEach((gameFont, face) -> {
+			if (carries(archive, gameFont)) {
+				out.put(gameFont, FreeFont.name(gameFont, face));
+			}
+		});
+		return out;
+	}
+
 	/** Every layout with a change, and every layout a previous patch wrote changed. */
 	private List<LayoutChange> layoutChanges() {
 		List<LayoutChange> out = new ArrayList<>();
@@ -345,6 +512,14 @@ public final class FontPatcher {
 		for (String layout : overrides.layouts()) {
 			for (Path archive : index.archivesWithLayout(layout)) {
 				layoutChange(archive, layout, seen, out);
+			}
+		}
+		// every layout of an archive with a font drawn from a typeface may name it
+		for (String gameFont : settings.fontsDrawnFrom().keySet()) {
+			for (Path archive : index.archivesWithFont(gameFont)) {
+				for (String layout : originalLayouts(archive).keySet()) {
+					layoutChange(archive, layout, seen, out);
+				}
 			}
 		}
 		for (Path archive : writtenArchives()) {
@@ -365,14 +540,23 @@ public final class FontPatcher {
 			return;
 		}
 		Map<String, TextOverride> panes = overrides.forLayout(layout);
-		byte[] expected = panes.isEmpty() ? original : Bclyt.withText(original, panes);
+		Map<String, String> names = freeNames(archive);
+		byte[] expected = expected(original, panes, names);
+		Map<String, String> renamed = new TreeMap<>(names);
+		renamed.keySet().retainAll(Bclyt.read(original).fonts());
 		boolean changed = !Arrays.equals(expected, original);
 		Path outFile = outputPath(archive);
 		byte[] current = Files.isRegularFile(outFile) ? written(outFile).layouts().get(layout) : original;
 		boolean hasWork = !Arrays.equals(expected, current);
 		if (changed || hasWork) {
-			out.add(new LayoutChange(archive, layout, panes, changed, hasWork));
+			out.add(new LayoutChange(archive, layout, panes, Map.copyOf(renamed), changed, hasWork));
 		}
+	}
+
+	/** Layout {@code original} with {@code panes}' changes, naming fonts by {@code names}. */
+	private static byte[] expected(byte[] original, Map<String, TextOverride> panes, Map<String, String> names) {
+		byte[] out = panes.isEmpty() ? original : Bclyt.withText(original, panes);
+		return names.isEmpty() ? out : Bclyt.withFontNames(out, names);
 	}
 
 	/** {@code archive}'s layouts by path, read once; empty when it cannot be read. */
@@ -408,7 +592,16 @@ public final class FontPatcher {
 		}
 		Set<Integer> needed = new TreeSet<>(used);
 		needed.removeAll(original.cmap.keySet());
-		Lent lent = lent(archive, fontName);
+		Bcfnt out = written(outputPath(archive)).fonts().get(fontName);
+		Set<Integer> added = new TreeSet<>();
+		if (out != null) {
+			added.addAll(out.cmap.keySet());
+			added.removeAll(original.cmap.keySet());
+		}
+		if (needed.isEmpty() && added.isEmpty()) {
+			return null;
+		}
+		Lent lent = lentFor(archive, fontName, original, needed);
 		Set<Integer> unavailable = new TreeSet<>();
 		Map<Integer, Donor> from = new TreeMap<>();
 		for (int c : needed) {
@@ -418,12 +611,6 @@ public final class FontPatcher {
 			} else {
 				from.put(c, d);
 			}
-		}
-		Bcfnt out = written(outputPath(archive)).fonts().get(fontName);
-		Set<Integer> added = new TreeSet<>();
-		if (out != null) {
-			added.addAll(out.cmap.keySet());
-			added.removeAll(original.cmap.keySet());
 		}
 		Set<Integer> add = new TreeSet<>(from.keySet());
 		add.removeAll(added);
@@ -435,12 +622,26 @@ public final class FontPatcher {
 				stale = true;
 			}
 		}
-		if (needed.isEmpty() && added.isEmpty()) {
-			return null;
-		}
 		return new FontChange(archive, fontName, Collections.unmodifiableSet(needed),
 				Collections.unmodifiableSet(unavailable), Collections.unmodifiableSet(add),
 				Collections.unmodifiableSet(remove), stale, Collections.unmodifiableMap(from));
+	}
+
+	/**
+	 * {@code original} lent just {@code needed}, as the patch would write it: cheaper than the
+	 * preview's every lendable character, and kept until the needed characters or the settings
+	 * change, so a plan after an edit that adds no new character lends nothing again.
+	 */
+	private synchronized Lent lentFor(Path archive, String fontName, Bcfnt original, Set<Integer> needed) {
+		String id = archive + "!" + fontName;
+		PlanLent known = planLents.get(id);
+		if (known != null && known.needed().equals(needed)) {
+			return known.lent();
+		}
+		Bcfnt copy = original.copy();
+		Lent lent = new Lent(copy, Lending.add(fontName, copy, needed, index.donors(fontName), settings.extraSpace(fontName)));
+		planLents.put(id, new PlanLent(Set.copyOf(needed), lent));
+		return lent;
 	}
 
 	private static boolean sameGlyph(Bcfnt.Glyph a, Bcfnt.Glyph b) {
@@ -475,12 +676,20 @@ public final class FontPatcher {
 			List<LayoutChange> layouts = layoutsBy.getOrDefault(archive, List.of());
 			Path out = outputPath(archive);
 			Map<String, Set<Integer>> lend = new HashMap<>();
+			List<FontChange> free = new ArrayList<>();
+			Map<String, String> names = new TreeMap<>();
 			for (FontChange f : fonts) {
-				if (!f.lent().isEmpty()) {
+				if (f.lent().isEmpty()) {
+					continue;
+				}
+				if (f.free()) {
+					free.add(f);
+					names.put(f.drawnFor(), f.font());
+				} else {
 					lend.put(f.font(), f.lent());
 				}
 			}
-			if (lend.isEmpty() && layouts.stream().noneMatch(LayoutChange::changed)) {
+			if (lend.isEmpty() && free.isEmpty() && layouts.stream().noneMatch(LayoutChange::changed)) {
 				progress.accept("Removing " + index.root().relativize(archive));
 				Files.deleteIfExists(out);
 				continue;
@@ -491,19 +700,30 @@ public final class FontPatcher {
 			}
 			progress.accept("Patching " + index.root().relativize(archive));
 			Darc.Node root = Archive.load(archive);
-			for (Map.Entry<String, Darc.Node> file : Darc.files(root).entrySet()) {
+			Map<String, Darc.Node> files = Darc.files(root);
+			Map<String, Darc.Node> byName = new HashMap<>();
+			for (Map.Entry<String, Darc.Node> file : files.entrySet()) {
 				String path = file.getKey();
 				String name = path.substring(path.lastIndexOf('/') + 1);
+				byName.put(name, file.getValue());
 				Set<Integer> codes = lend.get(name);
 				if (codes != null) {
 					Bcfnt font = Bcfnt.parse(file.getValue().data);
-					Lending.add(name, font, codes, index.donors(name), settings.extraSpace(name), settings.lettersFrom(name));
+					Lending.add(name, font, codes, index.donors(name), settings.extraSpace(name));
 					file.getValue().data = font.toBytes();
 				}
-				Map<String, TextOverride> panes = path.endsWith(".bclyt") ? overrides.forLayout(path) : Map.of();
-				if (!panes.isEmpty()) {
-					file.getValue().data = Bclyt.withText(file.getValue().data, panes);
+				if (path.endsWith(".bclyt")) {
+					file.getValue().data = expected(file.getValue().data, overrides.forLayout(path), names);
 				}
+			}
+			// the drawn fonts beside the game's, which are left as they are
+			for (FontChange f : free) {
+				FreeFont ff = freeFont(f.drawnFor());
+				Darc.Node game = byName.get(f.drawnFor());
+				if (ff == null || game == null) {
+					throw new IOException("cannot add " + f.font() + " beside " + f.drawnFor() + " in " + archive);
+				}
+				Darc.addBeside(root, game, f.font(), ff.build(f.lent()).toBytes());
 			}
 			Archive.save(root, out);
 			wrote.add(out);

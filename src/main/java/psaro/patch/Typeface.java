@@ -5,34 +5,26 @@ import java.awt.FontFormatException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import psaro.romfs.RomfsIndex;
 
 /**
- * Where a font's added letters come from: the game's own fonts ({@link #GAME}, the default), or
- * a typeface bundled under {@code /fonts}, licensed under the SIL Open Font License 1.1 (its
- * text sits beside each typeface's files), drawn in the game font's size and outline by
- * {@link GlyphDrawing}.
+ * What a game font's text is drawn with: the game font itself ({@link #GAME}, the default), lent
+ * what it lacks from the game's other fonts; or a typeface bundled under {@code /fonts},
+ * licensed under the SIL Open Font License 1.1 (its text sits beside each typeface's files),
+ * from which the patch draws a whole new font in the game font's size and outline
+ * ({@link FreeFont}) and puts it in the game font's place, the game font left as it is.
  */
 public enum Typeface {
 
-	GAME("game", "Game fonts", null),
+	GAME("game", "Game font", null),
 	M_PLUS_ROUNDED("m-plus-rounded-1c", "M PLUS Rounded 1c", "MPLUSRounded1c"),
 	NOTO_SANS("noto-sans", "Noto Sans", "NotoSans");
 
 	/** The bundled weights, lightest first, by the file name's suffix. */
 	private static final List<String> WEIGHTS = List.of("Medium", "Bold", "ExtraBold", "Black");
-
-	/**
-	 * The characters a bundled typeface is asked to draw: Latin, Latin-1 and Latin Extended-A,
-	 * general punctuation, the euro and trademark signs, arrows, and the symbols block (♪, ★).
-	 * Anything else a font needs still comes from the game's fonts.
-	 */
-	private static final int[][] RANGES = {{0x20, 0x7E}, {0xA0, 0x17F}, {0x2010, 0x205E}, {0x20AC, 0x20AC},
-			{0x2122, 0x2122}, {0x2190, 0x2199}, {0x2600, 0x266F}};
 
 	private final String id;
 	private final String label;
@@ -88,6 +80,11 @@ public enum Typeface {
 		};
 	}
 
+	/** The bundled files' name before the weight, as {@code MPLUSRounded1c}; null for the game's fonts. */
+	public String prefix() {
+		return file;
+	}
+
 	/** The bundled file for {@code weight}, as {@code MPLUSRounded1c-Bold.ttf}. */
 	public String fileName(String weight) {
 		return file + "-" + weight + ".ttf";
@@ -111,19 +108,5 @@ public enum Typeface {
 				throw new IllegalStateException("unreadable bundled font " + fileName(k), e);
 			}
 		});
-	}
-
-	/** The characters this typeface is asked to draw in {@code weight}: those of {@link #RANGES} it has. */
-	public List<Integer> drawable(String weight) {
-		Font f = font(weight);
-		List<Integer> out = new ArrayList<>();
-		for (int[] r : RANGES) {
-			for (int c = r[0]; c <= r[1]; c++) {
-				if (f.canDisplay(c)) {
-					out.add(c);
-				}
-			}
-		}
-		return out;
 	}
 }

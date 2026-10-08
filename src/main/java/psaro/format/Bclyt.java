@@ -214,6 +214,59 @@ public final class Bclyt {
 		return out;
 	}
 
+	/**
+	 * A copy of layout {@code d} with the fonts its list (fnl1) names by a key of {@code renames}
+	 * named by its value instead, so every pane drawing with one draws with the other. Font
+	 * indices keep their places; only fnl1 is rebuilt, and the file size with it, every other
+	 * section's bytes staying as they were. The same array when nothing is renamed.
+	 *
+	 * <p>fnl1: count u32, then per font an offset u32 from the start of that offset table to its
+	 * name, then the names, NUL-terminated; padded to four bytes.
+	 */
+	public static byte[] withFontNames(byte[] d, Map<String, String> renames) {
+		int o = Bytes.u16(d, 6);
+		while (o < d.length - 8) {
+			int size = Bytes.u32(d, o + 4);
+			if (size == 0) {
+				break;
+			}
+			if (Bytes.magic(d, o, "fnl1")) {
+				int n = Bytes.u32(d, o + 8);
+				List<String> names = new ArrayList<>();
+				boolean any = false;
+				for (int i = 0; i < n; i++) {
+					String name = Bytes.ascii(d, o + 12 + Bytes.u32(d, o + 12 + 4 * i));
+					String to = renames.get(name);
+					any |= to != null && !to.equals(name);
+					names.add(to != null ? to : name);
+				}
+				if (!any) {
+					return d;
+				}
+				java.io.ByteArrayOutputStream strings = new java.io.ByteArrayOutputStream();
+				ByteBuffer table = ByteBuffer.allocate(4 * n).order(ByteOrder.LITTLE_ENDIAN);
+				for (String name : names) {
+					table.putInt(4 * n + strings.size());
+					strings.writeBytes(name.getBytes(StandardCharsets.US_ASCII));
+					strings.write(0);
+				}
+				int body = 4 + 4 * n + strings.size();
+				int newSize = (8 + body + 3) / 4 * 4;
+				ByteBuffer section = ByteBuffer.allocate(newSize).order(ByteOrder.LITTLE_ENDIAN);
+				section.put("fnl1".getBytes(StandardCharsets.US_ASCII)).putInt(newSize).putInt(n).put(table.array())
+						.put(strings.toByteArray());
+				byte[] out = new byte[d.length - size + newSize];
+				System.arraycopy(d, 0, out, 0, o);
+				System.arraycopy(section.array(), 0, out, o, newSize);
+				System.arraycopy(d, o + size, out, o + newSize, d.length - o - size);
+				ByteBuffer.wrap(out).order(ByteOrder.LITTLE_ENDIAN).putInt(0x0C, out.length);
+				return out;
+			}
+			o += size;
+		}
+		return d;
+	}
+
 	private static void put(ByteBuffer b, int at, Float value) {
 		if (value != null) {
 			b.putFloat(at, value);

@@ -91,6 +91,7 @@ public record Fit(boolean shown, boolean tooWide, boolean tooTall, Set<Integer> 
 	 */
 	public static Judgement judge(FontPatcher fonts, Usage u, String english, String japanese) {
 		RomfsIndex index = fonts.index();
+		fonts.prepare(u, english);
 		Bcfnt font = fonts.current(u);
 		Supplier<List<Bcfnt>> donors = donors(fonts, u);
 		TextInfo info = fonts.text(u);
@@ -108,9 +109,13 @@ public record Fit(boolean shown, boolean tooWide, boolean tooTall, Set<Integer> 
 				!asShipped && en.textBounds().getHeight() > h + TOLERANCE);
 	}
 
-	/** Whether {@code u}'s pane was given another font, box or type settings than the layout's. */
+	/**
+	 * Whether {@code u}'s pane was given another font, box or type settings than the layout's, or
+	 * its font is drawn from a bundled typeface in the patch.
+	 */
 	static boolean changed(FontPatcher fonts, Usage u) {
-		return !fonts.overrides().get(u.layout(), u.pane().name()).isEmpty();
+		return !fonts.overrides().get(u.layout(), u.pane().name()).isEmpty()
+				|| fonts.settings().lettersFrom(fonts.fontName(u)).bundled();
 	}
 
 	/** Which of the three is largest; a tie goes to the earlier one. */
@@ -169,6 +174,7 @@ public record Fit(boolean shown, boolean tooWide, boolean tooTall, Set<Integer> 
 				tall |= j.tooTall();
 				estimate |= j.estimate();
 			} else {
+				fonts.prepare(u, english);
 				TextRenderer.Result r = TextRenderer.measure(fonts.current(u), donors(fonts, u), fonts.text(u), english);
 				missing.addAll(r.missing());
 				unpatchable.addAll(r.standIn());

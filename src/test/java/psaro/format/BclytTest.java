@@ -52,6 +52,21 @@ class BclytTest {
 	}
 
 	@Test
+	void aFontIsRenamedInTheListForEveryPaneDrawingWithIt() {
+		byte[] layout = SampleRomfs.layout(List.of("a.bcfnt", "b.bcfnt"), SampleRomfs.pane("Txt_Yes", "menu_0001"),
+				SampleRomfs.pane("Txt_No", "menu_0002"));
+		byte[] renamed = Bclyt.withFontNames(layout, Map.of("a.bcfnt", "MPLUSRounded1c_a.bcfnt"));
+		assertEquals(List.of("MPLUSRounded1c_a.bcfnt", "b.bcfnt"), Bclyt.read(renamed).fonts());
+		assertEquals("MPLUSRounded1c_a.bcfnt", text(renamed, "Txt_Yes").font());
+		assertEquals(text(layout, "Txt_No").boxWidth(), text(renamed, "Txt_No").boxWidth());
+		assertEquals(renamed.length, java.nio.ByteBuffer.wrap(renamed).order(java.nio.ByteOrder.LITTLE_ENDIAN).getInt(0x0C),
+				"the header's file size follows");
+		assertEquals(0, renamed.length % 4);
+		// nothing to rename: the same bytes
+		assertArrayEquals(layout, Bclyt.withFontNames(layout, Map.of("c.bcfnt", "d.bcfnt")));
+	}
+
+	@Test
 	void readsEachPanesKeyFromItsTextIdWithThreeOrFourLetters() {
 		byte[] layout = SampleRomfs.layout(List.of("a.bcfnt"), SampleRomfs.pane("Txt_Mons", "cmn_0004"),
 				SampleRomfs.pane("Txt_Line", "clsm_0110"));
