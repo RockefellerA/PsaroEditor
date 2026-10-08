@@ -384,6 +384,53 @@ class FontPatcherTest {
 		assertEquals(Set.of("SulaPro_DB_04a_16.bcfnt"), Set.copyOf(f.from().values().stream().map(d -> d.name()).toList()));
 	}
 
+	/**
+	 * A replaced image goes into every archive holding that very image, and only there; taking
+	 * the replacement back puts the game's image back.
+	 */
+	@Test
+	void aReplacedImageIsWrittenWhereverItIsAndPutBackWhenUndone() throws IOException {
+		int[] red = new int[16 * 8];
+		java.util.Arrays.fill(red, 0xFFFF0000);
+		int[] blue = new int[16 * 8];
+		java.util.Arrays.fill(blue, 0xFF0000FF);
+		byte[] label = SampleRomfs.bclim(16, 8, 9, red);
+		SampleRomfs.images(romfs, "scene/menu/menu.arc.lz", Map.of("btn_text.bclim", label));
+		SampleRomfs.images(romfs, "scene/plaza/plaza.arc.lz",
+				Map.of("btn_text.bclim", label, "other.bclim", SampleRomfs.bclim(16, 8, 9, blue)));
+		index = RomfsIndex.scan(romfs);
+		ImageEdits edits = ImageEdits.open(romfs);
+		patcher = new FontPatcher(index, settings, LayoutOverrides.open(romfs), edits);
+		assertEquals(3, index.images().size());
+		assertFalse(patcher.plan(List.of()).hasWork());
+
+		java.awt.image.BufferedImage english = new java.awt.image.BufferedImage(16, 8, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+		english.setRGB(1, 1, 0xFFFFFFFF);
+		edits.set(label, "timg/btn_text.bclim", english);
+		assertEquals(1, ImageEdits.open(romfs).edited().size(), "saved");
+		Plan plan = patcher.plan(List.of());
+		assertEquals(2, plan.imagesToWrite(), "both archives with the image");
+		assertTrue(plan.images().stream().allMatch(i -> i.path().equals("timg/btn_text.bclim") && i.changed()));
+
+		patcher.write(plan, step -> { });
+		for (Path archive : List.of(menu(), romfs.resolve("scene/plaza/plaza.arc.lz"))) {
+			Map<String, Darc.Node> files = Darc.files(Archive.load(patcher.outputPath(archive)));
+			java.awt.image.BufferedImage written = psaro.format.Bclim.read(files.get("timg/btn_text.bclim").data).image();
+			assertEquals(0xFFFFFFFF, written.getRGB(1, 1));
+			assertEquals(0, written.getRGB(0, 0));
+		}
+		Map<String, Darc.Node> plaza = Darc.files(Archive.load(patcher.outputPath(romfs.resolve("scene/plaza/plaza.arc.lz"))));
+		assertArrayEquals(SampleRomfs.bclim(16, 8, 9, blue), plaza.get("timg/other.bclim").data, "another image is left alone");
+		assertFalse(patcher.plan(List.of()).hasWork());
+
+		edits.remove(ImageEdits.hash(label));
+		Plan undo = patcher.plan(List.of());
+		assertTrue(undo.hasWork());
+		patcher.write(undo, step -> { });
+		assertFalse(Files.exists(patcher.outputPath(menu())), "nothing else changed there: the archive goes");
+		assertFalse(patcher.plan(List.of()).hasWork());
+	}
+
 	@Test
 	void copiesToTheModsFolderWhenAsked() throws IOException {
 		Path mods = dir.resolve("mods/romfs");

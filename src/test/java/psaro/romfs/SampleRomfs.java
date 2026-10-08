@@ -14,6 +14,7 @@ import java.util.Map;
 import psaro.format.Archive;
 import psaro.format.Bcfnt;
 import psaro.format.Darc;
+import psaro.format.Etc1;
 import psaro.format.Tdt;
 import psaro.format.Texture;
 
@@ -47,6 +48,53 @@ public final class SampleRomfs {
 		}
 		root.children.add(dot);
 		Archive.save(root, romfs.resolve(path));
+	}
+
+	/** Adds {@code images} (file name to BCLIM) under {@code timg/} in the archive at {@code path}. */
+	public static void images(Path romfs, String path, Map<String, byte[]> images) throws IOException {
+		Darc.Node root = Archive.load(romfs.resolve(path));
+		Darc.Node dot = root.children.get(0);
+		Darc.Node timg = Darc.Node.dir("timg");
+		images.forEach((name, bytes) -> timg.children.add(Darc.Node.file(name, bytes)));
+		dot.children.add(timg);
+		Archive.save(root, romfs.resolve(path));
+	}
+
+	/**
+	 * A BCLIM of {@code argb} ({@code w} x {@code h}, row-major) in BCLIM format {@code format}
+	 * (9 RGBA8, 11 ETC1A4), its data padded to powers of two (8 at least) with transparent black.
+	 */
+	public static byte[] bclim(int w, int h, int format, int[] argb) {
+		int pw = 8;
+		while (pw < w) {
+			pw *= 2;
+		}
+		int ph = 8;
+		while (ph < h) {
+			ph *= 2;
+		}
+		int[] all = new int[pw * ph];
+		for (int y = 0; y < h; y++) {
+			System.arraycopy(argb, y * w, all, y * pw, w);
+		}
+		byte[] data;
+		if (format == 11) {
+			data = Etc1.encode(all, pw, ph, true);
+		} else if (format == 9) {
+			int[] raw = new int[all.length];
+			for (int i = 0; i < raw.length; i++) {
+				raw[i] = all[i] << 8 | all[i] >>> 24;
+			}
+			data = Texture.swizzle(raw, pw, ph, Texture.RGBA8);
+		} else {
+			throw new IllegalArgumentException("format " + format);
+		}
+		ByteBuffer tail = le(0x28);
+		tail.put("CLIM".getBytes(StandardCharsets.US_ASCII)).putShort((short) 0xFEFF).putShort((short) 0x14)
+				.putInt(0x02020000).putInt(data.length + 0x28).putShort((short) 1).putShort((short) 0);
+		tail.put("imag".getBytes(StandardCharsets.US_ASCII)).putInt(0x10).putShort((short) w).putShort((short) h)
+				.putInt(format).putInt(data.length);
+		return concat(data, tail.array());
 	}
 
 	/**

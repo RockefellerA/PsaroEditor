@@ -3,6 +3,7 @@ package psaro.ui;
 import java.awt.FlowLayout;
 import java.io.IOException;
 import javax.swing.JComboBox;
+import javax.swing.JComponent;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
@@ -39,7 +40,7 @@ final class ExtraSpaceBar extends JPanel {
 
 	/** {@code onChange} runs after the letters are saved, to measure and draw again. */
 	ExtraSpaceBar(FontPatcher fonts, Runnable onChange) {
-		super(new FlowLayout(FlowLayout.LEFT, 6, 2));
+		super(new WrapLayout(6, 2));
 		this.fonts = fonts;
 		this.onChange = onChange;
 		pause.setRepeats(false);
@@ -78,12 +79,19 @@ final class ExtraSpaceBar extends JPanel {
 		from.setToolTipText(fromTip);
 		source.setToolTipText(fromTip);
 		source.addActionListener(e -> sourceChosen());
-		add(from);
-		add(source);
-		add(label);
-		add(letters);
+		// each label with its control, so a narrow panel wraps them onto a new line together
+		add(pair(from, source));
+		add(pair(label, letters));
 		add(font);
 		show(null);
+	}
+
+	private static JPanel pair(JComponent label, JComponent control) {
+		JPanel p = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+		p.setOpaque(false);
+		p.add(label);
+		p.add(control);
+		return p;
 	}
 
 	/** Saves the chosen source for the font, then measures again. */

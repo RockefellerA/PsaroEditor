@@ -35,6 +35,7 @@ import com.formdev.flatlaf.FlatClientProperties;
 import psaro.format.Bclyt.TextOverride;
 import psaro.patch.FontPatcher;
 import psaro.patch.FontPatcher.FontChange;
+import psaro.patch.FontPatcher.ImageChange;
 import psaro.patch.FontPatcher.LayoutChange;
 import psaro.patch.FontPatcher.Plan;
 import psaro.patch.FontPatcher.Text;
@@ -233,8 +234,8 @@ public final class FontPatchDialog extends JDialog {
 
 	/** One line on what a patch would do, for the dialog and the button's tooltip. */
 	public static String summary(Plan plan) {
-		if (plan.fonts().isEmpty() && plan.layouts().isEmpty()) {
-			return "No font needs any glyphs, and no layout is changed.";
+		if (plan.fonts().isEmpty() && plan.layouts().isEmpty() && plan.images().isEmpty()) {
+			return "No font needs any glyphs, and no layout or image is changed.";
 		}
 		StringBuilder s = new StringBuilder();
 		if (plan.hasWork()) {
@@ -248,6 +249,9 @@ public final class FontPatchDialog extends JDialog {
 			}
 			if (plan.layoutsToWrite() > 0) {
 				parts.add(plan.layoutsToWrite() + " layout" + (plan.layoutsToWrite() == 1 ? "" : "s") + " to write");
+			}
+			if (plan.imagesToWrite() > 0) {
+				parts.add(plan.imagesToWrite() + " image" + (plan.imagesToWrite() == 1 ? "" : "s") + " to write");
 			}
 			s.append(String.join(", ", parts)).append(".");
 		} else {
@@ -302,16 +306,18 @@ public final class FontPatchDialog extends JDialog {
 		private static final int EXTRA_SPACE = 4;
 		private List<FontChange> rows = List.of();
 		private List<LayoutChange> layouts = List.of();
+		private List<ImageChange> images = List.of();
 
 		void show(Plan plan) {
 			rows = plan.fonts();
 			layouts = plan.layouts();
+			images = plan.images();
 			fireTableDataChanged();
 		}
 
 		@Override
 		public int getRowCount() {
-			return rows.size() + layouts.size();
+			return rows.size() + layouts.size() + images.size();
 		}
 
 		@Override
@@ -326,6 +332,16 @@ public final class FontPatchDialog extends JDialog {
 
 		@Override
 		public Object getValueAt(int row, int column) {
+			if (row >= rows.size() + layouts.size()) {
+				ImageChange i = images.get(row - rows.size() - layouts.size());
+				return switch (column) {
+					case 0 -> patcher.index().root().relativize(i.archive()).toString().replace(".arc.lz", "");
+					case 1 -> i.path().substring(i.path().lastIndexOf('/') + 1).replace(".bclim", "");
+					case 2 -> "image";
+					case 3 -> !i.hasWork() ? "up to date" : i.changed() ? "write" : "put back as it was";
+					default -> "";
+				};
+			}
 			if (row >= rows.size()) {
 				LayoutChange l = layouts.get(row - rows.size());
 				return switch (column) {

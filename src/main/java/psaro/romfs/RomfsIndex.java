@@ -21,6 +21,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 import psaro.format.Archive;
+import psaro.format.Bclim;
 import psaro.format.Bclyt;
 import psaro.format.Bcfnt;
 import psaro.format.Darc;
@@ -61,6 +62,18 @@ public final class RomfsIndex {
 		/** The layout's own font for the pane, before any change. */
 		public String fontName() {
 			return pane.text().font();
+		}
+	}
+
+	/**
+	 * A layout image: its archive, its path inside it, the SHA-256 of its file (copies in other
+	 * archives share it), and its size and GPU format ({@link psaro.format.Texture}).
+	 */
+	public record Image(Path archive, String path, String hash, int width, int height, int format) {
+
+		/** Its file name without the folder and extension: {@code main_menu_up_titl_config}. */
+		public String name() {
+			return path.substring(path.lastIndexOf('/') + 1).replace(".bclim", "");
 		}
 	}
 
@@ -105,6 +118,8 @@ public final class RomfsIndex {
 	/** Layout path inside an archive to the archives that carry a copy of it. */
 	private final Map<String, List<Path>> layoutHomes;
 	private final Map<Shape, List<Shown>> shapes;
+	/** Every layout image in every archive. */
+	private final List<Image> images;
 	/** Keyed by archive path + "!" + font name; empty when the archive does not carry the font. */
 	private final Map<String, Optional<Bcfnt>> fonts = new HashMap<>();
 	/** Keyed by font name. */
@@ -112,7 +127,7 @@ public final class RomfsIndex {
 
 	private RomfsIndex(Path root, Map<String, StringTable> tables, Map<String, List<Usage>> usages,
 			List<Usage> unresolved, int layoutCount, Map<String, List<Path>> fontHomes,
-			Map<String, List<Path>> layoutHomes, Map<Shape, List<Shown>> shapes) {
+			Map<String, List<Path>> layoutHomes, Map<Shape, List<Shown>> shapes, List<Image> images) {
 		this.root = root;
 		this.tables = tables;
 		this.usages = usages;
@@ -121,6 +136,7 @@ public final class RomfsIndex {
 		this.fontHomes = fontHomes;
 		this.layoutHomes = layoutHomes;
 		this.shapes = shapes;
+		this.images = images;
 	}
 
 	/** Whether {@code dir} has the string tables an index is built from. */
@@ -146,6 +162,7 @@ public final class RomfsIndex {
 		Map<String, List<Path>> fontHomes = new HashMap<>();
 		Map<String, List<Path>> layoutHomes = new HashMap<>();
 		Map<Shape, List<Shown>> shapes = new HashMap<>();
+		List<Image> images = new ArrayList<>();
 		int layouts = 0;
 		for (Path archive : archives(root)) {
 			StringTable own = tables.get(strip(archive, ARCHIVE_SUFFIX));
@@ -158,6 +175,15 @@ public final class RomfsIndex {
 			for (Map.Entry<String, Darc.Node> file : Darc.files(darc).entrySet()) {
 				if (file.getKey().endsWith(".bcfnt")) {
 					fontHomes.computeIfAbsent(fileName(file.getKey()), k -> new ArrayList<>()).add(archive);
+				}
+				if (file.getKey().endsWith(".bclim")) {
+					try {
+						Bclim b = Bclim.read(file.getValue().data);
+						images.add(new Image(archive, file.getKey(), Bclim.hash(file.getValue().data), b.width(), b.height(),
+								b.format()));
+					} catch (IllegalArgumentException notAnImage) {
+						// an image this cannot read is left out
+					}
 				}
 				if (!file.getKey().endsWith(".bclyt")) {
 					continue;
@@ -186,11 +212,25 @@ public final class RomfsIndex {
 		}
 		shapes.replaceAll((shape, shown) -> List.copyOf(shown));
 		return new RomfsIndex(root, Collections.unmodifiableMap(tables), usages, List.copyOf(unresolved), layouts,
-				fontHomes, layoutHomes, shapes);
+				fontHomes, layoutHomes, shapes, List.copyOf(images));
 	}
 
 	public Path root() {
 		return root;
+	}
+
+	/** Every layout image (BCLIM) in every archive, in archive order. */
+	public List<Image> images() {
+		return images;
+	}
+
+	/** {@code image}'s file, read from its archive. */
+	public byte[] imageBytes(Image image) throws IOException {
+		Darc.Node node = Darc.find(Archive.load(image.archive()), image.path());
+		if (node == null) {
+			throw new IOException(image.path() + " is no longer in " + image.archive());
+		}
+		return node.data;
 	}
 
 	/** Every archive that carries a copy of font {@code font} (its file name). */

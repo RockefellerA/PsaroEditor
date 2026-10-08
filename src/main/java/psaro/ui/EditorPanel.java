@@ -95,6 +95,8 @@ public final class EditorPanel extends JPanel {
 	private final JTextArea english = new JTextArea();
 	/** Marks the string as needing no translation: the game keeps its Japanese. */
 	private final JCheckBox useJapanese = new JCheckBox("Use JP");
+	/** Gives the string's English to the others with the same Japanese. */
+	private final JButton applyToMatching = new JButton("Apply to matching…");
 	/** Share of all strings done, beside the "String tables" heading. */
 	private final JProgressBar progress = new JProgressBar(0, 1000);
 	private final PreviewPanel preview;
@@ -257,9 +259,16 @@ public final class EditorPanel extends JPanel {
 				+ "the original Japanese, and the string counts as done.");
 		useJapanese.setEnabled(false);
 		useJapanese.addActionListener(e -> useJapaneseToggled());
+		applyToMatching.setToolTipText("Give this string's English, and its panes' font and box changes, to the other "
+				+ "strings with exactly the same Japanese; you choose which in a list.");
+		applyToMatching.setEnabled(false);
+		applyToMatching.addActionListener(e -> applyToMatching());
 		JPanel enHeader = new JPanel(new BorderLayout());
 		enHeader.add(caption("English"), BorderLayout.WEST);
-		enHeader.add(useJapanese, BorderLayout.EAST);
+		JPanel enActions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
+		enActions.add(applyToMatching);
+		enActions.add(useJapanese);
+		enHeader.add(enActions, BorderLayout.EAST);
 		enBody.add(enHeader, BorderLayout.NORTH);
 		enBody.add(new JScrollPane(english), BorderLayout.CENTER);
 		JPanel below = new JPanel(new BorderLayout());
@@ -367,6 +376,7 @@ public final class EditorPanel extends JPanel {
 				english.setEnabled(false);
 				useJapanese.setSelected(false);
 				useJapanese.setEnabled(false);
+				applyToMatching.setEnabled(false);
 				machine.setText("");
 				translate.setEnabled(false);
 				preview.clear();
@@ -387,6 +397,7 @@ public final class EditorPanel extends JPanel {
 			english.setEnabled(!kept);
 			english.setText(en == null ? "" : ControlCodes.toDisplay(en, colors.names()));
 			english.setCaretPosition(english.getDocument().getLength());
+			applyToMatching.setEnabled(en != null);
 			StringTable shared = index.sharedWith(table, k);
 			preview.showString(index.panes(table, k), jp, en, shared == null ? null : shared.name());
 		} finally {
@@ -399,6 +410,7 @@ public final class EditorPanel extends JPanel {
 			return;
 		}
 		translations.set(table, key, ControlCodes.toRaw(english.getText(), colors.names()));
+		applyToMatching.setEnabled(translations.get(table, key) != null);
 		strings.changed(key);
 		tables.repaint();
 		updateProgress();
@@ -512,6 +524,42 @@ public final class EditorPanel extends JPanel {
 	/** After a pane's box or type settings change: every fit again, and the window's patch check. */
 	private void layoutChanged() {
 		strings.remeasure();
+		onChange.run();
+	}
+
+	/**
+	 * Lists the strings with exactly this one's Japanese and gives the ticked ones its English
+	 * (or its keep-Japanese mark), and the same-shaped boxes its panes' changes.
+	 */
+	private void applyToMatching() {
+		if (table == null || key == null || translations.get(table, key) == null) {
+			return;
+		}
+		List<MatchingStrings.Match> matches = MatchingStrings.find(index, translations, fonts.overrides(), table, key);
+		if (matches.isEmpty()) {
+			JOptionPane.showMessageDialog(this, "No other string has exactly this Japanese, or each that does already "
+					+ "reads the same.", applyToMatching.getText(), JOptionPane.INFORMATION_MESSAGE);
+			return;
+		}
+		boolean paneChanges = index.panes(table, key).stream()
+				.anyMatch(u -> !fonts.overrides().get(u.layout(), u.pane().name()).isEmpty());
+		String english = translations.keepsJapanese(table, key) ? "the Japanese, kept" : translations.get(table, key);
+		MatchingStringsDialog dialog = new MatchingStringsDialog(SwingUtilities.getWindowAncestor(this),
+				table.strings().get(key), english, paneChanges, matches);
+		dialog.setVisible(true);
+		List<MatchingStrings.Match> chosen = dialog.chosen();
+		if (chosen.isEmpty()) {
+			return;
+		}
+		try {
+			MatchingStrings.apply(index, translations, fonts.overrides(), table, key, chosen);
+		} catch (IOException e) {
+			JOptionPane.showMessageDialog(this, "Could not save the layout changes:\n" + e.getMessage(),
+					applyToMatching.getText(), JOptionPane.ERROR_MESSAGE);
+		}
+		strings.remeasure();
+		tables.repaint();
+		updateProgress();
 		onChange.run();
 	}
 

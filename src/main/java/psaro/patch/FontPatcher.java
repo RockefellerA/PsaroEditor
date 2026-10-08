@@ -22,6 +22,7 @@ import java.util.TreeSet;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 import psaro.format.Archive;
+import psaro.format.Bclim;
 import psaro.format.Bclyt;
 import psaro.format.Bclyt.TextInfo;
 import psaro.format.Bclyt.TextOverride;
@@ -30,6 +31,7 @@ import psaro.format.Darc;
 import psaro.project.Translations;
 import psaro.romfs.RomfsIndex;
 import psaro.romfs.RomfsIndex.Donor;
+import psaro.romfs.RomfsIndex.Image;
 import psaro.romfs.RomfsIndex.StringTable;
 import psaro.romfs.RomfsIndex.Usage;
 import psaro.text.ControlCodes;
@@ -110,13 +112,33 @@ public final class FontPatcher {
 	}
 
 	/**
-	 * Every font the English touches and every font a previous patch wrote; every changed layout
-	 * and every layout a previous patch changed.
+	 * What the patch does to one image in one archive ({@link ImageEdits}): {@code changed} whether
+	 * it is written replaced, {@code hasWork} whether what was last written differs from that (a
+	 * replacement drawn again, or one taken back).
 	 */
-	public record Plan(List<FontChange> fonts, List<LayoutChange> layouts) {
+	public record ImageChange(Path archive, String path, boolean changed, boolean hasWork) {
+	}
+
+	/**
+	 * Every font the English touches and every font a previous patch wrote; every changed layout
+	 * and every layout a previous patch changed; every replaced image and every one a previous
+	 * patch replaced.
+	 */
+	public record Plan(List<FontChange> fonts, List<LayoutChange> layouts, List<ImageChange> images) {
+
+		/** A plan with no images. */
+		public Plan(List<FontChange> fonts, List<LayoutChange> layouts) {
+			this(fonts, layouts, List.of());
+		}
 
 		public boolean hasWork() {
-			return fonts.stream().anyMatch(FontChange::hasWork) || layouts.stream().anyMatch(LayoutChange::hasWork);
+			return fonts.stream().anyMatch(FontChange::hasWork) || layouts.stream().anyMatch(LayoutChange::hasWork)
+					|| images.stream().anyMatch(ImageChange::hasWork);
+		}
+
+		/** Images the patch would write or put back. */
+		public int imagesToWrite() {
+			return (int) images.stream().filter(ImageChange::hasWork).count();
 		}
 
 		/** Layouts the patch would write or put back. */
@@ -153,10 +175,10 @@ public final class FontPatcher {
 	}
 
 	/** A written archive's fonts and layouts, as of its modification time. */
-	private record Written(FileTime time, Map<String, Bcfnt> fonts, Map<String, byte[]> layouts) {
+	private record Written(FileTime time, Map<String, Bcfnt> fonts, Map<String, byte[]> layouts, Map<String, String> images) {
 	}
 
-	private static final Written NOTHING = new Written(null, Map.of(), Map.of());
+	private static final Written NOTHING = new Written(null, Map.of(), Map.of(), Map.of());
 
 	private final RomfsIndex index;
 	private final PatchSettings settings;
@@ -168,16 +190,37 @@ public final class FontPatcher {
 	private final Map<String, PlanLent> planLents = new HashMap<>();
 	/** Keyed by game font + "!" + typeface; empty for a font no archive carries. Kept across settings. */
 	private final Map<String, Optional<FreeFont>> freeFonts = new HashMap<>();
+	private final ImageEdits images;
+	/** The romfs's images by archive + "!" + path, made when first asked for. */
+	private Map<String, Image> imagesByPlace;
 	private final Map<Path, Written> written = new HashMap<>();
 	/** Each romfs archive's layouts by path, as read; they never change. */
 	private final Map<Path, Map<String, byte[]>> originalLayouts = new HashMap<>();
 
-	public FontPatcher(RomfsIndex index, PatchSettings settings, LayoutOverrides overrides) {
+	public FontPatcher(RomfsIndex index, PatchSettings settings, LayoutOverrides overrides, ImageEdits images) {
 		this.index = index;
 		this.settings = settings;
 		this.overrides = overrides;
+		this.images = images;
 		this.output = outputFor(index.root());
 		handOutLegacyExtraSpace();
+	}
+
+	/** With the image edits saved for the romfs, none if they cannot be read. */
+	public FontPatcher(RomfsIndex index, PatchSettings settings, LayoutOverrides overrides) {
+		this(index, settings, overrides, openImages(index.root()));
+	}
+
+	private static ImageEdits openImages(Path romfs) {
+		try {
+			return ImageEdits.open(romfs);
+		} catch (IOException unreadable) {
+			throw new java.io.UncheckedIOException(unreadable);
+		}
+	}
+
+	public ImageEdits images() {
+		return images;
 	}
 
 	/**
@@ -434,7 +477,64 @@ public final class FontPatcher {
 				}
 			}
 		}
-		return new Plan(List.copyOf(fonts), layoutChanges());
+		return new Plan(List.copyOf(fonts), layoutChanges(), imageChanges());
+	}
+
+	/** Every image with a replacement, in each archive holding it, and every image a previous patch replaced. */
+	private List<ImageChange> imageChanges() {
+		List<ImageChange> out = new ArrayList<>();
+		Set<String> edited = images.edited();
+		Set<String> seen = new HashSet<>();
+		for (Image image : index.images()) {
+			if (edited.contains(image.hash())) {
+				imageChange(image, seen, out);
+			}
+		}
+		for (Path archive : writtenArchives()) {
+			Path original = index.root().resolve(output.relativize(archive).toString());
+			for (String path : written(archive).images().keySet()) {
+				Image image = image(original, path);
+				if (image != null) {
+					imageChange(image, seen, out);
+				}
+			}
+		}
+		return List.copyOf(out);
+	}
+
+	private void imageChange(Image image, Set<String> seen, List<ImageChange> out) {
+		if (!seen.add(image.archive() + "!" + image.path())) {
+			return;
+		}
+		byte[] replacement = images.replacement(image.hash(), () -> imageBytes(image));
+		String expected = replacement == null ? image.hash() : Bclim.hash(replacement);
+		boolean changed = !expected.equals(image.hash());
+		Path outFile = outputPath(image.archive());
+		String current = Files.isRegularFile(outFile) ? written(outFile).images().get(image.path()) : image.hash();
+		boolean hasWork = !expected.equals(current);
+		if (changed || hasWork) {
+			out.add(new ImageChange(image.archive(), image.path(), changed, hasWork));
+		}
+	}
+
+	/** {@code image}'s file as the romfs has it, or null when it cannot be read. */
+	private byte[] imageBytes(Image image) {
+		try {
+			return index.imageBytes(image);
+		} catch (IOException | RuntimeException unreadable) {
+			return null;
+		}
+	}
+
+	/** The romfs image at {@code path} in {@code archive}, or null. */
+	private synchronized Image image(Path archive, String path) {
+		if (imagesByPlace == null) {
+			imagesByPlace = new HashMap<>();
+			for (Image i : index.images()) {
+				imagesByPlace.put(i.archive() + "!" + i.path(), i);
+			}
+		}
+		return imagesByPlace.get(archive + "!" + path);
 	}
 
 	/** Whether {@code archive} in the romfs carries font {@code name}. */
@@ -668,12 +768,20 @@ public final class FontPatcher {
 		for (LayoutChange l : plan.layouts()) {
 			layoutsBy.computeIfAbsent(l.archive(), k -> new ArrayList<>()).add(l);
 		}
+		Map<Path, List<ImageChange>> imagesBy = new LinkedHashMap<>();
+		for (ImageChange i : plan.images()) {
+			imagesBy.computeIfAbsent(i.archive(), k -> new ArrayList<>()).add(i);
+		}
 		Set<Path> archives = new LinkedHashSet<>(fontsBy.keySet());
 		archives.addAll(layoutsBy.keySet());
+		archives.addAll(imagesBy.keySet());
 		List<Path> wrote = new ArrayList<>();
 		for (Path archive : archives) {
 			List<FontChange> fonts = fontsBy.getOrDefault(archive, List.of());
 			List<LayoutChange> layouts = layoutsBy.getOrDefault(archive, List.of());
+			List<ImageChange> imageChanges = imagesBy.getOrDefault(archive, List.of());
+			Set<String> replaced = new HashSet<>();
+			imageChanges.stream().filter(ImageChange::changed).forEach(i -> replaced.add(i.path()));
 			Path out = outputPath(archive);
 			Map<String, Set<Integer>> lend = new HashMap<>();
 			List<FontChange> free = new ArrayList<>();
@@ -689,13 +797,13 @@ public final class FontPatcher {
 					lend.put(f.font(), f.lent());
 				}
 			}
-			if (lend.isEmpty() && free.isEmpty() && layouts.stream().noneMatch(LayoutChange::changed)) {
+			if (lend.isEmpty() && free.isEmpty() && replaced.isEmpty() && layouts.stream().noneMatch(LayoutChange::changed)) {
 				progress.accept("Removing " + index.root().relativize(archive));
 				Files.deleteIfExists(out);
 				continue;
 			}
 			if (fonts.stream().noneMatch(FontChange::hasWork) && layouts.stream().noneMatch(LayoutChange::hasWork)
-					&& Files.isRegularFile(out)) {
+					&& imageChanges.stream().noneMatch(ImageChange::hasWork) && Files.isRegularFile(out)) {
 				continue;
 			}
 			progress.accept("Patching " + index.root().relativize(archive));
@@ -714,6 +822,13 @@ public final class FontPatcher {
 				}
 				if (path.endsWith(".bclyt")) {
 					file.getValue().data = expected(file.getValue().data, overrides.forLayout(path), names);
+				}
+				if (replaced.contains(path)) {
+					byte[] image = images.replacement(file.getValue().data);
+					if (image == null) {
+						throw new IOException("cannot read the replacement for " + path + " (" + images.png(Bclim.hash(file.getValue().data)) + ")");
+					}
+					file.getValue().data = image;
 				}
 			}
 			// the drawn fonts beside the game's, which are left as they are
@@ -783,13 +898,16 @@ public final class FontPatcher {
 			if (w == null || !w.time().equals(time)) {
 				Map<String, Darc.Node> files = Darc.files(Archive.load(out));
 				Map<String, Bcfnt> fonts = new HashMap<>();
+				Map<String, String> images = new HashMap<>();
 				for (Map.Entry<String, Darc.Node> file : files.entrySet()) {
 					if (file.getKey().endsWith(".bcfnt")) {
 						fonts.put(file.getKey().substring(file.getKey().lastIndexOf('/') + 1),
 								Bcfnt.parse(file.getValue().data));
+					} else if (file.getKey().endsWith(".bclim")) {
+						images.put(file.getKey(), Bclim.hash(file.getValue().data));
 					}
 				}
-				w = new Written(time, fonts, layoutsOf(files));
+				w = new Written(time, fonts, layoutsOf(files), images);
 				written.put(out, w);
 			}
 			return w;

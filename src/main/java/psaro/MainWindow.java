@@ -40,6 +40,8 @@ import javax.swing.Timer;
 import javax.swing.WindowConstants;
 import com.formdev.flatlaf.FlatClientProperties;
 import psaro.dialog.FontPatchDialog;
+import psaro.dialog.ImagesDialog;
+import psaro.patch.ImageEdits;
 import psaro.dialog.PreferencesDialog;
 import psaro.menu.HelpMenu;
 import psaro.patch.FontPatcher;
@@ -83,6 +85,7 @@ public final class MainWindow {
 	private final SearchBox search = new SearchBox();
 	/** Opens the font patch; lit while the patched fonts are behind the English. */
 	private final JButton patchButton = new JButton("Patch");
+	private final JButton imagesButton = new JButton("Images…");
 	/** Patch and Save, which the editor shows above its strings. */
 	private final JPanel actions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
 	/** Checks the fonts against the English a moment after the typing stops. */
@@ -178,7 +181,11 @@ public final class MainWindow {
 		saveButton.addActionListener(e -> save());
 		patchButton.setFocusable(false);
 		patchButton.addActionListener(e -> openPatch());
+		imagesButton.setFocusable(false);
+		imagesButton.setToolTipText("The game's images, for those with text drawn in: export one to edit, import it back");
+		imagesButton.addActionListener(e -> openImages());
 		actions.setOpaque(false);
+		actions.add(imagesButton);
 		actions.add(patchButton);
 		actions.add(saveButton);
 		planTimer.setRepeats(false);
@@ -286,7 +293,7 @@ public final class MainWindow {
 
 	/** Everything read from a romfs and its .psaro folder, ready for the editor. */
 	private record Opened(Path dir, RomfsIndex index, Translations translations, CodeColors colors,
-			UnusedTables unused, PatchSettings patchSettings, LayoutOverrides layoutOverrides) {
+			UnusedTables unused, PatchSettings patchSettings, LayoutOverrides layoutOverrides, ImageEdits imageEdits) {
 	}
 
 	/** Why a romfs could not be opened; {@code always} when it must be reported even when reopening quietly. */
@@ -317,7 +324,7 @@ public final class MainWindow {
 		}
 		try {
 			return new Opened(dir, scanned, Translations.open(scanned), CodeColors.open(dir), UnusedTables.open(dir),
-					PatchSettings.open(dir), LayoutOverrides.open(dir));
+					PatchSettings.open(dir), LayoutOverrides.open(dir), ImageEdits.open(dir));
 		} catch (IOException e) {
 			// always reported: opening anyway could later save over the unreadable file
 			throw new OpenFailure("Could not read the translations for " + dir + ":\n" + e.getMessage(), true);
@@ -332,7 +339,7 @@ public final class MainWindow {
 		CodeColors colors = o.colors();
 		prefs.put(PREF_ROMFS, dir.toString());
 		unused = o.unused();
-		patcher = new FontPatcher(index, o.patchSettings(), o.layoutOverrides());
+		patcher = new FontPatcher(index, o.patchSettings(), o.layoutOverrides(), o.imageEdits());
 		plan = null;
 		editor = new EditorPanel(patcher, translations, colors, unused, actions, this::refresh);
 		setBody(editor);
@@ -423,6 +430,12 @@ public final class MainWindow {
 			startPlan();
 		}).setVisible(true);
 		startPlan();
+	}
+
+	private void openImages() {
+		if (patcher != null) {
+			new ImagesDialog(frame, index, patcher.images(), this::startPlan).setVisible(true);
+		}
 	}
 
 	private boolean save() {
