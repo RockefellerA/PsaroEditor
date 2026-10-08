@@ -66,8 +66,12 @@ public final class TextRenderer {
 	/** Slack before a block counts as not fitting, for float rounding. */
 	private static final double TOLERANCE = 0.5;
 
-	/** {@code source} is the font {@code glyph} comes from: the pane's, a donor, or null for the stand-in. */
-	private record Placed(double x, int codePoint, Bcfnt source, Bcfnt.Glyph glyph, int colourCode) {
+	/**
+	 * {@code source} is the font {@code glyph} comes from: the pane's, a donor, or null for the
+	 * stand-in. {@code placeholder} marks a character of a {@code [name]} the game replaces.
+	 */
+	private record Placed(double x, int codePoint, Bcfnt source, Bcfnt.Glyph glyph, int colourCode,
+			boolean placeholder) {
 	}
 
 	private record Line(List<Placed> chars, double width) {
@@ -130,6 +134,7 @@ public final class TextRenderer {
 			double x = 0;
 			int colour = 0x01;
 			boolean first = true;
+			boolean placeholder = false;
 			for (int i = 0; i < text.length(); i += Character.charCount(text.codePointAt(i))) {
 				int cp = text.codePointAt(i);
 				if (cp == ControlCodes.COLOUR && i + 1 < text.length()) {
@@ -139,17 +144,21 @@ public final class TextRenderer {
 				if (cp < 0x20) {
 					continue;
 				}
+				boolean inPlaceholder = placeholder || cp == '[' && text.indexOf(']', i) > i;
+				placeholder = inPlaceholder && cp != ']';
 				Bcfnt source = font;
 				Bcfnt.Glyph glyph = font == null ? null : font.glyph(cp);
 				if (font != null && glyph == null) {
-					missing.add(cp);
+					if (!inPlaceholder) {
+						missing.add(cp);
+					}
 					if (donorFonts == null) {
 						donorFonts = donors.get();
 					}
 					source = donorFonts.stream().filter(d -> d.has(cp)).findFirst().orElse(null);
 					if (source != null) {
 						glyph = source.glyph(cp);
-					} else {
+					} else if (!inPlaceholder) {
 						unborrowed.add(cp);
 					}
 				}
@@ -168,7 +177,7 @@ public final class TextRenderer {
 					x += info.charSpace();
 				}
 				first = false;
-				chars.add(new Placed(x, cp, glyph == null ? null : source, glyph, colour));
+				chars.add(new Placed(x, cp, glyph == null ? null : source, glyph, colour, inPlaceholder));
 				x += advance;
 			}
 			lines.add(new Line(chars, x));
@@ -232,7 +241,7 @@ public final class TextRenderer {
 					double dy = oy + (baseline - src.baseline * gsy) * zoom;
 					AffineTransform at = new AffineTransform(gsx * zoom, 0, 0, gsy * zoom, dx, dy);
 					g.drawImage(cell, at, null);
-					if (src != font) {
+					if (src != font && !p.placeholder()) {
 						// borrowed: the game's own font lacks it
 						g.setColor(MISSING);
 						g.fill(new Rectangle2D.Double(ox + x * zoom, oy + (baseline + 2) * zoom,
@@ -246,7 +255,7 @@ public final class TextRenderer {
 					g.setFont(f);
 					g.setColor(colour);
 					g.drawString(s, sx, sy);
-					if (font != null) {
+					if (font != null && !p.placeholder()) {
 						// missing from the game's font: underline it, keeping its colour visible
 						g.setColor(MISSING);
 						g.fill(new Rectangle2D.Double(sx, sy + 2 * zoom, g.getFontMetrics().stringWidth(s), Math.max(1.5, zoom)));

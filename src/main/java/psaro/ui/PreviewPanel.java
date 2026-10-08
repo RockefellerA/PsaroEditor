@@ -10,6 +10,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
@@ -66,6 +67,8 @@ final class PreviewPanel extends JPanel {
 	private final JComboBox<String> zoom = new JComboBox<>(new String[] {"1×", "2×", "3×", "4×"});
 	private final JLabel japanese = new JLabel();
 	private final JLabel english = new JLabel();
+	private final JLabel japaneseHeading = heading("Japanese");
+	private final JLabel englishHeading = heading("English");
 	private final JTextArea notes = new JTextArea(4, 40);
 	private final JPanel content = new JPanel();
 	private final PaneSettingsBar settings;
@@ -76,6 +79,9 @@ final class PreviewPanel extends JPanel {
 	private String englishRaw;
 	/** The table whose copy of the key the panes show, when they are not matched to this one's. */
 	private String sharedFrom;
+
+	/** Told the pane drawn after each redraw, null when none is. */
+	private Consumer<Usage> onPaneShown = u -> { };
 
 	/** Run after a color code is renamed or recolored, so the editor can show the new tags. */
 	private final Runnable onCodesChanged;
@@ -119,10 +125,10 @@ final class PreviewPanel extends JPanel {
 
 		content.setLayout(new BoxLayout(content, BoxLayout.Y_AXIS));
 		content.setBorder(BorderFactory.createEmptyBorder(4, 8, 8, 8));
-		content.add(heading("Japanese"));
+		content.add(japaneseHeading);
 		content.add(left(japanese));
 		content.add(Box.createVerticalStrut(10));
-		content.add(heading("English"));
+		content.add(englishHeading);
 		content.add(left(english));
 
 		// below the scrolling preview, so the warnings stay in view and wrap to the panel's width
@@ -170,6 +176,18 @@ final class PreviewPanel extends JPanel {
 			pane.setSelectedItem(first);
 		}
 		pane.setEnabled(pane.getItemCount() > 1);
+		redraw();
+	}
+
+	/** Tells {@code listener} the pane drawn after each redraw, so it can follow the chosen pane's font. */
+	void onPaneShown(Consumer<Usage> listener) {
+		onPaneShown = listener;
+	}
+
+	/** Measures and draws again, keeping the chosen pane, after the fonts' settings change. */
+	void remeasure() {
+		measure();
+		pane.repaint();
 		redraw();
 	}
 
@@ -227,6 +245,7 @@ final class PreviewPanel extends JPanel {
 			english.setText(" ");
 			notes.setText("");
 			settings.clear();
+			onPaneShown.accept(null);
 			return;
 		}
 		Usage u = choice.usage();
@@ -235,7 +254,13 @@ final class PreviewPanel extends JPanel {
 		Bcfnt font = fonts.current(u);
 
 		var donors = Fit.donors(fonts, u);
-		TextRenderer.Result jp = TextRenderer.render(font, donors, fonts.text(u), japaneseRaw, z, colors.palette());
+		// a changed pane: the Japanese as the game ships it, the English with the changes, to compare
+		boolean changed = Fit.changed(fonts, u);
+		TextRenderer.Result jp = changed
+				? TextRenderer.render(Fit.font(index, u), List::of, u.pane().text(), japaneseRaw, z, colors.palette())
+				: TextRenderer.render(font, donors, fonts.text(u), japaneseRaw, z, colors.palette());
+		japaneseHeading.setText(changed ? "Japanese — as the game ships it" : "Japanese");
+		englishHeading.setText(changed ? "English — with this pane's changes" : "English");
 		japanese.setText(null);
 		japanese.setIcon(new ImageIcon(jp.image()));
 
@@ -261,6 +286,7 @@ final class PreviewPanel extends JPanel {
 			describeMissing(lines);
 		}
 		notes.setText(lines.stream().map(s -> "• " + s).collect(Collectors.joining("\n")));
+		onPaneShown.accept(u);
 	}
 
 	private static void describeFit(Fit.Judgement j, List<String> lines) {

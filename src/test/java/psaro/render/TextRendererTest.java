@@ -58,6 +58,16 @@ class TextRendererTest {
 		assertTrue(r.missing().isEmpty());
 	}
 
+	/** The game swaps a [name] for its value before drawing, so the font never needs its letters. */
+	@Test
+	void aPlaceholderInBracketsIsNeverMissing() {
+		Result r = TextRenderer.measure(font(), pane(400, 30, 0, 0, 0, 0), "AB [シリーズ名] Bz");
+		assertEquals(Set.of((int) 'z'), r.missing());
+		assertEquals(Set.of((int) 'z'), r.standIn());
+		// a lone bracket is just a character
+		assertEquals(Set.of((int) '[', (int) 'z'), TextRenderer.measure(font(), pane(400, 30, 0, 0, 0, 0), "A [z").missing());
+	}
+
 	@Test
 	void fontSizeScalesTheFont() {
 		TextInfo half = new TextInfo("f.bcfnt", 200, 30, 4, 10, 10, 0, 0, "*", 0, 0, -1, -1);

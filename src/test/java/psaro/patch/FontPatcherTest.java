@@ -111,6 +111,16 @@ class FontPatcherTest {
 	}
 
 	@Test
+	void aPlaceholderTheGameReplacesNeedsNoGlyphs() {
+		assertEquals(codes("from "), FontPatcher.characters("from [シリーズ名]"));
+		assertEquals(codes("Lv []"), FontPatcher.characters("Lv [\n]"), "a bracket pair split by a line break is text");
+		// the sample's donor has no space, so none here
+		FontChange f = patcher.plan(english("Yes[キャラクター名]")).fonts().get(0);
+		assertEquals(codes("Yes"), f.needed());
+		assertTrue(f.unavailable().isEmpty());
+	}
+
+	@Test
 	void characterNoDonorHasIsReportedAndLeftOut() {
 		FontChange f = patcher.plan(english("Yes!")).fonts().get(0);
 		assertEquals(Set.of((int) '!'), f.unavailable());

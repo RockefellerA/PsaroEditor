@@ -268,15 +268,25 @@ public final class FontPatcher {
 		return known.orElse(null);
 	}
 
-	/** The characters {@code text} draws: no color codes or line breaks. */
+	/**
+	 * The characters {@code text} draws: no color codes or line breaks, and nothing of a
+	 * {@code [name]} the game replaces before drawing ({@code [シリーズ名]}, the series name).
+	 */
 	public static Set<Integer> characters(String text) {
 		Set<Integer> out = new TreeSet<>();
-		for (int i = 0; i < text.length(); i += Character.charCount(text.codePointAt(i))) {
-			int cp = text.codePointAt(i);
-			if (cp == ControlCodes.COLOUR) {
-				i++;
-			} else if (cp >= 0x20) {
-				out.add(cp);
+		for (String line : text.split("\n", -1)) {
+			boolean placeholder = false;
+			for (int i = 0; i < line.length(); i += Character.charCount(line.codePointAt(i))) {
+				int cp = line.codePointAt(i);
+				if (cp == ControlCodes.COLOUR) {
+					i++;
+					continue;
+				}
+				boolean inPlaceholder = placeholder || cp == '[' && line.indexOf(']', i) > i;
+				placeholder = inPlaceholder && cp != ']';
+				if (cp >= 0x20 && !inPlaceholder) {
+					out.add(cp);
+				}
 			}
 		}
 		return out;

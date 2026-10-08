@@ -1,5 +1,6 @@
 package psaro.ui;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -42,5 +43,25 @@ class FitTest {
 
 		fonts.overrides().set("blyt/menu.bclyt", List.of("Txt_Yes"), new TextOverride(100f, null, null, null, null, null));
 		assertTrue(Fit.judge(fonts, u, japanese, japanese).tooWide(), "a changed pane is measured");
+	}
+
+	/** The room the Japanese is given is the layout's own: a smaller font for the English leaves it. */
+	@Test
+	void theJapanesesRoomIsMeasuredAsTheGameShipsIt() throws IOException {
+		String japanese = "はい\nはい\nはい";
+		Path romfs = dir.resolve("game");
+		SampleRomfs.table(romfs, "menu", Map.of("menu_0001", japanese));
+		SampleRomfs.archive(romfs, "scene/menu/menu.arc.lz", "blyt/menu.bclyt", List.of("a.bcfnt"),
+				Map.of("a.bcfnt", SampleRomfs.font("はい", 10)), SampleRomfs.pane("Txt_Yes", "menu_0001"));
+		RomfsIndex index = RomfsIndex.scan(romfs);
+		FontPatcher fonts = new FontPatcher(index, PatchSettings.open(romfs), LayoutOverrides.open(romfs));
+		Usage u = index.usages(index.table("menu"), "menu_0001").get(0);
+
+		Fit.Judgement before = Fit.judge(fonts, u, "いは", japanese);
+		assertEquals(Fit.Limit.JAPANESE, before.heightBy());
+		fonts.overrides().set("blyt/menu.bclyt", List.of("Txt_Yes"), new TextOverride(null, null, 8f, 8f, null, null));
+		Fit.Judgement after = Fit.judge(fonts, u, "いは", japanese);
+		assertEquals(Fit.Limit.JAPANESE, after.heightBy());
+		assertEquals(before.limitHeight(), after.limitHeight(), 1e-6);
 	}
 }

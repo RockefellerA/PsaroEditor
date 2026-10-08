@@ -95,14 +95,22 @@ public record Fit(boolean shown, boolean tooWide, boolean tooTall, Set<Integer> 
 		Supplier<List<Bcfnt>> donors = donors(fonts, u);
 		TextInfo info = fonts.text(u);
 		TextRenderer.Result en = TextRenderer.measure(font, donors, info, english);
-		TextRenderer.Result jp = TextRenderer.measure(font, donors, info, japanese);
+		boolean changed = changed(fonts, u);
+		// the room the game gives the Japanese is the layout's own, whatever this pane was changed to
+		TextRenderer.Result jp = changed ? TextRenderer.measure(font(index, u), u.pane().text(), japanese)
+				: TextRenderer.measure(font, donors, info, japanese);
 		double room = room(index, u);
 		double jpH = jp.textBounds().getHeight();
 		Limit heightBy = largest(info.boxHeight(), jpH, room);
 		double h = Math.max(info.boxHeight(), Math.max(jpH, room));
-		boolean asShipped = english.equals(japanese) && fonts.overrides().get(u.layout(), u.pane().name()).isEmpty();
+		boolean asShipped = english.equals(japanese) && !changed;
 		return new Judgement(en, info.boxWidth(), info.boxHeight(), h, heightBy, !asShipped && en.tooWide(),
 				!asShipped && en.textBounds().getHeight() > h + TOLERANCE);
+	}
+
+	/** Whether {@code u}'s pane was given another font, box or type settings than the layout's. */
+	static boolean changed(FontPatcher fonts, Usage u) {
+		return !fonts.overrides().get(u.layout(), u.pane().name()).isEmpty();
 	}
 
 	/** Which of the three is largest; a tie goes to the earlier one. */
