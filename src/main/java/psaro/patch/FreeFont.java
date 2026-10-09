@@ -17,6 +17,10 @@ import psaro.romfs.RomfsIndex;
  * ({@link GlyphDrawing}); what the typeface lacks (Noto Sans has no kana or kanji) is drawn from
  * M PLUS Rounded 1c, and what neither has is left out.
  *
+ * <p>For a game font drawn under another in one text's layers (an outline or a glow of its own),
+ * each letter is instead the top font's stand-in's, made into this layer ({@link UnderLayer}), so
+ * the layers line up as the game's do.
+ *
  * <p>Glyphs are drawn once per game font and kept ({@link #glyphs}), measured on the copy of the
  * game font with the most glyphs, so every archive's copy comes out the same.
  */
@@ -37,21 +41,15 @@ public final class FreeFont {
 	private final Map<Integer, Typeface> drawnBy = new HashMap<>();
 	/** Codes asked for that neither typeface has. */
 	private final Set<Integer> undrawable = new TreeSet<>();
+	/** For a lower layer, the font on top's stand-in its letters are made from, and how; else null. */
+	private final FreeFont top;
+	private final UnderLayer how;
 
 	/**
 	 * Draws for {@code gameFont} from {@code face}, measured on {@code reference} (a copy of the
 	 * game font), each code in {@code extraSpace} one pixel wider.
 	 */
 	public FreeFont(String gameFont, Typeface face, Bcfnt reference, String extraSpace) {
-		this(gameFont, face, reference, null, null, extraSpace);
-	}
-
-	/**
-	 * As {@link #FreeFont(String, Typeface, Bcfnt, String)}, for a game font drawn under
-	 * {@code bodyName} in a text's layers, {@code body} a copy of that; null for none. Its letters
-	 * are then drawn as {@code body}'s grown, so the layers line up ({@link GlyphDrawing}).
-	 */
-	public FreeFont(String gameFont, Typeface face, Bcfnt reference, String bodyName, Bcfnt body, String extraSpace) {
 		if (!face.bundled()) {
 			throw new IllegalArgumentException("the game's fonts are not a typeface to draw from");
 		}
@@ -59,9 +57,10 @@ public final class FreeFont {
 		this.face = face;
 		this.reference = reference;
 		this.extraSpace = extraSpace;
-		this.pen = new GlyphDrawing.Pen(face, gameFont, reference, bodyName, body);
-		this.fallback = face == Typeface.M_PLUS_ROUNDED ? null
-				: new GlyphDrawing.Pen(Typeface.M_PLUS_ROUNDED, gameFont, reference, bodyName, body);
+		this.top = null;
+		this.how = null;
+		this.pen = new GlyphDrawing.Pen(face, gameFont, reference);
+		this.fallback = face == Typeface.M_PLUS_ROUNDED ? null : new GlyphDrawing.Pen(Typeface.M_PLUS_ROUNDED, gameFont, reference);
 		// both typefaces' cells, whatever is drawn, so a glyph comes out the same whichever others are
 		this.glyphs = pen.draw(List.of());
 		if (fallback != null) {
@@ -72,6 +71,30 @@ public final class FreeFont {
 		}
 		copyMetrics(reference, glyphs);
 		draw(Set.of((int) ' '));
+	}
+
+	/**
+	 * For {@code gameFont} (its copy {@code reference}), drawn under {@code top}'s game font in
+	 * one text's layers: each letter is made from {@code top}'s as {@code how} says, keeping its
+	 * advance, so the layers line up.
+	 */
+	public FreeFont(String gameFont, Bcfnt reference, FreeFont top, UnderLayer how) {
+		this.gameFont = gameFont;
+		this.face = top.face;
+		this.reference = reference;
+		this.extraSpace = "";
+		this.top = top;
+		this.how = how;
+		this.pen = null;
+		this.fallback = null;
+		this.glyphs = how.derive(top.preview(), List.of(), reference);
+		copyMetrics(reference, glyphs);
+		draw(Set.of((int) ' '));
+	}
+
+	/** True for a lower layer's font, made from the font on top's. */
+	public boolean layered() {
+		return top != null;
 	}
 
 	/** The free font's file name: the typeface's in place of the game font's family, as {@code MPLUSRounded1c_B_04a_20.bcfnt}. */
@@ -109,6 +132,16 @@ public final class FreeFont {
 
 	/** Draws whichever of {@code codes} are not drawn yet; returns those neither typeface has. */
 	public synchronized Set<Integer> draw(Collection<Integer> codes) {
+		if (top != null) {
+			Set<Integer> missing = top.draw(codes);
+			List<Integer> make = codes.stream().filter(c -> c >= 0x20 && !glyphs.has(c) && top.glyph(c) != null)
+					.distinct().toList();
+			if (!make.isEmpty()) {
+				glyphs.addGlyphsFrom(how.derive(top.preview(), make, reference), make, false);
+				make.forEach(c -> drawnBy.put(c, top.drawnBy(c)));
+			}
+			return missing;
+		}
 		Set<Integer> todo = new TreeSet<>();
 		for (int c : codes) {
 			if (c >= 0x20 && !glyphs.has(c) && !undrawable.contains(c)) {
@@ -145,6 +178,10 @@ public final class FreeFont {
 
 	/** Gives the letters of {@code letters} one more pixel of advance, and every other its own. */
 	public synchronized void setExtraSpace(String letters) {
+		if (top != null) {
+			followTop();
+			return;
+		}
 		if (letters.equals(extraSpace)) {
 			return;
 		}
@@ -153,6 +190,25 @@ public final class FreeFont {
 		drawnWidth.forEach((c, w) -> glyphs.glyph(c).charWidth = w);
 		Lending.widen(glyphs, drawnWidth.keySet(), letters);
 		for (Bcfnt.Glyph g : glyphs.glyphs) {
+			glyphs.maxCharWidth = Math.max(glyphs.maxCharWidth, g.charWidth);
+		}
+	}
+
+	/**
+	 * For a lower layer, gives each letter the advance of the top font's, after that one's
+	 * extra-space letters changed; a lower layer takes no extra space of its own.
+	 */
+	public synchronized void followTop() {
+		if (top == null) {
+			return;
+		}
+		glyphs.maxCharWidth = 0;
+		for (Map.Entry<Integer, Integer> e : glyphs.cmap.entrySet()) {
+			Bcfnt.Glyph above = top.glyph(e.getKey());
+			Bcfnt.Glyph g = glyphs.glyphs.get(e.getValue());
+			if (above != null) {
+				g.charWidth = above.charWidth;
+			}
 			glyphs.maxCharWidth = Math.max(glyphs.maxCharWidth, g.charWidth);
 		}
 	}

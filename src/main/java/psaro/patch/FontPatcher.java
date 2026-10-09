@@ -8,6 +8,7 @@ import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.FileTime;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -190,6 +191,8 @@ public final class FontPatcher {
 	private final Map<String, PlanLent> planLents = new HashMap<>();
 	/** Keyed by game font + "!" + typeface; empty for a font no archive carries. Kept across settings. */
 	private final Map<String, Optional<FreeFont>> freeFonts = new HashMap<>();
+	/** Keyed by lower font + "!" + top font; empty where the two are not one text's layers. */
+	private final Map<String, Optional<UnderLayer>> underLayers = new HashMap<>();
 	private final ImageEdits images;
 	/** The romfs's images by archive + "!" + path, made when first asked for. */
 	private Map<String, Image> imagesByPlace;
@@ -293,6 +296,8 @@ public final class FontPatcher {
 		previews.clear();
 		planLents.clear();
 		freeFonts.values().forEach(f -> f.ifPresent(ff -> ff.setExtraSpace(settings.extraSpace(ff.gameFont()))));
+		// a lower layer's letters follow its top font's advances, now settled
+		freeFonts.values().forEach(f -> f.ifPresent(FreeFont::followTop));
 	}
 
 	/**
@@ -312,19 +317,79 @@ public final class FontPatcher {
 	/**
 	 * The font drawn from {@code face} for game font {@code gameFont}, when {@code face} is a
 	 * bundled typeface and some archive carries the game font; else null. Measured on the copy
-	 * with the most glyphs, and, for a font a layout draws under another in one text's layers
-	 * ({@link RomfsIndex#layeredUnder}), on that one's too, so the layers line up.
+	 * with the most glyphs. For a font a layout draws under another in one text's layers
+	 * ({@link #underLayer}), its letters are made from that one's stand-in's, so the layers line up.
 	 */
 	public synchronized FreeFont freeFont(String gameFont, Typeface face) {
 		if (!face.bundled()) {
 			return null;
 		}
-		return freeFonts.computeIfAbsent(gameFont + "!" + face.id(), k -> {
-			String bodyName = index.layeredUnder(gameFont);
-			Bcfnt body = bodyName == null ? null : fullestCopy(bodyName);
-			return Optional.ofNullable(fullestCopy(gameFont)).map(r -> new FreeFont(gameFont, face, r,
-					body == null ? null : bodyName, body, settings.extraSpace(gameFont)));
+		String id = gameFont + "!" + face.id();
+		Optional<FreeFont> known = freeFonts.get(id);
+		if (known != null) {
+			return known.orElse(null);
+		}
+		Bcfnt reference = fullestCopy(gameFont);
+		FreeFont built = null;
+		if (reference != null) {
+			String topName = index.layeredUnder(gameFont);
+			UnderLayer how = topName == null ? null : underLayer(gameFont, topName);
+			FreeFont top = how == null ? null : freeFont(topName, face);
+			built = top != null ? new FreeFont(gameFont, reference, top, how)
+					: new FreeFont(gameFont, face, reference, settings.extraSpace(gameFont));
+		}
+		freeFonts.put(id, Optional.ofNullable(built));
+		return built;
+	}
+
+	/**
+	 * How {@code font}'s letters are made from {@code top}'s, the font a layout draws on top of it
+	 * in one text's layers ({@link RomfsIndex#layeredUnder}); null when they cannot be (see
+	 * {@link UnderLayer#learn}), or when {@code top} is itself under another. Read once per pair.
+	 */
+	private synchronized UnderLayer underLayer(String font, String top) {
+		return underLayers.computeIfAbsent(font + "!" + top, k -> {
+			if (index.layeredUnder(top) != null) {
+				return Optional.empty();
+			}
+			Bcfnt mine = fullestCopy(font);
+			Bcfnt theirs = fullestCopy(top);
+			return Optional.ofNullable(mine == null || theirs == null ? null : UnderLayer.learn(mine, theirs));
 		}).orElse(null);
+	}
+
+	/**
+	 * Lends {@code target}, a copy of {@code fontName} in {@code archive}, what it lacks of
+	 * {@code codes}: for a font drawn under another in one text's layers, made from that one's
+	 * letters, lent the same, so the layers line up; else, and for the rest, from its donors.
+	 */
+	private Map<Integer, Donor> lend(Path archive, String fontName, Bcfnt target, Collection<Integer> codes) {
+		return Lending.add(fontName, target, codes, index.donors(fontName), settings.extraSpace(fontName),
+				layered(archive, fontName, codes));
+	}
+
+	/** The font drawn on top of {@code fontName} in {@code archive}, lent {@code codes}, and how; null for none. */
+	private Lending.Layered layered(Path archive, String fontName, Collection<Integer> codes) {
+		String topName = index.layeredUnder(fontName);
+		UnderLayer how = topName == null ? null : underLayer(fontName, topName);
+		if (how == null) {
+			return null;
+		}
+		Bcfnt top;
+		try {
+			top = index.font(archive, topName);
+		} catch (IOException | RuntimeException unreadable) {
+			top = null;
+		}
+		if (top == null) {
+			top = fullestCopy(topName);
+		}
+		if (top == null) {
+			return null;
+		}
+		Bcfnt lentTop = top.copy();
+		Lending.add(topName, lentTop, codes, index.donors(topName), settings.extraSpace(topName));
+		return new Lending.Layered(new Donor(archive, topName, lentTop), how);
 	}
 
 	/** The copy of {@code font} with the most glyphs, or null when no archive's can be read. */
@@ -398,10 +463,8 @@ public final class FontPatcher {
 			try {
 				Bcfnt original = index.font(archive, fontName);
 				if (original != null) {
-					List<Donor> donors = index.donors(fontName);
 					Bcfnt copy = original.copy();
-					built = new Lent(copy,
-							Lending.add(fontName, copy, Lending.lendableFrom(donors), donors, settings.extraSpace(fontName)));
+					built = new Lent(copy, lend(archive, fontName, copy, Lending.lendableFrom(index.donors(fontName))));
 				}
 			} catch (IOException | RuntimeException unreadable) {
 				// measured with the stand-in instead
@@ -836,7 +899,7 @@ public final class FontPatcher {
 			return known.lent();
 		}
 		Bcfnt copy = original.copy();
-		Lent lent = new Lent(copy, Lending.add(fontName, copy, needed, index.donors(fontName), settings.extraSpace(fontName)));
+		Lent lent = new Lent(copy, lend(archive, fontName, copy, needed));
 		planLents.put(id, new PlanLent(Set.copyOf(needed), lent));
 		return lent;
 	}
@@ -915,7 +978,7 @@ public final class FontPatcher {
 				Set<Integer> codes = lend.get(name);
 				if (codes != null) {
 					Bcfnt font = Bcfnt.parse(file.getValue().data);
-					Lending.add(name, font, codes, index.donors(name), settings.extraSpace(name));
+					lend(archive, name, font, codes);
 					file.getValue().data = font.toBytes();
 				}
 				if (path.endsWith(".bclyt")) {

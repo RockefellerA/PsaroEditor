@@ -5,6 +5,7 @@ import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
 import psaro.format.Bcfnt;
 import psaro.romfs.RomfsIndex;
@@ -36,7 +37,38 @@ public final class Lending {
 	 */
 	public static Map<Integer, Donor> add(String targetName, Bcfnt target, Collection<Integer> codes,
 			List<Donor> donors, String extraSpace) {
+		return add(targetName, target, codes, donors, extraSpace, null);
+	}
+
+	/**
+	 * The font on top of a lower layer's, lent the same codes, and how the lower layer's letters
+	 * are made from it.
+	 */
+	public record Layered(Donor top, UnderLayer how) {
+	}
+
+	/**
+	 * As {@link #add(String, Bcfnt, Collection, List, String)}, for a font drawn under
+	 * {@code layered}'s top font in one text's layers (null for none): what the top font has, lent
+	 * or its own, is made from its letters ({@link UnderLayer}), so the layers line up, keeping
+	 * the top letter's advance; only the rest comes from {@code donors}.
+	 */
+	public static Map<Integer, Donor> add(String targetName, Bcfnt target, Collection<Integer> codes,
+			List<Donor> donors, String extraSpace, Layered layered) {
 		Map<Integer, Donor> from = new TreeMap<>();
+		if (layered != null) {
+			List<Integer> made = new ArrayList<>();
+			for (int c : codes) {
+				if (!target.has(c) && layered.top().font().has(c)) {
+					made.add(c);
+					from.put(c, layered.top());
+				}
+			}
+			if (!made.isEmpty()) {
+				target.addGlyphsFrom(layered.how().derive(layered.top().font(), made, target), made, false);
+			}
+		}
+		Set<Integer> derived = Set.copyOf(from.keySet());
 		List<Donor> order = primaryFirst(donors);
 		Map<Donor, List<Integer>> byDonor = new LinkedHashMap<>();
 		for (int c : codes) {
@@ -64,7 +96,8 @@ public final class Lending {
 			}
 			target.addGlyphsFrom(src, e.getValue(), false);
 		}
-		widen(target, from.keySet(), extraSpace);
+		// a lower layer's letter keeps its top letter's advance, widened there already
+		widen(target, from.keySet().stream().filter(c -> !derived.contains(c)).toList(), extraSpace);
 		return from;
 	}
 

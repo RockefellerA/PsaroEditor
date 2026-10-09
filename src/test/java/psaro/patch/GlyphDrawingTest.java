@@ -93,57 +93,6 @@ class GlyphDrawingTest {
 		assertFalse(drawn.has('あ'), "only what was asked for");
 	}
 
-	/**
-	 * A dark LA8 font of {@link SampleRomfs#font}'s blocks grown by {@code by} pixels on each side,
-	 * like the tutorial titles' black layers under their white letters.
-	 */
-	private static Bcfnt grown(String chars, int by) {
-		Bcfnt f = SampleRomfs.font(chars, 10);
-		int cellW = f.cellW + 2 * by;
-		int cellH = f.cellH + 2 * by;
-		for (Bcfnt.Glyph g : f.glyphs) {
-			int[] px = new int[cellW * cellH];
-			// the sample's block spans x 1..cellW-2 and y 2..baseline-1 of its cell
-			for (int y = 2; y < f.baseline + 2 * by; y++) {
-				for (int x = 1; x < cellW - 1; x++) {
-					px[y * cellW + x] = Texture.fromRgba(0x000000FF, f.format);
-				}
-			}
-			g.pixels = px;
-			g.left -= by;
-			g.glyphWidth += 2 * by;
-		}
-		f.cellW = cellW;
-		f.cellH = cellH;
-		f.baseline += by;
-		return f;
-	}
-
-	@Test
-	void howMuchALayersLettersAreGrownIsRead() {
-		Bcfnt body = SampleRomfs.font("あいうえお漢字", 10);
-		assertEquals(2, GlyphDrawing.grownBy(grown("あいうえお漢字", 2), body), 0.01);
-		assertEquals(0, GlyphDrawing.grownBy(body, body), 0.01);
-		assertTrue(Double.isNaN(GlyphDrawing.grownBy(grown("あい", 2), body)), "too few letters shared to tell");
-	}
-
-	/** A layer under the letters is drawn at their size and grown, so the two line up. */
-	@Test
-	void aLayerUnderAnotherFontIsDrawnAsItsLettersGrown() {
-		Bcfnt body = SampleRomfs.font("あいうえお漢字", 10);
-		Bcfnt under = grown("あいうえお漢字", 2);
-		List<Integer> a = List.of((int) 'A');
-		Bcfnt top = new GlyphDrawing.Pen(Typeface.M_PLUS_ROUNDED, "SulaPro_B_Tutorial_01.bcfnt", body).draw(a);
-		Bcfnt layer = new GlyphDrawing.Pen(Typeface.M_PLUS_ROUNDED, "SulaPro_B_Tutorial_03.bcfnt", under,
-				"SulaPro_B_Tutorial_01.bcfnt", body).draw(a);
-		Bcfnt alone = new GlyphDrawing.Pen(Typeface.M_PLUS_ROUNDED, "SulaPro_B_Tutorial_03.bcfnt", under).draw(a);
-		assertEquals(top.glyph('A').charWidth, layer.glyph('A').charWidth, "the same advance, so the layers stay together");
-		int wider = layer.glyph('A').glyphWidth - top.glyph('A').glyphWidth;
-		assertTrue(wider >= 3 && wider <= 5, "grown about 2 pixels a side: " + wider);
-		assertEquals(top.glyph('A').left - 2, layer.glyph('A').left, 1);
-		assertTrue(alone.glyph('A').charWidth > top.glyph('A').charWidth, "measured alone, it would be drawn bigger");
-	}
-
 	private static int lowestInk(Bcfnt f, int c) {
 		int[] px = f.rgba(f.cmap.get(c));
 		int lowest = -1;
