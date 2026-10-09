@@ -115,7 +115,11 @@ class ExtraSpaceBarTest {
 		JPanel holder = new JPanel(new BorderLayout());
 		holder.add(bar, BorderLayout.NORTH);
 		int oneLine = bar.getPreferredSize().height;
-		holder.setSize(240, 400);
+		// room for the widest label and its control but not for all on one line, whatever the platform's font
+		int widest = Arrays.stream(bar.getComponents()).mapToInt(c -> c.getPreferredSize().width).max().orElseThrow();
+		int width = widest + 2 * ((WrapLayout) bar.getLayout()).getHgap() + bar.getInsets().left + bar.getInsets().right;
+		assertTrue(width < bar.getPreferredSize().width, "too narrow for one line");
+		holder.setSize(width, 400);
 		// validate() lays out only what is on screen; lay the tree out as it would be
 		layOut(holder);
 		JTextField field = (JTextField) descendants(bar).filter(c -> c instanceof JTextField).findFirst().orElseThrow();
