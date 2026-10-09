@@ -28,10 +28,10 @@ import psaro.romfs.RomfsIndex.Usage;
 
 /**
  * The previewed pane's font, box and type settings, changeable in place. A change is made to
- * the layout, so it applies to that pane, and its drop-shadow twin, in every archive that
- * carries the layout; the preview and the fit use it at once, and the patch writes it. A value
- * that differs from the layout's own shows in bold. The font can be any the layout lists, since
- * a pane only points into that list.
+ * the layout, so it applies to that pane, and its drop-shadow twin or the panes layered with it
+ * ({@link Fit#layers}), in every archive that carries the layout; the preview and the fit use it
+ * at once, and the patch writes it. A value that differs from the layout's own shows in bold.
+ * The font can be any the layout lists, since a pane only points into that list.
  */
 final class PaneSettingsBar extends JPanel {
 
@@ -61,7 +61,7 @@ final class PaneSettingsBar extends JPanel {
 	private final JLabel scope = new JLabel();
 	private Usage usage;
 	private List<String> panes = List.of();
-	/** The pane's drop-shadow twins, which take its changes. */
+	/** The pane's drop-shadow twins and layers, which take its changes. */
 	private List<Usage> twins = List.of();
 	/** Set while the spinners are filled in, so that is not taken as a change. */
 	private boolean loading;
@@ -147,19 +147,13 @@ final class PaneSettingsBar extends JPanel {
 
 	/**
 	 * Shows {@code u}'s settings for change; {@code all} are every pane showing the string, among
-	 * which its drop-shadow twins.
+	 * which its drop-shadow twins and layers.
 	 */
 	void show(Usage u, List<Usage> all) {
 		usage = u;
 		panes = new ArrayList<>(List.of(u.pane().name()));
-		twins = new ArrayList<>();
-		for (Usage o : all) {
-			if (o != u && Fit.isShadow(o) && o.archive().equals(u.archive()) && o.layout().equals(u.layout())
-					&& !panes.contains(o.pane().name())) {
-				panes.add(o.pane().name());
-				twins.add(o);
-			}
-		}
+		twins = Fit.layers(u, all);
+		twins.forEach(o -> panes.add(o.pane().name()));
 		loading = true;
 		font.removeAllItems();
 		u.layoutFonts().forEach(font::addItem);

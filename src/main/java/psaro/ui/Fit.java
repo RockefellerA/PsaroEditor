@@ -33,7 +33,8 @@ import psaro.romfs.RomfsIndex.Usage;
  *
  * <p>Many panes have a drop-shadow twin drawing the same text in a blurred font. The twin is
  * left out of {@link #previewable} and of the fit, since it shares the main pane's box, but its
- * font still counts for missing glyphs: a character it lacks loses its shadow in the game.
+ * font still counts for missing glyphs: a character it lacks loses its shadow in the game. So
+ * do the other layers of panes stacked to draw one text ({@link #layers}).
  *
  * <p>A character the pane's font lacks is measured with the glyph the font patch would give it
  * ({@link FontPatcher#preview}); only one no donor has is measured with the stand-in typeface,
@@ -187,17 +188,64 @@ public record Fit(boolean shown, boolean tooWide, boolean tooTall, Set<Integer> 
 		return new Fit(true, wide, tall, missing, unpatchable, estimate);
 	}
 
-	/** The panes worth previewing: a layout's shadow panes are dropped when it has a main pane. */
+	/**
+	 * The panes worth previewing: a layout's shadow panes are dropped when it has a main pane, and
+	 * of panes stacked into one ({@link #layers}) only the first is kept.
+	 */
 	public static List<Usage> previewable(List<Usage> usages) {
 		List<Usage> out = new ArrayList<>();
 		for (Usage u : usages) {
 			boolean twin = isShadow(u) && usages.stream()
 					.anyMatch(o -> !isShadow(o) && o.archive().equals(u.archive()) && o.layout().equals(u.layout()));
-			if (!twin) {
+			boolean layer = out.stream().anyMatch(o -> layers(o, usages).contains(u));
+			if (!twin && !layer) {
 				out.add(u);
 			}
 		}
 		return out;
+	}
+
+	/**
+	 * The panes among {@code all} drawn together with {@code u} as one text, which take its
+	 * changes: its layout's shadow panes, and the panes stacked on it to draw one text in layers
+	 * (a fill over an outline, say), which show the same string from about the same place in the
+	 * same box, and the panes stacked on those. A layer changed on its own draws its letters
+	 * apart from the rest.
+	 */
+	public static List<Usage> layers(Usage u, List<Usage> all) {
+		List<Usage> out = new ArrayList<>();
+		for (Usage o : all) {
+			if (isShadow(o) && o.archive().equals(u.archive()) && o.layout().equals(u.layout())) {
+				addPane(out, u, o);
+			}
+		}
+		// stacked on u, or on a pane stacked on it
+		List<Usage> stack = new ArrayList<>(List.of(u));
+		for (int i = 0; i < stack.size(); i++) {
+			for (Usage o : all) {
+				if (stacked(stack.get(i), o) && stack.stream().noneMatch(x -> x.pane().name().equals(o.pane().name()))) {
+					stack.add(o);
+					addPane(out, u, o);
+				}
+			}
+		}
+		return out;
+	}
+
+	/** Adds {@code o} to {@code out} unless it is {@code u}'s pane or one already there. */
+	private static void addPane(List<Usage> out, Usage u, Usage o) {
+		String name = o.pane().name();
+		if (!name.equals(u.pane().name()) && out.stream().noneMatch(x -> x.pane().name().equals(name))) {
+			out.add(o);
+		}
+	}
+
+	/** Whether {@code a} and {@code b} are two panes of one layout drawn on top of one another. */
+	private static boolean stacked(Usage a, Usage b) {
+		return a.archive().equals(b.archive()) && a.layout().equals(b.layout())
+				&& !a.pane().name().equals(b.pane().name()) && a.pane().stacksOn(b.pane())
+				&& a.pane().text().boxWidth() == b.pane().text().boxWidth()
+				&& a.pane().text().boxHeight() == b.pane().text().boxHeight();
 	}
 
 	static boolean isShadow(Usage u) {

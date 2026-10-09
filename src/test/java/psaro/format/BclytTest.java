@@ -2,6 +2,8 @@ package psaro.format;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
 import java.util.Map;
@@ -88,6 +90,24 @@ class BclytTest {
 		var panes = Bclyt.read(layout).textPanes();
 		assertEquals(List.of("cmn_0004"), panes.get(0).keys());
 		assertEquals(List.of("clsm_0110"), panes.get(1).keys());
+	}
+
+	@Test
+	void readsWhereEachPaneSitsAndWhatItHangsUnder() {
+		byte[] layout = SampleRomfs.layout(List.of("a.bcfnt"), SampleRomfs.pane("Txt_Top", "menu_0001", 50, 6),
+				SampleRomfs.group("NL_Wind", SampleRomfs.pane("Txt_Titl_02", "menu_0002", 0, 40),
+						SampleRomfs.pane("Txt_Titl_01", "menu_0002", 0, 38.5f)),
+				SampleRomfs.pane("Txt_After", "menu_0003"));
+		var panes = Bclyt.read(layout).textPanes();
+		assertEquals(null, panes.get(0).parent());
+		assertEquals(50f, panes.get(0).x());
+		assertEquals(6f, panes.get(0).y());
+		assertEquals("NL_Wind", panes.get(1).parent());
+		assertEquals(40f, panes.get(1).y());
+		assertEquals("NL_Wind", panes.get(2).parent());
+		assertEquals(null, panes.get(3).parent(), "back at the root after the group closes");
+		assertTrue(panes.get(1).stacksOn(panes.get(2)), "a shadow's offset apart");
+		assertFalse(panes.get(0).stacksOn(panes.get(3)), "apart");
 	}
 
 	@Test

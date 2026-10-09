@@ -26,10 +26,21 @@ public final class Bclyt {
 
 	private static final Pattern KEY = Pattern.compile("[a-z]{3,4}_\\d{4}");
 
-	/** Any pane. Text-pane fields are null / zero for other kinds. */
-	public record Pane(String kind, String name, List<String> keys, TextInfo text) {
+	/**
+	 * Any pane. Text-pane fields are null / zero for other kinds. {@code parent} is the pane it
+	 * hangs under (null at the root), {@code x} and {@code y} where it sits from there.
+	 */
+	public record Pane(String kind, String name, List<String> keys, TextInfo text, String parent, float x, float y) {
 		public boolean isText() {
 			return text != null;
+		}
+
+		/**
+		 * Whether {@code other} sits where this does: under the same parent, at the same place give
+		 * or take a drop shadow's offset of a pixel or two.
+		 */
+		public boolean stacksOn(Pane other) {
+			return java.util.Objects.equals(parent, other.parent) && Math.abs(x - other.x) <= 4 && Math.abs(y - other.y) <= 4;
 		}
 	}
 
@@ -111,6 +122,9 @@ public final class Bclyt {
 		}
 		List<String> fonts = new ArrayList<>();
 		List<Pane> panes = new ArrayList<>();
+		// pas1 opens the children of the pane before it, pae1 closes them
+		java.util.Deque<String> parents = new java.util.ArrayDeque<>();
+		String last = null;
 		int o = Bytes.u16(d, 6);
 		while (o < d.length - 8) {
 			int size = Bytes.u32(d, o + 4);
@@ -119,6 +133,8 @@ public final class Bclyt {
 			}
 			String tag = new String(d, o, 4, StandardCharsets.US_ASCII);
 			switch (tag) {
+				case "pas1" -> parents.push(last == null ? "" : last);
+				case "pae1" -> parents.poll();
 				case "fnl1" -> {
 					int n = Bytes.u32(d, o + 8);
 					for (int i = 0; i < n; i++) {
@@ -143,7 +159,9 @@ public final class Bclyt {
 								Bytes.u8(d, o + 0x54), Bytes.u8(d, o + 0x55),
 								rgba(d, o + 0x5C), rgba(d, o + 0x60));
 					}
-					panes.add(new Pane(tag, name, new ArrayList<>(), info));
+					panes.add(new Pane(tag, name, new ArrayList<>(), info, parents.peek(), Bytes.f32(d, o + 0x24),
+							Bytes.f32(d, o + 0x28)));
+					last = name;
 				}
 				case "usd1" -> {
 					if (!panes.isEmpty()) {

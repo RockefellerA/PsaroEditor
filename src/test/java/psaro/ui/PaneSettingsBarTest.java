@@ -76,6 +76,35 @@ class PaneSettingsBarTest {
 	}
 
 	@Test
+	void panesLayeredIntoOneTextTakeItsChangesButNotACopyElsewhere() throws IOException {
+		Path romfs = dir.resolve("game");
+		SampleRomfs.table(romfs, "menu", Map.of("menu_0001", "なまえ"));
+		// a drop shadow 1.5 below, a fill, and an outline in a font of its own, as title_naming_up's title
+		byte[] titl01 = SampleRomfs.pane("Txt_Titl_01", "menu_0001", 0, 40);
+		titl01[0x52] = 1;
+		SampleRomfs.archive(romfs, "scene/menu/menu.arc.lz", "blyt/menu.bclyt", List.of("a.bcfnt", "b.bcfnt"), Map.of(),
+				SampleRomfs.group("NL_Wind", SampleRomfs.pane("Txt_Titl_03", "menu_0001", 0, 38.5f),
+						SampleRomfs.pane("Txt_Titl_02", "menu_0001", 0, 40), titl01),
+				SampleRomfs.pane("Txt_Elsewhere", "menu_0001", 0, -60));
+		RomfsIndex index = RomfsIndex.scan(romfs);
+		FontPatcher fonts = new FontPatcher(index, PatchSettings.open(romfs), LayoutOverrides.open(romfs));
+		PaneSettingsBar bar = new PaneSettingsBar(fonts, () -> { });
+		List<Usage> usages = index.usages(index.table("menu"), "menu_0001");
+		assertEquals(List.of("Txt_Titl_03", "Txt_Elsewhere"), Fit.previewable(usages).stream().map(u -> u.pane().name()).toList());
+
+		bar.show(usages.get(0), usages);
+		@SuppressWarnings("unchecked")
+		JComboBox<String> font = all(bar, JComboBox.class, new ArrayList<>()).get(0);
+		font.setSelectedItem("b.bcfnt");
+		all(bar, JSpinner.class, new ArrayList<>()).get(4).setValue(0.5);
+		assertEquals(new TextOverride(null, null, null, null, 0.5f, null, "b.bcfnt"), fonts.overrides().get("blyt/menu.bclyt", "Txt_Titl_03"));
+		assertEquals(new TextOverride(null, null, null, null, 0.5f, null, "b.bcfnt"), fonts.overrides().get("blyt/menu.bclyt", "Txt_Titl_02"));
+		assertEquals(new TextOverride(null, null, null, null, 0.5f, null), fonts.overrides().get("blyt/menu.bclyt", "Txt_Titl_01"),
+				"the outline keeps its own font");
+		assertTrue(fonts.overrides().get("blyt/menu.bclyt", "Txt_Elsewhere").isEmpty());
+	}
+
+	@Test
 	void anotherOfTheLayoutsFontsCanBeChosen() throws IOException {
 		Path romfs = dir.resolve("game");
 		SampleRomfs.table(romfs, "menu", Map.of("menu_0001", "はい"));

@@ -147,14 +147,34 @@ public final class SampleRomfs {
 
 	/** A 120x24 txt1 pane at font size 16 using font 0, followed by the usd1 that carries its key. */
 	public static byte[] pane(String name, String key) {
+		return pane(name, key, 0, 0);
+	}
+
+	/** {@link #pane(String, String)} at {@code x}, {@code y} from its parent. */
+	public static byte[] pane(String name, String key, float x, float y) {
 		ByteBuffer txt = le(0x74 - 8 + 4);
 		txt.position(0x0C - 8).put(name.getBytes(StandardCharsets.US_ASCII));
+		txt.position(0x24 - 8).putFloat(x).putFloat(y);
 		txt.position(0x44 - 8).putFloat(120f).putFloat(24f).putShort((short) 4).putShort((short) 4);
 		txt.position(0x52 - 8).putShort((short) 0);
 		txt.position(0x58 - 8).putInt(0x74);
 		txt.position(0x64 - 8).putFloat(16f).putFloat(16f).putFloat(0f).putFloat(0f);
 		txt.position(0x74 - 8).put("*\0".getBytes(StandardCharsets.UTF_16LE));
 		return concat(section("txt1", txt.array()), section("usd1", textId(key)));
+	}
+
+	/** A null pane {@code name} (pan1) with {@code children} hung under it (pas1 .. pae1). */
+	public static byte[] group(String name, byte[]... children) {
+		ByteBuffer pan = le(0x4C - 8);
+		pan.position(0x0C - 8).put(name.getBytes(StandardCharsets.US_ASCII));
+		ByteArrayOutputStream out = new ByteArrayOutputStream();
+		out.writeBytes(section("pan1", pan.array()));
+		out.writeBytes(section("pas1", new byte[0]));
+		for (byte[] c : children) {
+			out.writeBytes(c);
+		}
+		out.writeBytes(section("pae1", new byte[0]));
+		return out.toByteArray();
 	}
 
 	/**
