@@ -6,6 +6,7 @@ import java.awt.Dimension;
 import java.awt.EventQueue;
 import java.awt.FlowLayout;
 import java.awt.GridBagLayout;
+import java.awt.KeyboardFocusManager;
 import java.awt.Taskbar;
 import java.awt.Toolkit;
 import java.awt.event.InputEvent;
@@ -16,6 +17,7 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.text.ParseException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
@@ -26,6 +28,7 @@ import javax.swing.BoxLayout;
 import javax.swing.JButton;
 import javax.swing.JComponent;
 import javax.swing.JFileChooser;
+import javax.swing.JFormattedTextField;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
 import javax.swing.JMenu;
@@ -48,6 +51,7 @@ import psaro.patch.FontPatcher;
 import psaro.patch.FontPatcher.Plan;
 import psaro.patch.FontPatcher.Text;
 import psaro.patch.LayoutOverrides;
+import psaro.patch.PatchExport;
 import psaro.patch.PatchSettings;
 import psaro.patch.TextExport;
 import psaro.project.CodeColors;
@@ -86,6 +90,10 @@ public final class MainWindow {
 	private final SearchBox search = new SearchBox();
 	/** Opens the font patch; lit while the patched fonts are behind the English. */
 	private final JButton patchButton = new JButton("Patch");
+	/** Packs the patch folder into a zip to hand out; once a romfs is open. */
+	private final JMenuItem exportPatch = new JMenuItem("Export patch…");
+	/** Set while a patch is being packed, one at a time. */
+	private boolean exporting;
 	private final JButton imagesButton = new JButton("Images…");
 	/** The images window while it is open; one at a time, for the romfs that is open. */
 	private ImagesWindow imagesWindow;
@@ -160,6 +168,11 @@ public final class MainWindow {
 		save.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_S, shortcut));
 		save.addActionListener(e -> save());
 
+		exportPatch.setMnemonic(KeyEvent.VK_E);
+		exportPatch.setEnabled(false);
+		exportPatch.setToolTipText("Pack the patched files into a zip for players: Luma3DS's layout, with a readme");
+		exportPatch.addActionListener(e -> exportPatch());
+
 		JMenuItem preferences = new JMenuItem("Preferences…");
 		preferences.setMnemonic(KeyEvent.VK_P);
 		preferences.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_COMMA, shortcut));
@@ -173,6 +186,7 @@ public final class MainWindow {
 		file.setMnemonic(KeyEvent.VK_F);
 		file.add(open);
 		file.add(save);
+		file.add(exportPatch);
 		file.addSeparator();
 		file.add(preferences);
 		file.addSeparator();
@@ -434,6 +448,7 @@ public final class MainWindow {
 	}
 
 	private void openPatch() {
+		commitTyping();
 		new FontPatchDialog(frame, patcher, this::texts, () -> {
 			editor.fontsChanged();
 			startPlan();
@@ -441,11 +456,28 @@ public final class MainWindow {
 		startPlan();
 	}
 
+	/**
+	 * Commits a number still being typed (a pane's box or font size in the preview), as the
+	 * buttons that take no focus would otherwise act without it; it is saved as it commits.
+	 * Opening a dialog only moves the focus for a while, which commits nothing.
+	 */
+	private static void commitTyping() {
+		if (KeyboardFocusManager.getCurrentKeyboardFocusManager().getFocusOwner() instanceof JFormattedTextField f
+				&& f.isEditValid()) {
+			try {
+				f.commitEdit();
+			} catch (ParseException invalid) {
+				// left as it was, as leaving the field would
+			}
+		}
+	}
+
 	/** Opens the images window, or brings it forward when it is open already. */
 	private void openImages() {
 		if (patcher == null) {
 			return;
 		}
+		commitTyping();
 		if (imagesWindow == null || !imagesWindow.isDisplayable()) {
 			imagesWindow = new ImagesWindow(frame, index, patcher.images(), this::startPlan);
 		}
@@ -455,6 +487,7 @@ public final class MainWindow {
 	}
 
 	private boolean save() {
+		commitTyping();
 		if (translations == null || !translations.isDirty()) {
 			return true;
 		}
@@ -467,6 +500,98 @@ public final class MainWindow {
 		refresh();
 		exportText(true);
 		return true;
+	}
+
+	/**
+	 * Packs the patch folder into a zip for players ({@link PatchExport}): the English saved and
+	 * its tables written first, a patch that is behind offered first, and the game's title id
+	 * asked for when neither the settings nor the mods folder know it.
+	 */
+	private void exportPatch() {
+		if (patcher == null || !save()) {
+			return;
+		}
+		exportText(false);
+		if (plan != null && plan.hasWork()) {
+			Object[] options = {"Patch first", "Export anyway", "Cancel"};
+			int choice = JOptionPane.showOptionDialog(frame, "The fonts or layouts have changed since the last patch, "
+					+ "so the files to export are behind.\n" + FontPatchDialog.summary(plan), "Export patch",
+					JOptionPane.YES_NO_CANCEL_OPTION, JOptionPane.WARNING_MESSAGE, null, options, options[0]);
+			if (choice == 0) {
+				openPatch();
+				return;
+			}
+			if (choice != 1) {
+				return;
+			}
+		}
+		PatchSettings settings = patcher.settings();
+		String id = settings.titleId();
+		if (id == null && settings.modsFolder() != null) {
+			id = PatchExport.titleIdFrom(settings.modsFolder());
+		}
+		if (id == null) {
+			id = (String) JOptionPane.showInputDialog(frame, "The game's title id: sixteen hex digits, as Citra shows "
+					+ "in its game list (Properties) or names its mods folder, e.g. 0004000000140000.", "Export patch",
+					JOptionPane.QUESTION_MESSAGE, null, null, "");
+			if (id == null) {
+				return;
+			}
+			id = id.strip();
+			if (!PatchExport.isTitleId(id)) {
+				error(id + " is not a title id: it has sixteen hex digits, 0-9 and A-F.");
+				return;
+			}
+		}
+		if (!id.equals(settings.titleId())) {
+			try {
+				settings.setTitleId(id.toUpperCase(java.util.Locale.ROOT));
+			} catch (IOException e) {
+				// remembered next time only; the export goes ahead
+			}
+		}
+		JFileChooser chooser = new JFileChooser(Translations.folderFor(index.root()).getParent().toFile());
+		chooser.setDialogTitle("Export patch");
+		chooser.setSelectedFile(new java.io.File(index.root().getFileName() + " patch.zip"));
+		chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("Zip archive (*.zip)", "zip"));
+		if (chooser.showSaveDialog(frame) != JFileChooser.APPROVE_OPTION) {
+			return;
+		}
+		Path zip = chooser.getSelectedFile().toPath();
+		if (!zip.getFileName().toString().toLowerCase(java.util.Locale.ROOT).endsWith(".zip")) {
+			zip = zip.resolveSibling(zip.getFileName() + ".zip");
+		}
+		if (Files.exists(zip) && JOptionPane.showConfirmDialog(frame, zip.getFileName() + " exists. Replace it?",
+				"Export patch", JOptionPane.YES_NO_OPTION) != JOptionPane.YES_OPTION) {
+			return;
+		}
+		Path target = zip;
+		String titleId = id.toUpperCase(java.util.Locale.ROOT);
+		exporting = true;
+		refresh();
+		new SwingWorker<PatchExport.Result, Void>() {
+			@Override
+			protected PatchExport.Result doInBackground() throws IOException {
+				return PatchExport.write(patcher.output(), titleId, target, step -> { });
+			}
+
+			@Override
+			protected void done() {
+				exporting = false;
+				refresh();
+				try {
+					PatchExport.Result r = get();
+					JOptionPane.showMessageDialog(frame, String.format(java.util.Locale.ROOT,
+							"Packed %,d files (%.1f MB) into %s,%nlaid out for Luma3DS under luma/titles/%s/romfs/, "
+									+ "with a readme on putting them in place.", r.files(), r.bytes() / 1048576.0, target,
+							titleId), "Export patch", JOptionPane.INFORMATION_MESSAGE);
+				} catch (java.util.concurrent.ExecutionException e) {
+					error("Could not export the patch:\n" + e.getCause().getMessage());
+				} catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+				}
+			}
+		}.execute();
 	}
 
 	/** Asks what to do with unsaved English; true when it is safe to go on. */
@@ -499,6 +624,7 @@ public final class MainWindow {
 		boolean dirty = translations != null && translations.isDirty();
 		save.setEnabled(dirty);
 		saveButton.setEnabled(dirty);
+		exportPatch.setEnabled(patcher != null && !exporting);
 		saveButton.putClientProperty(FlatClientProperties.STYLE, dirty ? HIGHLIGHT : null);
 		if (index != null) {
 			planTimer.restart();

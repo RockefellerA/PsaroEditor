@@ -36,6 +36,8 @@ public final class PatchSettings {
 	private String legacy = OLD_DEFAULT;
 	private boolean copyToMods;
 	private Path modsFolder;
+	/** The game's title id, as the exported patch's folders name it, or null if none was given. */
+	private String titleId;
 
 	private PatchSettings(Path file) {
 		this.file = file;
@@ -66,6 +68,8 @@ public final class PatchSettings {
 				s.copyToMods = json.optBoolean("copyToMods", false);
 				String mods = json.optString("modsFolder", "");
 				s.modsFolder = mods.isEmpty() ? null : Path.of(mods);
+				String id = json.optString("titleId", "");
+				s.titleId = id.isEmpty() ? null : id;
 			} catch (JSONException e) {
 				throw new IOException(s.file + " is not valid font patch settings: " + e.getMessage(), e);
 			}
@@ -112,6 +116,16 @@ public final class PatchSettings {
 		return modsFolder;
 	}
 
+	/** The game's title id the exported patch is laid out for, or null if none was given. */
+	public synchronized String titleId() {
+		return titleId;
+	}
+
+	public synchronized void setTitleId(String id) throws IOException {
+		titleId = id;
+		save();
+	}
+
 	/** Sets the letters of one font; spaces are dropped, and none clears it. */
 	public void setExtraSpace(String font, String chars) throws IOException {
 		setExtraSpace(List.of(font), chars);
@@ -154,6 +168,9 @@ public final class PatchSettings {
 		json.put("copyToMods", copyToMods);
 		if (modsFolder != null) {
 			json.put("modsFolder", modsFolder.toString());
+		}
+		if (titleId != null) {
+			json.put("titleId", titleId);
 		}
 		Files.createDirectories(file.getParent());
 		Files.writeString(file, json.toString(2) + "\n", StandardCharsets.UTF_8);
