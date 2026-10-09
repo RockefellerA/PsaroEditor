@@ -51,6 +51,7 @@ import psaro.patch.LayoutOverrides;
 import psaro.patch.PatchSettings;
 import psaro.patch.TextExport;
 import psaro.project.CodeColors;
+import psaro.project.PaneLinks;
 import psaro.project.StringSearch;
 import psaro.project.Translations;
 import psaro.project.UnusedTables;
@@ -295,7 +296,8 @@ public final class MainWindow {
 
 	/** Everything read from a romfs and its .psaro folder, ready for the editor. */
 	private record Opened(Path dir, RomfsIndex index, Translations translations, CodeColors colors,
-			UnusedTables unused, PatchSettings patchSettings, LayoutOverrides layoutOverrides, ImageEdits imageEdits) {
+			UnusedTables unused, PatchSettings patchSettings, LayoutOverrides layoutOverrides, ImageEdits imageEdits,
+			PaneLinks links) {
 	}
 
 	/** Why a romfs could not be opened; {@code always} when it must be reported even when reopening quietly. */
@@ -326,7 +328,7 @@ public final class MainWindow {
 		}
 		try {
 			return new Opened(dir, scanned, Translations.open(scanned), CodeColors.open(dir), UnusedTables.open(dir),
-					PatchSettings.open(dir), LayoutOverrides.open(dir), ImageEdits.open(dir));
+					PatchSettings.open(dir), LayoutOverrides.open(dir), ImageEdits.open(dir), PaneLinks.open(scanned));
 		} catch (IOException e) {
 			// always reported: opening anyway could later save over the unreadable file
 			throw new OpenFailure("Could not read the translations for " + dir + ":\n" + e.getMessage(), true);
@@ -348,7 +350,7 @@ public final class MainWindow {
 			imagesWindow = null;
 		}
 		plan = null;
-		editor = new EditorPanel(patcher, translations, colors, unused, actions, this::refresh);
+		editor = new EditorPanel(patcher, translations, colors, unused, o.links(), actions, this::refresh);
 		setBody(editor);
 		search.setSource(new StringSearch(index, translations), translations, editor::showString);
 		refresh();

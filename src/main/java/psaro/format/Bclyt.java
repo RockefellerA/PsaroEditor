@@ -17,9 +17,9 @@ import java.util.regex.Pattern;
  * 0x58 text offset, 0x5C top / bottom colour, 0x64 font size x y, 0x6C char spacing,
  * 0x70 line spacing.
  *
- * <p>The text a layout stores is a placeholder ({@code *}); the game fills panes from the
- * {@code .tdt} that shares the archive's name, keyed by ids held in the pane's user data
- * (usd1). Lines break at {@code \n}, and wherever the next character would cross the box's
+ * <p>The text a layout stores is mostly a placeholder ({@code *}); the game fills panes from
+ * the {@code .tdt} that shares the archive's name, keyed by ids held in the pane's user data
+ * (usd1). A pane no table fills shows the text it holds ({@link #withPaneText}). Lines break at {@code \n}, and wherever the next character would cross the box's
  * right edge, mid-word or not.
  */
 public final class Bclyt {
@@ -243,6 +243,57 @@ public final class Bclyt {
 			o += size;
 		}
 		return out;
+	}
+
+	/**
+	 * A copy of layout {@code d} with each text pane named in {@code texts} holding that text in
+	 * place of its own: the text a pane shows when the game does not fill it from a table. Each
+	 * such txt1 is rebuilt from its text offset on (UTF-16, a NUL, padding to four bytes), its
+	 * string size following and its buffer size grown when the text needs more room; the file size
+	 * in the header follows, every other byte staying as it was. The same array when nothing changes.
+	 */
+	public static byte[] withPaneText(byte[] d, Map<String, String> texts) {
+		if (texts.isEmpty()) {
+			return d;
+		}
+		java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream(d.length + 64);
+		int o = Bytes.u16(d, 6);
+		out.write(d, 0, o);
+		boolean changed = false;
+		while (o < d.length - 8) {
+			int size = Bytes.u32(d, o + 4);
+			if (size == 0) {
+				break;
+			}
+			String text = null;
+			if (Bytes.magic(d, o, "txt1")) {
+				String name = Bytes.ascii(d, o + 12);
+				text = texts.get(name.length() > 16 ? name.substring(0, 16) : name);
+			}
+			int textOff = text == null ? 0 : Bytes.u32(d, o + 0x58);
+			if (text == null || text.equals(Bytes.utf16(d, o + textOff, o + size))) {
+				out.write(d, o, size);
+			} else {
+				byte[] chars = text.getBytes(StandardCharsets.UTF_16LE);
+				int strBytes = chars.length + 2;
+				int newSize = (textOff + strBytes + 3) / 4 * 4;
+				ByteBuffer section = ByteBuffer.allocate(newSize).order(ByteOrder.LITTLE_ENDIAN);
+				section.put(d, o, textOff).put(chars);
+				section.putInt(4, newSize);
+				section.putShort(0x4C, (short) Math.max(Bytes.u16(d, o + 0x4C), strBytes));
+				section.putShort(0x4E, (short) strBytes);
+				out.writeBytes(section.array());
+				changed = true;
+			}
+			o += size;
+		}
+		out.write(d, o, d.length - o);
+		if (!changed) {
+			return d;
+		}
+		byte[] bytes = out.toByteArray();
+		ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).putInt(0x0C, bytes.length);
+		return bytes;
 	}
 
 	/**

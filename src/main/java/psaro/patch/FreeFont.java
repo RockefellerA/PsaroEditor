@@ -21,6 +21,10 @@ import psaro.romfs.RomfsIndex;
  * each letter is instead the top font's stand-in's, made into this layer ({@link UnderLayer}), so
  * the layers line up as the game's do.
  *
+ * <p>A character the game font has keeps that font's advance, the typeface's letter centred in
+ * it, so the Japanese the game lays out (a "はい" in a button made just wide enough for it) takes
+ * the room it always did; only what the English adds is spaced as the typeface spaces it.
+ *
  * <p>Glyphs are drawn once per game font and kept ({@link #glyphs}), measured on the copy of the
  * game font with the most glyphs, so every archive's copy comes out the same.
  */
@@ -171,7 +175,14 @@ public final class FreeFont {
 		glyphs.addGlyphsFrom(drawn, drawn.cmap.keySet(), false);
 		for (int c : drawn.cmap.keySet()) {
 			drawnBy.put(c, t);
-			drawnWidth.put(c, glyphs.glyph(c).charWidth);
+			Bcfnt.Glyph g = glyphs.glyph(c);
+			Bcfnt.Glyph game = reference.glyph(c);
+			if (game != null && c > 0x20) {
+				// the game's advance, the letter centred in it
+				g.left += Math.round((game.charWidth - g.charWidth) / 2f);
+				g.charWidth = game.charWidth;
+			}
+			drawnWidth.put(c, g.charWidth);
 		}
 		Lending.widen(glyphs, drawn.cmap.keySet(), extraSpace);
 	}

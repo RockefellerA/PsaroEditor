@@ -138,6 +138,56 @@ class RomfsIndexTest {
 		assertNull(index.layeredUnder("b.bcfnt"), "drawn on top");
 	}
 
+	/**
+	 * A message file is a table of numbered strings no layout names; a pane the game fills from
+	 * code (its key in no table) can be linked to one, and then shows it.
+	 */
+	@Test
+	void messageFilesAreTablesOfNumberedStringsPanesCanBeLinkedTo() throws IOException {
+		table("menu", Map.of("menu_0001", "はい"));
+		SampleRomfs.message(romfs, "tutorial_and_help", List.of("チュートリアル", "はい"));
+		archive("scene/music/InfoTutorialButton.arc.lz", "blyt/tutorial_btn_yes.bclyt", List.of("a.bcfnt"),
+				pane("Txt_Btn", "trhl_1690"));
+		RomfsIndex index = RomfsIndex.scan(romfs);
+		StringTable help = index.table("message/tutorial_and_help");
+		assertTrue(help.message());
+		assertFalse(index.table("menu").message());
+		assertEquals(Map.of("000", "チュートリアル", "001", "はい"), help.strings());
+		assertEquals(List.of("000", "001"), List.copyOf(help.strings().keySet()));
+		assertTrue(index.usages(help, "001").isEmpty());
+		assertNull(index.sharedWith(help, "001"));
+		assertEquals(List.of("Txt_Btn"), index.unresolved().stream().map(u -> u.pane().name()).toList());
+		assertEquals(1, index.textPanes().size());
+
+		index.link(help, "001", List.of(new RomfsIndex.PaneRef("blyt/tutorial_btn_yes.bclyt", "Txt_Btn")));
+		assertEquals(List.of("Txt_Btn"), index.panes(help, "001").stream().map(u -> u.pane().name()).toList());
+		assertTrue(index.usages(help, "000").isEmpty(), "only the string linked");
+		index.link(help, "001", List.of());
+		assertTrue(index.usages(help, "001").isEmpty());
+	}
+
+	/**
+	 * Text a layout holds itself, where no table fills the pane, is a string: one per text in a
+	 * layout, every pane holding it showing it. Placeholders and panes a table fills are left out.
+	 */
+	@Test
+	void textALayoutHoldsWhereNoTableFillsThePaneIsAString() throws IOException {
+		table("menu", Map.of("menu_0001", "はい"));
+		archive("scene/menu/menu.arc.lz", "blyt/menu.bclyt", List.of("a.bcfnt"),
+				SampleRomfs.pane("Txt_Filled", "menu_0001", "いいえ"), SampleRomfs.pane("Txt_Star", null, "*"));
+		archive("scene/music/InfoTutorialButton.arc.lz", "blyt/tutorial_btn_yes.bclyt", List.of("a.bcfnt"),
+				SampleRomfs.pane("Txt_Btn", "trhl_1690", "はい"), SampleRomfs.pane("Txt_Btn_Shad", null, "はい"),
+				SampleRomfs.pane("Txt_Again", "menu_0001", "もう一度"));
+		RomfsIndex index = RomfsIndex.scan(romfs);
+		StringTable held = index.table(RomfsIndex.BUILT_IN);
+		assertTrue(held.builtIn());
+		// the button's key is in no table, its shadow has none, and the third's archive has no table of its own
+		assertEquals(Map.of("blyt/tutorial_btn_yes.bclyt:Txt_Btn", "はい", "blyt/tutorial_btn_yes.bclyt:Txt_Again",
+				"もう一度"), held.strings());
+		assertEquals(List.of("Txt_Btn", "Txt_Btn_Shad"),
+				index.usages(held, "blyt/tutorial_btn_yes.bclyt:Txt_Btn").stream().map(u -> u.pane().name()).toList());
+	}
+
 	@Test
 	void folderWithoutStringTablesIsNotARomfs() throws IOException {
 		assertFalse(RomfsIndex.looksLikeRomfs(romfs));

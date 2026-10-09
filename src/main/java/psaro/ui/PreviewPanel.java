@@ -4,6 +4,7 @@ import java.awt.BorderLayout;
 import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -18,6 +19,7 @@ import javax.swing.ImageIcon;
 import javax.swing.JButton;
 import javax.swing.JComboBox;
 import javax.swing.JLabel;
+import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JTextArea;
@@ -28,8 +30,11 @@ import psaro.patch.FontPatcher;
 import psaro.patch.FreeFont;
 import psaro.patch.Typeface;
 import psaro.project.CodeColors;
+import psaro.project.PaneLinks;
 import psaro.render.TextRenderer;
 import psaro.romfs.RomfsIndex;
+import psaro.romfs.RomfsIndex.PaneRef;
+import psaro.romfs.RomfsIndex.StringTable;
 import psaro.romfs.RomfsIndex.Usage;
 
 /**
@@ -83,6 +88,13 @@ final class PreviewPanel extends JPanel {
 
 	/** Run after a color code is renamed or recolored, so the editor can show the new tags. */
 	private final Runnable onCodesChanged;
+	/** Run after a pane's settings, or the panes linked to the string, change. */
+	private final Runnable onLayoutChanged;
+	private final PaneLinks links;
+	private final JButton linkButton = new JButton("Panes…");
+	/** The string shown, or null. */
+	private StringTable table;
+	private String key;
 	private ColorCodesDialog colorDialog;
 
 	/**
@@ -90,7 +102,7 @@ final class PreviewPanel extends JPanel {
 	 * after a pane's box or type settings, or its font's patch settings, change, so the editor can
 	 * measure every string again.
 	 */
-	PreviewPanel(FontPatcher fonts, CodeColors colors, Runnable onCodesChanged, Runnable onLayoutChanged) {
+	PreviewPanel(FontPatcher fonts, CodeColors colors, PaneLinks links, Runnable onCodesChanged, Runnable onLayoutChanged) {
 		super(new BorderLayout());
 		this.index = fonts.index();
 		this.fonts = fonts;
@@ -101,7 +113,9 @@ final class PreviewPanel extends JPanel {
 			onLayoutChanged.run();
 		});
 		this.colors = colors;
+		this.links = links;
 		this.onCodesChanged = onCodesChanged;
+		this.onLayoutChanged = onLayoutChanged;
 		zoom.setSelectedIndex(1);
 		pane.addActionListener(e -> redraw());
 		zoom.addActionListener(e -> redraw());
@@ -118,6 +132,10 @@ final class PreviewPanel extends JPanel {
 		zoomBox.add(new JLabel("Zoom:"));
 		zoomBox.add(zoom);
 		zoomBox.add(colorButton);
+		linkButton.setToolTipText("<html>The panes this string is shown in, for one the game draws from code (no layout "
+				+ "names it): link them to preview it and check its fit, and the patch gives their fonts its letters.</html>");
+		linkButton.addActionListener(e -> showLinks());
+		zoomBox.add(linkButton);
 		bar.add(zoomBox, BorderLayout.EAST);
 		pane.setPrototypeDisplayValue(null);
 		pane.setMinimumSize(new Dimension(80, pane.getPreferredSize().height));
@@ -151,12 +169,16 @@ final class PreviewPanel extends JPanel {
 	}
 
 	/**
-	 * Shows a string: the panes that use it, its Japanese, and its English (null if none).
+	 * Shows {@code key} of {@code table}: the panes that use it, its Japanese, and its English (null if none).
 	 * {@code sharedFrom} names the table whose copy of the same key those panes are matched to,
 	 * when none is matched to this one's; else null. The first pane the English does not fit is
 	 * chosen, so the preview shows what the Fits column flags.
 	 */
-	void showString(List<Usage> all, String japaneseText, String englishText, String sharedFrom) {
+	void showString(StringTable table, String key, List<Usage> all, String japaneseText, String englishText,
+			String sharedFrom) {
+		this.table = table;
+		this.key = key;
+		linkButton.setEnabled(true);
 		usages = all;
 		this.sharedFrom = sharedFrom;
 		japaneseRaw = japaneseText;
@@ -204,6 +226,26 @@ final class PreviewPanel extends JPanel {
 		overflowing = out;
 	}
 
+	/** Asks which panes show the string, and links them; the editor then measures and shows it again. */
+	private void showLinks() {
+		if (table == null) {
+			return;
+		}
+		List<PaneRef> chosen = LinkPanesDialog.choose(this, index, table.name() + " › " + key, links.get(table, key));
+		if (chosen == null) {
+			return;
+		}
+		try {
+			links.set(table, key, chosen);
+		} catch (IOException e) {
+			JOptionPane.showMessageDialog(this, "Could not save the linked panes:\n" + e.getMessage(), "Panes",
+					JOptionPane.ERROR_MESSAGE);
+			return;
+		}
+		onLayoutChanged.run();
+		onCodesChanged.run();
+	}
+
 	/** Opens the color mapping, or brings it forward if it is already open. */
 	private void showColors() {
 		if (colorDialog == null || !colorDialog.isDisplayable()) {
@@ -214,6 +256,9 @@ final class PreviewPanel extends JPanel {
 	}
 
 	void clear() {
+		table = null;
+		key = null;
+		linkButton.setEnabled(false);
 		usages = List.of();
 		sharedFrom = null;
 		overflowing = Set.of();
@@ -232,7 +277,9 @@ final class PreviewPanel extends JPanel {
 			japanese.setIcon(null);
 			english.setIcon(null);
 			japanese.setText(usages.isEmpty() && japaneseRaw != null
-					? "No layout shows this string: the game draws it from code, so there is no box to preview."
+					? "<html>No layout shows this string: the game draws it from code. If you know where it shows, "
+							+ "link its panes under Panes… to preview it and check its fit; the patch then gives their "
+							+ "fonts its letters.</html>"
 					: "Select a string to preview it.");
 			english.setText(" ");
 			notes.setText("");

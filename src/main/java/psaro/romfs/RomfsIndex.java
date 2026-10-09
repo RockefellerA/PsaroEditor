@@ -7,6 +7,7 @@ import java.nio.file.Path;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -27,6 +28,7 @@ import psaro.format.Bclim;
 import psaro.format.Bclyt;
 import psaro.format.Bcfnt;
 import psaro.format.Darc;
+import psaro.format.Msgd;
 import psaro.format.Tdt;
 
 /**
@@ -51,9 +53,46 @@ import psaro.format.Tdt;
  */
 public final class RomfsIndex {
 
-	/** {@code text/<name>_Japanese.tdt}: its keys and Japanese text, in file order. */
-	public record StringTable(String name, Path path, Map<String, String> strings) {
+	/**
+	 * {@code text/<name>_Japanese.tdt}: its keys and Japanese text, in file order. Or a message
+	 * file, {@code message/<name>_jp.mdt}, named {@code message/<name>}, keyed by each string's
+	 * number ({@code 062}): strings the game draws from code, so no layout names them.
+	 */
+	public record StringTable(String name, Path path, Map<String, String> strings, Kind kind) {
+
+		/** A table or a message file, told apart by its file's name. */
+		public StringTable(String name, Path path, Map<String, String> strings) {
+			this(name, path, strings, path.getFileName().toString().endsWith(MESSAGE_SUFFIX) ? Kind.MESSAGE : Kind.TABLE);
+		}
+
+		/** True for a message file ({@link psaro.format.Msgd}). */
+		public boolean message() {
+			return kind == Kind.MESSAGE;
+		}
+
+		/** True for the text layouts hold themselves ({@link #BUILT_IN}). */
+		public boolean builtIn() {
+			return kind == Kind.BUILT_IN;
+		}
 	}
+
+	/** Where a {@link StringTable}'s strings live. */
+	public enum Kind {
+		/** {@code text/<name>_Japanese.tdt}, keyed by what layouts name. */
+		TABLE,
+		/** {@code message/<name>_jp.mdt}, numbered strings the game draws from code. */
+		MESSAGE,
+		/**
+		 * The text text panes hold in their layouts, for panes the game shows it in: those with no
+		 * key, a key no table has, or in an archive with no table of its own. Keyed by
+		 * {@code <layout>:<pane>}, the first pane of the layout holding that text; every pane of the
+		 * layout holding it shows the string. The patch writes the English into the layouts.
+		 */
+		BUILT_IN
+	}
+
+	/** The name of the table of text layouts hold themselves. */
+	public static final String BUILT_IN = "built-in text";
 
 	/**
 	 * One text pane that shows a string: the archive, the layout's path inside it, the pane, and
@@ -94,6 +133,9 @@ public final class RomfsIndex {
 	}
 
 	private static final String TABLE_SUFFIX = "_Japanese.tdt";
+	private static final String MESSAGE_SUFFIX = "_jp.mdt";
+	/** The name a message file's table takes before its own: {@code message/tutorial_and_help}. */
+	public static final String MESSAGE_PREFIX = "message/";
 	private static final String ARCHIVE_SUFFIX = ".arc.lz";
 	/**
 	 * {@code SulaPro_B_04a_22_C.bcfnt}: family, weight (some fonts have none), style (the look
@@ -126,6 +168,10 @@ public final class RomfsIndex {
 	private final Map<String, String> bodies;
 	/** Keyed by layout + "!" + pane: the pane drawn on top of a lower layer in another font ({@link #paneOnTop}). */
 	private final Map<String, Bclyt.Pane> tops;
+	/** Every text pane of every layout in every archive, in archive and layout order. */
+	private final List<Usage> textPanes;
+	/** Keyed by {@code table + "/" + key}: the panes linked to a string no layout names ({@link #link}). */
+	private final Map<String, List<Usage>> linked = new HashMap<>();
 	/** Keyed by archive path + "!" + font name; empty when the archive does not carry the font. */
 	private final Map<String, Optional<Bcfnt>> fonts = new HashMap<>();
 	/** Keyed by font name. */
@@ -134,11 +180,12 @@ public final class RomfsIndex {
 	private RomfsIndex(Path root, Map<String, StringTable> tables, Map<String, List<Usage>> usages,
 			List<Usage> unresolved, int layoutCount, Map<String, List<Path>> fontHomes,
 			Map<String, List<Path>> layoutHomes, Map<Shape, List<Shown>> shapes, List<Image> images,
-			Map<String, String> bodies, Map<String, Bclyt.Pane> tops) {
+			Map<String, String> bodies, Map<String, Bclyt.Pane> tops, List<Usage> textPanes) {
 		this.root = root;
 		this.tables = tables;
 		this.usages = usages;
 		this.unresolved = unresolved;
+		this.textPanes = textPanes;
 		this.layoutCount = layoutCount;
 		this.fontHomes = fontHomes;
 		this.layoutHomes = layoutHomes;
@@ -165,9 +212,27 @@ public final class RomfsIndex {
 				tablesByKey.computeIfAbsent(key, k -> new ArrayList<>()).add(name);
 			}
 		}
+		// keyed by number, which every message file repeats, so no pane's key resolves to one
+		for (Path p : messageFiles(root)) {
+			List<String> read;
+			try {
+				read = Msgd.read(Files.readAllBytes(p));
+			} catch (IllegalArgumentException | IndexOutOfBoundsException notMsgd) {
+				continue;
+			}
+			Map<String, String> strings = new LinkedHashMap<>();
+			for (int i = 0; i < read.size(); i++) {
+				strings.put(String.format(Locale.ROOT, "%03d", i), read.get(i));
+			}
+			String name = MESSAGE_PREFIX + strip(p, MESSAGE_SUFFIX);
+			tables.put(name, new StringTable(name, p, Collections.unmodifiableMap(strings)));
+		}
 
 		Map<String, List<Usage>> usages = new HashMap<>();
 		List<Usage> unresolved = new ArrayList<>();
+		List<Usage> textPanes = new ArrayList<>();
+		// layout to the text its panes hold to those panes, in every archive carrying it
+		Map<String, Map<String, List<Usage>>> builtIn = new LinkedHashMap<>();
 		Map<String, List<Path>> fontHomes = new HashMap<>();
 		Map<String, List<Path>> layoutHomes = new HashMap<>();
 		Map<Shape, List<Shown>> shapes = new HashMap<>();
@@ -206,6 +271,13 @@ public final class RomfsIndex {
 				addBodies(file.getKey(), layout.textPanes(), bodies, tops);
 				for (Bclyt.Pane pane : layout.textPanes()) {
 					Usage usage = new Usage(archive, file.getKey(), pane, layoutFonts);
+					textPanes.add(usage);
+					// the text the layout holds, where the game shows it: no table fills the pane
+					boolean unkeyed = pane.keys().stream().noneMatch(tablesByKey::containsKey);
+					if (japanese(pane.text().placeholder()) && (own == null || unkeyed)) {
+						builtIn.computeIfAbsent(file.getKey(), k -> new LinkedHashMap<>())
+								.computeIfAbsent(pane.text().placeholder(), k -> new ArrayList<>()).add(usage);
+					}
 					for (String key : pane.keys()) {
 						List<String> homes = own != null && own.strings().containsKey(key)
 								? List.of(own.name())
@@ -222,9 +294,18 @@ public final class RomfsIndex {
 				}
 			}
 		}
+		Map<String, String> held = new LinkedHashMap<>();
+		builtIn.forEach((layout, byText) -> byText.forEach((text, panes) -> {
+			String key = layout + ":" + panes.get(0).pane().name();
+			held.put(key, text);
+			usages.put(BUILT_IN + "/" + key, panes);
+		}));
+		if (!held.isEmpty()) {
+			tables.put(BUILT_IN, new StringTable(BUILT_IN, root, Collections.unmodifiableMap(held), Kind.BUILT_IN));
+		}
 		shapes.replaceAll((shape, shown) -> List.copyOf(shown));
 		return new RomfsIndex(root, Collections.unmodifiableMap(tables), usages, List.copyOf(unresolved), layouts,
-				fontHomes, layoutHomes, shapes, List.copyOf(images), bodies, tops);
+				fontHomes, layoutHomes, shapes, List.copyOf(images), bodies, tops, List.copyOf(textPanes));
 	}
 
 	/**
@@ -327,7 +408,42 @@ public final class RomfsIndex {
 
 	/** The text panes that show {@code key} from {@code table}; empty for strings drawn from code. */
 	public List<Usage> usages(StringTable table, String key) {
-		return Collections.unmodifiableList(usages.getOrDefault(table.name() + "/" + key, List.of()));
+		List<Usage> own = usages.getOrDefault(table.name() + "/" + key, List.of());
+		List<Usage> more;
+		synchronized (linked) {
+			more = linked.get(table.name() + "/" + key);
+		}
+		if (more == null) {
+			return Collections.unmodifiableList(own);
+		}
+		List<Usage> out = new ArrayList<>(own);
+		more.stream().filter(u -> !own.contains(u)).forEach(out::add);
+		return Collections.unmodifiableList(out);
+	}
+
+	/** A pane, wherever its layout is: the layout's path inside an archive, and the pane's name. */
+	public record PaneRef(String layout, String pane) {
+	}
+
+	/**
+	 * Has {@code panes} show {@code key} from {@code table} (in every archive carrying their
+	 * layouts) besides those whose layout names it: for a string the game draws from code, the
+	 * panes it draws it in, so the preview, the fit and the patch's fonts know them. None unlinks.
+	 */
+	public void link(StringTable table, String key, Collection<PaneRef> panes) {
+		List<Usage> found = textPanes.stream().filter(u -> panes.contains(new PaneRef(u.layout(), u.pane().name()))).toList();
+		synchronized (linked) {
+			if (found.isEmpty()) {
+				linked.remove(table.name() + "/" + key);
+			} else {
+				linked.put(table.name() + "/" + key, found);
+			}
+		}
+	}
+
+	/** Every text pane of every layout in every archive, in archive and layout order. */
+	public List<Usage> textPanes() {
+		return textPanes;
 	}
 
 	/**
@@ -337,11 +453,12 @@ public final class RomfsIndex {
 	 * config_select) is matched to only one, though the game may read either.
 	 */
 	public StringTable sharedWith(StringTable table, String key) {
-		if (!usages(table, key).isEmpty()) {
+		// a message file's keys are numbers every one of them repeats: none shares another's
+		if (table.message() || !usages(table, key).isEmpty()) {
 			return null;
 		}
 		for (StringTable other : tables.values()) {
-			if (other != table && other.strings().containsKey(key) && !usages(other, key).isEmpty()) {
+			if (other != table && !other.message() && other.strings().containsKey(key) && !usages(other, key).isEmpty()) {
 				return other;
 			}
 		}
@@ -521,6 +638,21 @@ public final class RomfsIndex {
 		}
 		try (Stream<Path> files = Files.list(text)) {
 			return files.filter(p -> p.getFileName().toString().endsWith(TABLE_SUFFIX)).sorted().toList();
+		}
+	}
+
+	/** Whether {@code text} holds kana or kanji, so it reads as text rather than a placeholder ({@code *}, {@code 123}). */
+	private static boolean japanese(String text) {
+		return text != null && text.codePoints().anyMatch(c -> c >= 0x3040 && c < 0xA000 || c >= 0xFF00 && c < 0xFFF0);
+	}
+
+	private static List<Path> messageFiles(Path root) throws IOException {
+		Path message = root.resolve("message");
+		if (!Files.isDirectory(message)) {
+			return List.of();
+		}
+		try (Stream<Path> files = Files.list(message)) {
+			return files.filter(p -> p.getFileName().toString().endsWith(MESSAGE_SUFFIX)).sorted().toList();
 		}
 	}
 

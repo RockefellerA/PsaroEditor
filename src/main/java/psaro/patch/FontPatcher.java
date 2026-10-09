@@ -125,11 +125,17 @@ public final class FontPatcher {
 	 * and every layout a previous patch changed; every replaced image and every one a previous
 	 * patch replaced.
 	 */
-	public record Plan(List<FontChange> fonts, List<LayoutChange> layouts, List<ImageChange> images) {
+	public record Plan(List<FontChange> fonts, List<LayoutChange> layouts, List<ImageChange> images,
+			Map<String, Map<String, String>> texts) {
 
 		/** A plan with no images. */
 		public Plan(List<FontChange> fonts, List<LayoutChange> layouts) {
 			this(fonts, layouts, List.of());
+		}
+
+		/** A plan writing no text into layouts. */
+		public Plan(List<FontChange> fonts, List<LayoutChange> layouts, List<ImageChange> images) {
+			this(fonts, layouts, images, Map.of());
 		}
 
 		public boolean hasWork() {
@@ -539,6 +545,15 @@ public final class FontPatcher {
 	 * show it) against what was last written.
 	 */
 	public Plan plan(List<Text> texts) {
+		// the text layouts hold themselves, by layout and pane, for the patch to write into them
+		Map<String, Map<String, String>> held = new TreeMap<>();
+		for (Text t : texts) {
+			if (t.table().builtIn()) {
+				for (Usage u : index.usages(t.table(), t.key())) {
+					held.computeIfAbsent(u.layout(), k -> new TreeMap<>()).put(u.pane().name(), t.text());
+				}
+			}
+		}
 		Map<String, Set<Integer>> used = new TreeMap<>();
 		Map<String, Usage> where = new HashMap<>();
 		// what the English adds to the fonts drawn from a typeface, by archive, game font and typeface
@@ -599,7 +614,7 @@ public final class FontPatcher {
 				}
 			}
 		}
-		return new Plan(List.copyOf(fonts), layoutChanges(), imageChanges());
+		return new Plan(List.copyOf(fonts), layoutChanges(held), imageChanges(), held);
 	}
 
 	/** Every image with a replacement, in each archive holding it, and every image a previous patch replaced. */
@@ -796,33 +811,39 @@ public final class FontPatcher {
 		return out;
 	}
 
-	/** Every layout with a change, and every layout a previous patch wrote changed. */
-	private List<LayoutChange> layoutChanges() {
+	/**
+	 * Every layout with a change or text of its own in {@code held} ({@link #plan}), and every
+	 * layout a previous patch wrote changed.
+	 */
+	private List<LayoutChange> layoutChanges(Map<String, Map<String, String>> held) {
 		List<LayoutChange> out = new ArrayList<>();
 		Set<String> seen = new HashSet<>();
-		for (String layout : overrides.layouts()) {
+		Set<String> changed = new TreeSet<>(overrides.layouts());
+		changed.addAll(held.keySet());
+		for (String layout : changed) {
 			for (Path archive : index.archivesWithLayout(layout)) {
-				layoutChange(archive, layout, seen, out);
+				layoutChange(archive, layout, held, seen, out);
 			}
 		}
 		// every layout of an archive with a font drawn from a typeface for every pane may name it
 		for (String gameFont : settings.fontsDrawnFrom().keySet()) {
 			for (Path archive : index.archivesWithFont(gameFont)) {
 				for (String layout : originalLayouts(archive).keySet()) {
-					layoutChange(archive, layout, seen, out);
+					layoutChange(archive, layout, held, seen, out);
 				}
 			}
 		}
 		for (Path archive : writtenArchives()) {
 			Path original = index.root().resolve(output.relativize(archive).toString());
 			for (String layout : written(archive).layouts().keySet()) {
-				layoutChange(original, layout, seen, out);
+				layoutChange(original, layout, held, seen, out);
 			}
 		}
 		return List.copyOf(out);
 	}
 
-	private void layoutChange(Path archive, String layout, Set<String> seen, List<LayoutChange> out) {
+	private void layoutChange(Path archive, String layout, Map<String, Map<String, String>> held, Set<String> seen,
+			List<LayoutChange> out) {
 		if (!seen.add(archive + "!" + layout)) {
 			return;
 		}
@@ -832,7 +853,7 @@ public final class FontPatcher {
 		}
 		Map<String, TextOverride> panes = overrides.forLayout(layout);
 		Map<String, String> names = freeNames(archive);
-		byte[] expected = expected(layout, original, panes, names);
+		byte[] expected = expected(layout, original, panes, names, held.getOrDefault(layout, Map.of()));
 		Map<String, String> renamed = new TreeMap<>(names);
 		renamed.keySet().retainAll(Bclyt.read(original).fonts());
 		boolean changed = !Arrays.equals(expected, original);
@@ -847,16 +868,18 @@ public final class FontPatcher {
 	/**
 	 * Layout {@code original} with {@code panes}' changes, naming fonts by {@code names} (each game
 	 * font set to a typeface, for every pane), then pointing each pane with a draw-with of its own
-	 * at the font for it, added to the font list when need be.
+	 * at the font for it, added to the font list when need be, and holding {@code texts}, pane to
+	 * the text it holds itself.
 	 */
-	private byte[] expected(String layout, byte[] original, Map<String, TextOverride> panes, Map<String, String> names) {
+	private byte[] expected(String layout, byte[] original, Map<String, TextOverride> panes, Map<String, String> names,
+			Map<String, String> texts) {
 		byte[] out = panes.isEmpty() ? original : Bclyt.withText(original, panes);
 		out = names.isEmpty() ? out : Bclyt.withFontNames(out, names);
 		Map<String, String> own = new TreeMap<>();
 		for (PaneFont pf : paneFonts(layout, original, panes)) {
 			own.put(pf.pane(), pf.fontFile());
 		}
-		return Bclyt.withPaneFonts(out, own);
+		return Bclyt.withPaneText(Bclyt.withPaneFonts(out, own), texts);
 	}
 
 	/** {@code archive}'s layouts by path, read once; empty when it cannot be read. */
@@ -1022,7 +1045,8 @@ public final class FontPatcher {
 					file.getValue().data = font.toBytes();
 				}
 				if (path.endsWith(".bclyt")) {
-					file.getValue().data = expected(path, file.getValue().data, overrides.forLayout(path), names);
+					file.getValue().data = expected(path, file.getValue().data, overrides.forLayout(path), names,
+							plan.texts().getOrDefault(path, Map.of()));
 				}
 				if (replaced.contains(path)) {
 					byte[] image = images.replacement(file.getValue().data);
@@ -1044,7 +1068,7 @@ public final class FontPatcher {
 			Archive.save(root, out);
 			wrote.add(out);
 		}
-		copyToMods(outputFiles(".arc.lz", ".tdt"), progress);
+		copyToMods(outputFiles(".arc.lz", ".tdt", ".mdt"), progress);
 		return wrote;
 	}
 

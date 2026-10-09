@@ -47,6 +47,19 @@ class TextExportTest {
 		return dir.resolve("game.psaro/romfs/text/menu_Japanese.tdt");
 	}
 
+	/** A message file with English is written as a message file, beside the tables. */
+	@Test
+	void writesAMessageFileWithItsEnglish() throws IOException {
+		psaro.romfs.SampleRomfs.message(romfs, "tutorial_and_help", List.of("もう一度練習", "はい"));
+		index = RomfsIndex.scan(romfs);
+		translations = Translations.open(index);
+		StringTable help = index.table("message/tutorial_and_help");
+		translations.set(help, "001", "Yes");
+		Path out = dir.resolve("game.psaro/romfs/message/tutorial_and_help_jp.mdt");
+		assertEquals(List.of(out), TextExport.export(index, translations));
+		assertEquals(List.of("もう一度練習", "Yes"), psaro.format.Msgd.read(Files.readAllBytes(out)));
+	}
+
 	@Test
 	void writesTheTableWithItsEnglishAndTheRestInJapanese() throws IOException {
 		translations.set(menu, "menu_0001", "Yes");

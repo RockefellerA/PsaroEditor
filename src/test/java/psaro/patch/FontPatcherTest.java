@@ -466,6 +466,42 @@ class FontPatcherTest {
 		assertEquals(Typeface.GAME, p.drawnWith(under), "a choice of its own comes first");
 	}
 
+	/** A string no layout names, linked to the pane the game shows it in: that pane's font is lent its English. */
+	@Test
+	void aLinkedPaneFontIsLentTheEnglishOfAStringDrawnFromCode() throws IOException {
+		SampleRomfs.message(romfs, "tutorial_and_help", List.of("はい"));
+		index = RomfsIndex.scan(romfs);
+		patcher = new FontPatcher(index, settings, LayoutOverrides.open(romfs));
+		var help = index.table("message/tutorial_and_help");
+		List<Text> english = List.of(new Text(help, "000", "Yes"));
+		assertTrue(patcher.plan(english).fonts().isEmpty(), "no pane known, no font to lend to");
+
+		index.link(help, "000", List.of(new RomfsIndex.PaneRef("blyt/menu.bclyt", "Txt_Yes")));
+		FontChange f = patcher.plan(english).fonts().get(0);
+		assertEquals(FONT, f.font());
+		assertEquals(menu(), f.archive());
+		assertTrue(f.lent().containsAll(List.of((int) 'Y', (int) 'e', (int) 's')));
+	}
+
+	/** Text a layout holds itself, translated: the patch writes the English into the layout, and lends its font the letters. */
+	@Test
+	void aLayoutsOwnTextIsWrittenWithItsEnglish() throws IOException {
+		SampleRomfs.archive(romfs, "scene/music/InfoTutorialButton.arc.lz", "blyt/tutorial_btn_yes.bclyt", List.of(FONT),
+				Map.of(FONT, SampleRomfs.font("はい", 10)), SampleRomfs.pane("Txt_Btn", "trhl_1690", "はい"));
+		index = RomfsIndex.scan(romfs);
+		patcher = new FontPatcher(index, settings, LayoutOverrides.open(romfs));
+		var held = index.table(RomfsIndex.BUILT_IN);
+		Plan plan = patcher.plan(List.of(new Text(held, "blyt/tutorial_btn_yes.bclyt:Txt_Btn", "Yes")));
+		Path button = romfs.resolve("scene/music/InfoTutorialButton.arc.lz");
+		assertTrue(plan.layouts().stream().anyMatch(l -> l.archive().equals(button) && l.changed()));
+		assertTrue(plan.fonts().stream().anyMatch(f -> f.archive().equals(button) && f.lent().contains((int) 'Y')));
+		patcher.write(plan, step -> { });
+		Bclyt.TextInfo written = Bclyt.read(Darc.files(Archive.load(patcher.outputPath(button))).get("blyt/tutorial_btn_yes.bclyt").data)
+				.textPanes().get(0).text();
+		assertEquals("Yes", written.placeholder());
+		assertFalse(patcher.plan(List.of(new Text(held, "blyt/tutorial_btn_yes.bclyt:Txt_Btn", "Yes"))).hasWork());
+	}
+
 	/** A font set to a typeface for every pane, but one pane keeping the game font: it points back at it. */
 	@Test
 	void aPaneCanKeepTheGameFontWhenItsFontIsDrawnAnew() throws IOException {

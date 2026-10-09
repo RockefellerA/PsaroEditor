@@ -115,4 +115,27 @@ class BclytTest {
 		assertArrayEquals(LAYOUT, Bclyt.withText(LAYOUT, Map.of("Txt_Yes", TextOverride.NONE)));
 		assertArrayEquals(LAYOUT, Bclyt.withText(LAYOUT, Map.of("Txt_Gone", new TextOverride(1f, 1f, 1f, 1f, 1f, 1f))));
 	}
+
+	/** A pane's own text replaced: longer text grows its buffer and section; the panes around it keep theirs. */
+	@Test
+	void aPanesOwnTextIsReplacedAndItsBufferGrows() {
+		byte[] layout = SampleRomfs.layout(List.of("a.bcfnt"), SampleRomfs.pane("Txt_Btn", null, "はい"),
+				SampleRomfs.pane("Txt_Other", "menu_0001"));
+		byte[] out = Bclyt.withPaneText(layout, Map.of("Txt_Btn", "Practice Again"));
+		Bclyt.Layout read = Bclyt.read(out);
+		TextInfo btn = read.textPanes().get(0).text();
+		assertEquals("Practice Again", btn.placeholder());
+		assertEquals(("Practice Again".length() + 1) * 2, btn.bufferBytes(), "room for the English and its NUL");
+		assertEquals("*", read.textPanes().get(1).text().placeholder());
+		assertEquals(List.of("menu_0001"), read.textPanes().get(1).keys(), "the next pane's user data still follows it");
+		assertEquals(out.length, Bytes.u32(out, 0x0C), "the file size follows");
+		assertEquals(0, (Bytes.u32(out, Bytes.u16(out, 6) + Bytes.u32(out, Bytes.u16(out, 6) + 4) + 4)) % 4, "sections stay four-byte aligned");
+
+		// shorter text keeps the buffer the layout gave it
+		TextInfo shorter = Bclyt.read(Bclyt.withPaneText(out, Map.of("Txt_Btn", "Yes"))).textPanes().get(0).text();
+		assertEquals("Yes", shorter.placeholder());
+		assertEquals(btn.bufferBytes(), shorter.bufferBytes());
+		assertArrayEquals(out, Bclyt.withPaneText(out, Map.of("Txt_Btn", "Practice Again")), "the same text, the same bytes");
+		assertArrayEquals(layout, Bclyt.withPaneText(layout, Map.of()));
+	}
 }

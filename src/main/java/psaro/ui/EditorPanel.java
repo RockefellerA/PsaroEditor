@@ -55,6 +55,7 @@ import com.formdev.flatlaf.FlatClientProperties;
 import com.formdev.flatlaf.FlatLaf;
 import psaro.patch.FontPatcher;
 import psaro.project.CodeColors;
+import psaro.project.PaneLinks;
 import psaro.project.Translations;
 import psaro.project.UnusedTables;
 import psaro.romfs.RomfsIndex;
@@ -85,7 +86,8 @@ public final class EditorPanel extends JPanel {
 	/** The window's Save and Patch buttons, shown at the right of the bar above the strings. */
 	private final JComponent actions;
 
-	private final JList<StringTable> tables;
+	/** The string tables under a {@link Header} per kind: the .tdt tables, the .mdt message files, the layouts' own text. */
+	private final JList<Object> tables;
 	private final StringsModel strings = new StringsModel();
 	private final JTable stringTable = new JTable(strings);
 	private final TableRowSorter<StringsModel> sorter = new TableRowSorter<>(strings);
@@ -114,7 +116,7 @@ public final class EditorPanel extends JPanel {
 	private boolean loading;
 
 	public EditorPanel(FontPatcher fonts, Translations translations, CodeColors colors, UnusedTables unused,
-			JComponent actions, Runnable onChange) {
+			PaneLinks links, JComponent actions, Runnable onChange) {
 		super(new BorderLayout());
 		this.index = fonts.index();
 		this.fonts = fonts;
@@ -123,16 +125,22 @@ public final class EditorPanel extends JPanel {
 		this.colors = colors;
 		this.unused = unused;
 		this.actions = actions;
-		this.preview = new PreviewPanel(fonts, colors, this::codesChanged, this::layoutChanged);
+		this.preview = new PreviewPanel(fonts, colors, links, this::codesChanged, this::layoutChanged);
 
-		DefaultListModel<StringTable> tableItems = new DefaultListModel<>();
-		index.tables().forEach(tableItems::addElement);
+		DefaultListModel<Object> tableItems = new DefaultListModel<>();
+		for (Header h : Header.values()) {
+			List<StringTable> kind = index.tables().stream().filter(t -> t.kind() == h.kind).toList();
+			if (!kind.isEmpty()) {
+				tableItems.addElement(h);
+				kind.forEach(tableItems::addElement);
+			}
+		}
 		tables = new JList<>(tableItems);
-		tables.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+		tables.setSelectionModel(new SkipHeaders());
 		tables.setCellRenderer(new TableRenderer());
 		tables.addListSelectionListener(e -> {
-			if (!e.getValueIsAdjusting()) {
-				openTable(tables.getSelectedValue());
+			if (!e.getValueIsAdjusting() && tables.getSelectedValue() instanceof StringTable t) {
+				openTable(t);
 			}
 		});
 		tables.addMouseListener(new MouseAdapter() {
@@ -140,9 +148,10 @@ public final class EditorPanel extends JPanel {
 			public void mousePressed(MouseEvent e) {
 				if (e.isPopupTrigger() || SwingUtilities.isRightMouseButton(e)) {
 					int i = tables.locationToIndex(e.getPoint());
-					if (i >= 0 && tables.getCellBounds(i, i).contains(e.getPoint())) {
+					if (i >= 0 && tables.getCellBounds(i, i).contains(e.getPoint())
+							&& tables.getModel().getElementAt(i) instanceof StringTable t) {
 						tables.setSelectedIndex(i);
-						tableMenu(tables.getModel().getElementAt(i)).show(tables, e.getX(), e.getY());
+						tableMenu(t).show(tables, e.getX(), e.getY());
 					}
 				}
 			}
@@ -155,9 +164,9 @@ public final class EditorPanel extends JPanel {
 			@Override
 			public void actionPerformed(ActionEvent e) {
 				int i = tables.getSelectedIndex();
-				if (i >= 0) {
+				if (i >= 0 && tables.getSelectedValue() instanceof StringTable t) {
 					var cell = tables.getCellBounds(i, i);
-					tableMenu(tables.getSelectedValue()).show(tables, cell.x + 20, cell.y + cell.height);
+					tableMenu(t).show(tables, cell.x + 20, cell.y + cell.height);
 				}
 			}
 		});
@@ -185,7 +194,8 @@ public final class EditorPanel extends JPanel {
 		add(root, BorderLayout.CENTER);
 
 		if (!tableItems.isEmpty()) {
-			tables.setSelectedIndex(0);
+			// the first table, past its header
+			tables.setSelectedIndex(1);
 		}
 	}
 
@@ -392,7 +402,7 @@ public final class EditorPanel extends JPanel {
 			english.setCaretPosition(english.getDocument().getLength());
 			applyToMatching.setEnabled(en != null);
 			StringTable shared = index.sharedWith(table, k);
-			preview.showString(index.panes(table, k), jp, en, shared == null ? null : shared.name());
+			preview.showString(table, k, index.panes(table, k), jp, en, shared == null ? null : shared.name());
 		} finally {
 			loading = false;
 		}
@@ -699,19 +709,81 @@ public final class EditorPanel extends JPanel {
 		}
 	}
 
+	/** The heading over each kind of string table in the list. */
+	private enum Header {
+		TDT(RomfsIndex.Kind.TABLE, ".tdt", "String tables (text/*_Japanese.tdt): the strings layouts name by key"),
+		MDT(RomfsIndex.Kind.MESSAGE, ".mdt", "Message files (message/*_jp.mdt): numbered strings the game draws "
+				+ "from code; link a string's panes under Panes… in the preview"),
+		BCLYT(RomfsIndex.Kind.BUILT_IN, ".bclyt", "<html>Text the layouts hold themselves, which the game shows in "
+				+ "panes no table fills: no key, a key no table has, or an archive with no table of its own. "
+				+ "Keyed by layout and pane; Patch writes the English into the layouts.</html>");
+
+		final RomfsIndex.Kind kind;
+		final String label;
+		final String tip;
+
+		Header(RomfsIndex.Kind kind, String label, String tip) {
+			this.kind = kind;
+			this.label = label;
+			this.tip = tip;
+		}
+	}
+
+	/**
+	 * A single selection that steps over the headers: a header picked with the mouse or the arrow
+	 * keys gives way to the table beside it, the way the selection was moving.
+	 */
+	private final class SkipHeaders extends javax.swing.DefaultListSelectionModel {
+		SkipHeaders() {
+			setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+		}
+
+		@Override
+		public void setSelectionInterval(int anchor, int lead) {
+			int i = table(lead, lead < getLeadSelectionIndex() ? -1 : 1);
+			if (i >= 0) {
+				super.setSelectionInterval(i, i);
+			}
+		}
+
+		/** {@code i}, or the nearest table from it going {@code step}, else the other way; -1 for none. */
+		private int table(int i, int step) {
+			var model = tables.getModel();
+			for (int dir : new int[] {step, -step}) {
+				for (int k = i; k >= 0 && k < model.getSize(); k += dir) {
+					if (model.getElementAt(k) instanceof StringTable) {
+						return k;
+					}
+				}
+			}
+			return -1;
+		}
+	}
+
 	/**
 	 * A table's name with how many of its strings have English; a complete table is blue with a
-	 * green check.
+	 * green check. A message file's name goes without the folder its heading already names.
 	 */
 	private final class TableRenderer extends DefaultListCellRenderer {
 		@Override
 		public Component getListCellRendererComponent(JList<?> list, Object value, int i, boolean selected,
 				boolean focus) {
+			if (value instanceof Header h) {
+				super.getListCellRendererComponent(list, h.label, i, false, false);
+				putClientProperty(FlatClientProperties.STYLE, "font: bold");
+				setForeground(UIManager.getColor("Label.disabledForeground"));
+				setBorder(BorderFactory.createEmptyBorder(i == 0 ? 2 : 8, 4, 2, 4));
+				setIcon(null);
+				setToolTipText(h.tip);
+				return this;
+			}
 			StringTable t = (StringTable) value;
 			super.getListCellRendererComponent(list, t.name(), i, selected, focus);
+			putClientProperty(FlatClientProperties.STYLE, null);
+			String name = t.message() ? t.name().substring(RomfsIndex.MESSAGE_PREFIX.length()) : t.name();
 			int done = translations.translatedCount(t);
 			boolean complete = done >= t.strings().size();
-			setText(t.name() + "   " + done + " / " + t.strings().size());
+			setText(name + "   " + done + " / " + t.strings().size());
 			// an empty icon on the rest keeps every name lined up
 			setIcon(complete ? CheckIcon.DONE : CheckIcon.BLANK);
 			if (complete && !selected) {
