@@ -70,8 +70,9 @@ final class ExtraSpaceBar extends JPanel {
 				+ "and shows in the Patch list.";
 		label.setToolTipText(tip);
 		letters.setToolTipText(tip);
-		JLabel from = new JLabel("Draw with:");
-		String fromTip = "<html>Game font: Patch adds the letters this font lacks to it, copied from the game's other "
+		JLabel from = new JLabel("Every pane in this font:");
+		String fromTip = "<html>What every pane in this font draws with; a pane can choose its own under the preview.<br>"
+				+ "Game font: Patch adds the letters this font lacks to it, copied from the game's other "
 				+ "fonts.<br>A bundled typeface (SIL Open Font License): Patch leaves the game's font as it is and adds a "
 				+ "new font drawn from the typeface, in this font's size and outline, beside it in every archive that "
 				+ "carries it, then points the layouts at the new one. It holds what the game's font holds plus the "

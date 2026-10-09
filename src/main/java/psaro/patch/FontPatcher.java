@@ -296,11 +296,25 @@ public final class FontPatcher {
 	}
 
 	/**
-	 * The font drawn from a bundled typeface for game font {@code gameFont}, when it is set to
-	 * one and some archive carries it; else null. Measured on the copy with the most glyphs.
+	 * What {@code usage}'s pane draws with: its own choice ({@link TextOverride#drawWith}) when it
+	 * has one, else what its font is set to for every pane ({@link PatchSettings#lettersFrom}).
 	 */
-	public synchronized FreeFont freeFont(String gameFont) {
-		Typeface face = settings.lettersFrom(gameFont);
+	public Typeface drawnWith(Usage usage) {
+		String own = overrides.get(usage.layout(), usage.pane().name()).drawWith();
+		return own != null ? Typeface.of(own) : settings.lettersFrom(fontName(usage));
+	}
+
+	/** The font {@code usage}'s pane draws with when that is a bundled typeface; else null. */
+	public FreeFont freeFont(Usage usage) {
+		return freeFont(fontName(usage), drawnWith(usage));
+	}
+
+	/**
+	 * The font drawn from {@code face} for game font {@code gameFont}, when {@code face} is a
+	 * bundled typeface and some archive carries the game font; else null. Measured on the copy
+	 * with the most glyphs.
+	 */
+	public synchronized FreeFont freeFont(String gameFont, Typeface face) {
 		if (!face.bundled()) {
 			return null;
 		}
@@ -329,7 +343,7 @@ public final class FontPatcher {
 	 */
 	public Bcfnt current(Usage usage) {
 		String name = fontName(usage);
-		FreeFont free = freeFont(name);
+		FreeFont free = freeFont(usage);
 		if (free != null) {
 			return free.preview();
 		}
@@ -349,7 +363,7 @@ public final class FontPatcher {
 	 * lend; null for the system font or an archive that cannot be read.
 	 */
 	public Bcfnt preview(Usage usage) {
-		FreeFont free = freeFont(fontName(usage));
+		FreeFont free = freeFont(usage);
 		if (free != null) {
 			return free.preview();
 		}
@@ -362,7 +376,7 @@ public final class FontPatcher {
 	 * the characters of {@code text}, so they can be measured.
 	 */
 	public void prepare(Usage usage, String text) {
-		FreeFont free = freeFont(fontName(usage));
+		FreeFont free = freeFont(usage);
 		if (free != null && text != null) {
 			free.draw(characters(text));
 		}
@@ -421,7 +435,7 @@ public final class FontPatcher {
 	public Plan plan(List<Text> texts) {
 		Map<String, Set<Integer>> used = new TreeMap<>();
 		Map<String, Usage> where = new HashMap<>();
-		// what the English adds to the fonts drawn from a typeface, by archive and game font
+		// what the English adds to the fonts drawn from a typeface, by archive, game font and typeface
 		Map<String, Set<Integer>> usedFree = new HashMap<>();
 		for (Text t : texts) {
 			Set<Integer> chars = characters(t.text());
@@ -429,8 +443,9 @@ public final class FontPatcher {
 			for (Usage u : index.panes(t.table(), t.key())) {
 				String name = fontName(u);
 				String id = u.archive() + "!" + name;
-				if (settings.lettersFrom(name).bundled()) {
-					usedFree.computeIfAbsent(id, k -> new TreeSet<>()).addAll(chars);
+				Typeface face = drawnWith(u);
+				if (face.bundled()) {
+					usedFree.computeIfAbsent(id + "!" + face.id(), k -> new TreeSet<>()).addAll(chars);
 					continue;
 				}
 				used.computeIfAbsent(id, k -> new TreeSet<>()).addAll(chars);
@@ -447,18 +462,19 @@ public final class FontPatcher {
 				seen.add(e.getKey());
 			}
 		}
-		// a font drawn from a typeface beside every copy of the game font set to it
-		for (String gameFont : settings.fontsDrawnFrom().keySet()) {
-			FreeFont free = freeFont(gameFont);
-			if (free == null) {
+		// a font drawn from a typeface beside every copy of a game font set to it, and in every
+		// archive with a pane that draws with one of its own
+		for (FreeUse use : freeUses()) {
+			FreeFont free = freeFont(use.gameFont(), use.face());
+			String id = use.archive() + "!" + FreeFont.name(use.gameFont(), use.face());
+			if (free == null || seen.contains(id)) {
 				continue;
 			}
-			for (Path archive : index.archivesWithFont(gameFont)) {
-				FontChange c = freeChange(archive, free, usedFree.getOrDefault(archive + "!" + gameFont, Set.of()));
-				if (c != null) {
-					fonts.add(c);
-					seen.add(archive + "!" + c.font());
-				}
+			FontChange c = freeChange(use.archive(), free,
+					usedFree.getOrDefault(use.archive() + "!" + use.gameFont() + "!" + use.face().id(), Set.of()));
+			if (c != null) {
+				fonts.add(c);
+				seen.add(id);
 			}
 		}
 		// fonts a previous patch wrote that no English uses any more, and drawn fonts no longer wanted
@@ -535,6 +551,70 @@ public final class FontPatcher {
 			}
 		}
 		return imagesByPlace.get(archive + "!" + path);
+	}
+
+	/** A font drawn from {@code face} for {@code gameFont}, wanted in {@code archive}. */
+	private record FreeUse(Path archive, String gameFont, Typeface face) {
+	}
+
+	/**
+	 * Where a font drawn from a typeface is wanted: beside every copy of a game font set to one,
+	 * and in every archive with a layout whose pane draws with one of its own, for that pane's
+	 * game font (the layout's, or the one the pane was switched to) when the archive carries it.
+	 */
+	private List<FreeUse> freeUses() {
+		Set<FreeUse> out = new LinkedHashSet<>();
+		settings.fontsDrawnFrom().forEach((gameFont, face) -> {
+			for (Path archive : index.archivesWithFont(gameFont)) {
+				out.add(new FreeUse(archive, gameFont, face));
+			}
+		});
+		for (String layout : overrides.layouts()) {
+			Map<String, TextOverride> panes = overrides.forLayout(layout);
+			if (panes.values().stream().noneMatch(t -> t.drawWith() != null && Typeface.of(t.drawWith()).bundled())) {
+				continue;
+			}
+			for (Path archive : index.archivesWithLayout(layout)) {
+				byte[] original = originalLayouts(archive).get(layout);
+				if (original == null) {
+					continue;
+				}
+				for (PaneFont pf : paneFonts(original, panes)) {
+					if (pf.face().bundled() && carries(archive, pf.gameFont())) {
+						out.add(new FreeUse(archive, pf.gameFont(), pf.face()));
+					}
+				}
+			}
+		}
+		return List.copyOf(out);
+	}
+
+	/** A pane that draws with {@code face} rather than what its font is set to; {@code gameFont} is its font. */
+	private record PaneFont(String pane, String gameFont, Typeface face) {
+
+		/** The font the layout should name for the pane: the drawn one, or the game font itself. */
+		String fontFile() {
+			return face.bundled() ? FreeFont.name(gameFont, face) : gameFont;
+		}
+	}
+
+	/** The panes of layout {@code original} with a draw-with of their own in {@code panes}. */
+	private static List<PaneFont> paneFonts(byte[] original, Map<String, TextOverride> panes) {
+		List<PaneFont> out = new ArrayList<>();
+		if (panes.values().stream().allMatch(t -> t.drawWith() == null)) {
+			return out;
+		}
+		for (Bclyt.Pane p : Bclyt.read(original).textPanes()) {
+			TextOverride t = panes.get(p.name());
+			if (t == null || t.drawWith() == null) {
+				continue;
+			}
+			String gameFont = t.font() != null ? t.font() : p.text().font();
+			if (gameFont != null) {
+				out.add(new PaneFont(p.name(), gameFont, Typeface.of(t.drawWith())));
+			}
+		}
+		return out;
 	}
 
 	/** Whether {@code archive} in the romfs carries font {@code name}. */
@@ -614,7 +694,7 @@ public final class FontPatcher {
 				layoutChange(archive, layout, seen, out);
 			}
 		}
-		// every layout of an archive with a font drawn from a typeface may name it
+		// every layout of an archive with a font drawn from a typeface for every pane may name it
 		for (String gameFont : settings.fontsDrawnFrom().keySet()) {
 			for (Path archive : index.archivesWithFont(gameFont)) {
 				for (String layout : originalLayouts(archive).keySet()) {
@@ -653,10 +733,19 @@ public final class FontPatcher {
 		}
 	}
 
-	/** Layout {@code original} with {@code panes}' changes, naming fonts by {@code names}. */
+	/**
+	 * Layout {@code original} with {@code panes}' changes, naming fonts by {@code names} (each game
+	 * font set to a typeface, for every pane), then pointing each pane with a draw-with of its own
+	 * at the font for it, added to the font list when need be.
+	 */
 	private static byte[] expected(byte[] original, Map<String, TextOverride> panes, Map<String, String> names) {
 		byte[] out = panes.isEmpty() ? original : Bclyt.withText(original, panes);
-		return names.isEmpty() ? out : Bclyt.withFontNames(out, names);
+		out = names.isEmpty() ? out : Bclyt.withFontNames(out, names);
+		Map<String, String> own = new TreeMap<>();
+		for (PaneFont pf : paneFonts(original, panes)) {
+			own.put(pf.pane(), pf.fontFile());
+		}
+		return Bclyt.withPaneFonts(out, own);
 	}
 
 	/** {@code archive}'s layouts by path, read once; empty when it cannot be read. */
@@ -792,7 +881,6 @@ public final class FontPatcher {
 				}
 				if (f.free()) {
 					free.add(f);
-					names.put(f.drawnFor(), f.font());
 				} else {
 					lend.put(f.font(), f.lent());
 				}
@@ -807,6 +895,8 @@ public final class FontPatcher {
 				continue;
 			}
 			progress.accept("Patching " + index.root().relativize(archive));
+			// renamed for every pane only where the font itself is set to a typeface; a pane's own draws are pointed at
+			names.putAll(freeNames(archive));
 			Darc.Node root = Archive.load(archive);
 			Map<String, Darc.Node> files = Darc.files(root);
 			Map<String, Darc.Node> byName = new HashMap<>();
@@ -833,7 +923,7 @@ public final class FontPatcher {
 			}
 			// the drawn fonts beside the game's, which are left as they are
 			for (FontChange f : free) {
-				FreeFont ff = freeFont(f.drawnFor());
+				FreeFont ff = freeFont(f.drawnFor(), FreeFont.typefaceOf(f.font()));
 				Darc.Node game = byName.get(f.drawnFor());
 				if (ff == null || game == null) {
 					throw new IOException("cannot add " + f.font() + " beside " + f.drawnFor() + " in " + archive);

@@ -54,17 +54,25 @@ public final class Bclyt {
 	/**
 	 * New values for a text pane's box and type settings; a null field keeps the layout's own.
 	 * Character spacing and line spacing are in the same units as the box. {@code font} is
-	 * another of the fonts the layout lists (fnl1), by file name.
+	 * another of the fonts the layout lists (fnl1), by file name. {@code drawWith} is what this
+	 * pane alone draws with (a typeface's id, or the game font's), whatever its font is set to;
+	 * null follows the font.
 	 */
 	public record TextOverride(Float boxWidth, Float boxHeight, Float fontSizeX, Float fontSizeY, Float charSpace,
-			Float lineSpace, String font) {
+			Float lineSpace, String font, String drawWith) {
 
-		public static final TextOverride NONE = new TextOverride(null, null, null, null, null, null, null);
+		public static final TextOverride NONE = new TextOverride(null, null, null, null, null, null, null, null);
 
 		/** A change that keeps the pane's font. */
 		public TextOverride(Float boxWidth, Float boxHeight, Float fontSizeX, Float fontSizeY, Float charSpace,
 				Float lineSpace) {
-			this(boxWidth, boxHeight, fontSizeX, fontSizeY, charSpace, lineSpace, null);
+			this(boxWidth, boxHeight, fontSizeX, fontSizeY, charSpace, lineSpace, null, null);
+		}
+
+		/** A change that draws with what the pane's font is set to. */
+		public TextOverride(Float boxWidth, Float boxHeight, Float fontSizeX, Float fontSizeY, Float charSpace,
+				Float lineSpace, String font) {
+			this(boxWidth, boxHeight, fontSizeX, fontSizeY, charSpace, lineSpace, font, null);
 		}
 
 		public boolean isEmpty() {
@@ -73,7 +81,12 @@ public final class Bclyt {
 
 		/** This change with {@code font} in place of its own. */
 		public TextOverride withFont(String font) {
-			return new TextOverride(boxWidth, boxHeight, fontSizeX, fontSizeY, charSpace, lineSpace, font);
+			return new TextOverride(boxWidth, boxHeight, fontSizeX, fontSizeY, charSpace, lineSpace, font, drawWith);
+		}
+
+		/** This change with {@code drawWith} in place of its own. */
+		public TextOverride withDrawWith(String drawWith) {
+			return new TextOverride(boxWidth, boxHeight, fontSizeX, fontSizeY, charSpace, lineSpace, font, drawWith);
 		}
 
 		/** {@code info} with this override's values in place of its own. */
@@ -224,6 +237,59 @@ public final class Bclyt {
 	 * name, then the names, NUL-terminated; padded to four bytes.
 	 */
 	public static byte[] withFontNames(byte[] d, Map<String, String> renames) {
+		List<String> names = new ArrayList<>(read(d).fonts());
+		boolean any = false;
+		for (int i = 0; i < names.size(); i++) {
+			String to = renames.get(names.get(i));
+			if (to != null && !to.equals(names.get(i))) {
+				names.set(i, to);
+				any = true;
+			}
+		}
+		return any ? withFontList(d, names) : d;
+	}
+
+	/**
+	 * A copy of layout {@code d} with each text pane named in {@code fonts} drawing with the font
+	 * it maps to: the index of that name in the font list, the name added at the end when the
+	 * list lacks it, so the fonts already there keep their places. The same array when nothing
+	 * changes.
+	 */
+	public static byte[] withPaneFonts(byte[] d, Map<String, String> fonts) {
+		if (fonts.isEmpty()) {
+			return d;
+		}
+		List<String> names = new ArrayList<>(read(d).fonts());
+		for (String font : new java.util.TreeSet<>(fonts.values())) {
+			if (!names.contains(font)) {
+				names.add(font);
+			}
+		}
+		byte[] out = names.size() == read(d).fonts().size() ? d.clone() : withFontList(d, names);
+		ByteBuffer b = ByteBuffer.wrap(out).order(ByteOrder.LITTLE_ENDIAN);
+		int o = Bytes.u16(out, 6);
+		while (o < out.length - 8) {
+			int size = Bytes.u32(out, o + 4);
+			if (size == 0) {
+				break;
+			}
+			if (Bytes.magic(out, o, "txt1")) {
+				String name = Bytes.ascii(out, o + 12);
+				String font = fonts.get(name.length() > 16 ? name.substring(0, 16) : name);
+				if (font != null) {
+					b.putShort(o + 0x52, (short) names.indexOf(font));
+				}
+			}
+			o += size;
+		}
+		return java.util.Arrays.equals(out, d) ? d : out;
+	}
+
+	/**
+	 * Layout {@code d} with its font list (fnl1) holding {@code names}: the section rebuilt, every
+	 * other section's bytes as they were, the file size in the header following.
+	 */
+	private static byte[] withFontList(byte[] d, List<String> names) {
 		int o = Bytes.u16(d, 6);
 		while (o < d.length - 8) {
 			int size = Bytes.u32(d, o + 4);
@@ -231,18 +297,7 @@ public final class Bclyt {
 				break;
 			}
 			if (Bytes.magic(d, o, "fnl1")) {
-				int n = Bytes.u32(d, o + 8);
-				List<String> names = new ArrayList<>();
-				boolean any = false;
-				for (int i = 0; i < n; i++) {
-					String name = Bytes.ascii(d, o + 12 + Bytes.u32(d, o + 12 + 4 * i));
-					String to = renames.get(name);
-					any |= to != null && !to.equals(name);
-					names.add(to != null ? to : name);
-				}
-				if (!any) {
-					return d;
-				}
+				int n = names.size();
 				java.io.ByteArrayOutputStream strings = new java.io.ByteArrayOutputStream();
 				ByteBuffer table = ByteBuffer.allocate(4 * n).order(ByteOrder.LITTLE_ENDIAN);
 				for (String name : names) {
@@ -264,7 +319,7 @@ public final class Bclyt {
 			}
 			o += size;
 		}
-		return d;
+		throw new IllegalArgumentException("the layout has no font list");
 	}
 
 	private static void put(ByteBuffer b, int at, Float value) {

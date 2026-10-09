@@ -240,11 +240,13 @@ public final class GlyphDrawing {
 			return new Look(0xFFFFFFFF, 0xFFFFFFFF, 0);
 		}
 		boolean outlined = dark[3] > 0.15 * all && light[3] > 0.15 * all && darkEdge > lightEdge && boundary > 0;
-		int fill = lightest[3] > 0 ? mean(lightest) : mean(light);
 		if (!outlined) {
-			return light[3] >= dark[3] ? new Look(fill, fill, 0) : new Look(mean(dark), mean(dark), 0);
+			// a font of dark letters (no light pixels at all) is drawn dark: each colour only from pixels it has
+			int colour = light[3] >= dark[3] ? mean(lightest[3] > 0 ? lightest : light) : mean(dark);
+			return new Look(colour, colour, 0);
 		}
-		return new Look(fill, darkest[3] > 0 ? mean(darkest) : mean(dark), Math.max(0.5, darkArea / boundary));
+		return new Look(mean(lightest[3] > 0 ? lightest : light), mean(darkest[3] > 0 ? darkest : dark),
+				Math.max(0.5, darkArea / boundary));
 	}
 
 	private static void add(long[] sum, int rgba) {

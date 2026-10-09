@@ -74,6 +74,16 @@ public final class FreeFont {
 		return name(gameFont, face);
 	}
 
+	/** The typeface a free font's file name ({@link #name}) was drawn from; the game's fonts for another name. */
+	public static Typeface typefaceOf(String freeName) {
+		for (Typeface t : Typeface.values()) {
+			if (t.bundled() && freeName.startsWith(t.prefix() + "_")) {
+				return t;
+			}
+		}
+		return Typeface.GAME;
+	}
+
 	public String gameFont() {
 		return gameFont;
 	}

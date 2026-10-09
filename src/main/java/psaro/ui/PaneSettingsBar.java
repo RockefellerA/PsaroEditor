@@ -23,6 +23,7 @@ import com.formdev.flatlaf.FlatClientProperties;
 import psaro.format.Bclyt.TextInfo;
 import psaro.format.Bclyt.TextOverride;
 import psaro.patch.FontPatcher;
+import psaro.patch.Typeface;
 import psaro.romfs.RomfsIndex.Usage;
 
 /**
@@ -43,6 +44,19 @@ final class PaneSettingsBar extends JPanel {
 	private final List<Field> fields = new ArrayList<>();
 	/** The fonts the layout lists, any of which the pane can draw with. */
 	private final JComboBox<String> font = new JComboBox<>();
+	/**
+	 * What this pane alone draws with: first the font's own setting (null), then the game font
+	 * and each bundled typeface, by {@link #DRAW_IDS}.
+	 */
+	private final JComboBox<String> drawWith = new JComboBox<>();
+	private static final List<String> DRAW_IDS = new ArrayList<>();
+
+	static {
+		DRAW_IDS.add(null);
+		for (Typeface t : Typeface.values()) {
+			DRAW_IDS.add(t.id());
+		}
+	}
 	private final JButton reset = new JButton("Reset");
 	private final JLabel scope = new JLabel();
 	private Usage usage;
@@ -97,11 +111,21 @@ final class PaneSettingsBar extends JPanel {
 		first.add(sizeX);
 		first.add(new JLabel("×"));
 		first.add(sizeY);
+		drawWith.setToolTipText("<html>What this pane alone draws with. Its font's setting is the one under the "
+				+ "English (\"Every pane in this font\"); a typeface here draws just this pane, and its shadow when "
+				+ "that uses the same font, from it.</html>");
+		drawWith.addActionListener(e -> {
+			if (!loading && usage != null) {
+				save(fromSpinners());
+			}
+		});
 		JPanel second = row();
 		second.add(label("Spacing: letters"));
 		second.add(letters);
 		second.add(label(" lines"));
 		second.add(lines);
+		second.add(label("   Draw with:"));
+		second.add(drawWith);
 		second.add(reset);
 		second.add(scope);
 		scope.putClientProperty(FlatClientProperties.STYLE_CLASS, "small");
@@ -162,6 +186,9 @@ final class PaneSettingsBar extends JPanel {
 		font.setEnabled(false);
 		style(font, false);
 		font.setToolTipText(null);
+		drawWith.removeAllItems();
+		drawWith.setEnabled(false);
+		style(drawWith, false);
 		loading = false;
 		reset.setEnabled(false);
 		scope.setText(" ");
@@ -187,6 +214,17 @@ final class PaneSettingsBar extends JPanel {
 		font.setToolTipText(usage.layoutFonts().size() <= 1 ? "The layout lists no other font"
 				: "The fonts this layout lists" + (switched ? "; the layout's own is " + own.font().replace(".bcfnt", "")
 						: ". Patch adds the glyphs the English needs to whichever is chosen."));
+		// the font's own setting first, named, then each choice for this pane alone
+		String ownChoice = fonts.overrides().get(usage.layout(), usage.pane().name()).drawWith();
+		drawWith.removeAllItems();
+		drawWith.addItem("This font's setting (" + fonts.settings().lettersFrom(now.font()).label() + ")");
+		for (Typeface t : Typeface.values()) {
+			drawWith.addItem(t.label() + " for this pane");
+		}
+		drawWith.setSelectedIndex(Math.max(0, DRAW_IDS.indexOf(ownChoice)));
+		// a font no archive carries (the system font) cannot be drawn anew
+		drawWith.setEnabled(Fit.font(fonts.index(), usage) != null);
+		style(drawWith, ownChoice != null);
 		loading = false;
 		reset.setEnabled(!fonts.overrides().get(usage.layout(), usage.pane().name()).isEmpty());
 	}
@@ -201,13 +239,15 @@ final class PaneSettingsBar extends JPanel {
 			v[i] = differs(value, f.get().apply(own)) ? value : null;
 		}
 		String chosen = (String) font.getSelectedItem();
+		int draw = drawWith.getSelectedIndex();
 		return new TextOverride(v[0], v[1], v[2], v[3], v[4], v[5],
-				chosen == null || chosen.equals(own.font()) ? null : chosen);
+				chosen == null || chosen.equals(own.font()) ? null : chosen, draw <= 0 ? null : DRAW_IDS.get(draw));
 	}
 
 	/**
-	 * Saves {@code t} for the pane and its twins. A twin follows a font switch only when it drew
-	 * with the pane's font: a shadow in a blurred font of its own keeps it.
+	 * Saves {@code t} for the pane and its twins. A twin follows a font switch, and what the pane
+	 * draws with, only when it drew with the pane's font: a shadow in a blurred font of its own
+	 * keeps it.
 	 */
 	private void save(TextOverride t) {
 		try {
@@ -218,7 +258,7 @@ final class PaneSettingsBar extends JPanel {
 			}
 			fonts.overrides().set(usage.layout(), same, t);
 			if (!own.isEmpty()) {
-				fonts.overrides().set(usage.layout(), own, t.withFont(null));
+				fonts.overrides().set(usage.layout(), own, t.withFont(null).withDrawWith(null));
 			}
 		} catch (IOException e) {
 			JOptionPane.showMessageDialog(this, "Could not save the layout change:\n" + e.getMessage(), "Layout",

@@ -29,7 +29,7 @@ import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
 import javax.swing.JComponent;
-import javax.swing.JDialog;
+import javax.swing.JFrame;
 import javax.swing.JFileChooser;
 import javax.swing.JLabel;
 import javax.swing.JList;
@@ -57,8 +57,11 @@ import psaro.romfs.RomfsIndex.Image;
  * title): each one with the copies of it in other archives, shown as the game has it and as
  * replaced. Export one as a PNG, change it in any image editor, and import it back; Patch writes
  * it, in the image's own format and size, into every archive that has it.
+ *
+ * <p>A window of its own, not a dialog, so it can be minimized and maximized and left open
+ * beside the editor.
  */
-public final class ImagesDialog extends JDialog {
+public final class ImagesWindow extends JFrame {
 
 	/** One image and every archive's copy of it (the same file, byte for byte). */
 	private record Group(String hash, List<Image> copies) {
@@ -87,8 +90,10 @@ public final class ImagesDialog extends JDialog {
 	private final JButton revertButton = new JButton("Revert");
 
 	/** {@code onChange} runs after an image is replaced or put back, so the window checks the patch again. */
-	public ImagesDialog(Frame owner, RomfsIndex index, ImageEdits edits, Runnable onChange) {
-		super(owner, "Images", true);
+	public ImagesWindow(Frame owner, RomfsIndex index, ImageEdits edits, Runnable onChange) {
+		super("Images");
+		setIconImages(owner.getIconImages());
+		setDefaultCloseOperation(DISPOSE_ON_CLOSE);
 		this.index = index;
 		this.edits = edits;
 		this.onChange = onChange;
@@ -139,7 +144,7 @@ public final class ImagesDialog extends JDialog {
 		left.add(filters, BorderLayout.NORTH);
 		left.add(new JScrollPane(list), BorderLayout.CENTER);
 
-		zoom.setSelectedIndex(2);
+		zoom.setSelectedIndex(0);
 		zoom.addActionListener(e -> showSelected());
 		JPanel zoomBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 4));
 		zoomBar.add(new JLabel("Zoom:"));

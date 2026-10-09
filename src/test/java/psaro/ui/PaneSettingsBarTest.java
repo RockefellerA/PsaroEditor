@@ -104,4 +104,32 @@ class PaneSettingsBarTest {
 		font.setSelectedItem("a.bcfnt");
 		assertTrue(fonts.overrides().layouts().isEmpty());
 	}
+
+	@Test
+	void aPaneCanDrawWithATypefaceOfItsOwn() throws IOException {
+		Path romfs = dir.resolve("game");
+		SampleRomfs.table(romfs, "menu", Map.of("menu_0001", "はい"));
+		SampleRomfs.archive(romfs, "scene/menu/menu.arc.lz", "blyt/menu.bclyt", List.of("a.bcfnt"),
+				Map.of("a.bcfnt", SampleRomfs.font("はい", 10)), SampleRomfs.pane("Txt_Yes", "menu_0001"),
+				SampleRomfs.pane("Txt_Yes_Shad", "menu_0001"));
+		RomfsIndex index = RomfsIndex.scan(romfs);
+		FontPatcher fonts = new FontPatcher(index, PatchSettings.open(romfs), LayoutOverrides.open(romfs));
+		PaneSettingsBar bar = new PaneSettingsBar(fonts, () -> { });
+		List<Usage> usages = index.usages(index.table("menu"), "menu_0001");
+		bar.show(usages.get(0), usages);
+		@SuppressWarnings("unchecked")
+		List<JComboBox<String>> combos = (List<JComboBox<String>>) (List<?>) all(bar, JComboBox.class, new ArrayList<>());
+		JComboBox<String> drawWith = combos.get(1);
+		assertEquals(0, drawWith.getSelectedIndex(), "the font's own setting to begin with");
+		assertTrue(drawWith.getItemAt(0).contains("Game font"));
+
+		drawWith.setSelectedIndex(2); // M PLUS Rounded 1c for this pane
+		assertEquals("m-plus-rounded-1c", fonts.overrides().get("blyt/menu.bclyt", "Txt_Yes").drawWith());
+		assertEquals("m-plus-rounded-1c", fonts.overrides().get("blyt/menu.bclyt", "Txt_Yes_Shad").drawWith(), "the shadow in the same font follows");
+		assertEquals(psaro.patch.Typeface.M_PLUS_ROUNDED, fonts.drawnWith(usages.get(0)));
+		assertEquals("m-plus-rounded-1c", LayoutOverrides.open(romfs).get("blyt/menu.bclyt", "Txt_Yes").drawWith(), "saved");
+
+		drawWith.setSelectedIndex(0);
+		assertTrue(fonts.overrides().layouts().isEmpty());
+	}
 }

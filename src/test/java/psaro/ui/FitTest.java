@@ -41,7 +41,11 @@ class FitTest {
 		assertFalse(Fit.judge(fonts, u, japanese, japanese).overflows());
 		assertFalse(Fit.check(fonts, List.of(u), japanese, japanese).overflows());
 
-		fonts.overrides().set("blyt/menu.bclyt", List.of("Txt_Yes"), new TextOverride(100f, null, null, null, null, null));
+		// a smaller font: the game's own text breaks no more than it did as shipped, so no worse
+		fonts.overrides().set("blyt/menu.bclyt", List.of("Txt_Yes"), new TextOverride(null, null, 12f, 12f, null, null));
+		assertFalse(Fit.judge(fonts, u, japanese, japanese).tooWide(), "no worse than the game had it");
+		// a box half as wide: it breaks more than the game's did
+		fonts.overrides().set("blyt/menu.bclyt", List.of("Txt_Yes"), new TextOverride(50f, null, null, null, null, null));
 		assertTrue(Fit.judge(fonts, u, japanese, japanese).tooWide(), "a changed pane is measured");
 	}
 

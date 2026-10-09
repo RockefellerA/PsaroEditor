@@ -448,6 +448,9 @@ public final class FontPatchDialog extends JDialog {
 		if (t.lineSpace() != null) {
 			parts.add("lines " + number(t.lineSpace()));
 		}
+		if (t.drawWith() != null) {
+			parts.add("drawn with " + psaro.patch.Typeface.of(t.drawWith()).label());
+		}
 		return String.join(", ", parts);
 	}
 

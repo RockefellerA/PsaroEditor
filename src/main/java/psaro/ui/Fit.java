@@ -87,7 +87,9 @@ public record Fit(boolean shown, boolean tooWide, boolean tooTall, Set<Integer> 
 	 * Measures {@code english} in {@code u}'s pane against the room the game gives Japanese there,
 	 * with what the pane's font lacks as the font patch would add it. The original Japanese (a
 	 * string marked to keep it) in a pane left as the layout has it always fits: the game already
-	 * shows it that way, so a measured overflow would only be the measuring's mistake.
+	 * shows it that way, so a measured overflow would only be the measuring's mistake. In a
+	 * changed pane it is too wide only when the change breaks it into more lines than the game's
+	 * own did: placeholder digits like {@code 1234567890} overflow their one-digit box as shipped.
 	 */
 	public static Judgement judge(FontPatcher fonts, Usage u, String english, String japanese) {
 		RomfsIndex index = fonts.index();
@@ -104,8 +106,11 @@ public record Fit(boolean shown, boolean tooWide, boolean tooTall, Set<Integer> 
 		double jpH = jp.textBounds().getHeight();
 		Limit heightBy = largest(info.boxHeight(), jpH, room);
 		double h = Math.max(info.boxHeight(), Math.max(jpH, room));
-		boolean asShipped = english.equals(japanese) && !changed;
-		return new Judgement(en, info.boxWidth(), info.boxHeight(), h, heightBy, !asShipped && en.tooWide(),
+		boolean original = english.equals(japanese);
+		boolean asShipped = original && !changed;
+		// the game's own text in a changed pane: as wide as the game had it is no worse than the game
+		boolean noWorse = original && changed && jp.tooWide() && en.breaks().size() <= jp.breaks().size();
+		return new Judgement(en, info.boxWidth(), info.boxHeight(), h, heightBy, !asShipped && !noWorse && en.tooWide(),
 				!asShipped && en.textBounds().getHeight() > h + TOLERANCE);
 	}
 
@@ -114,8 +119,7 @@ public record Fit(boolean shown, boolean tooWide, boolean tooTall, Set<Integer> 
 	 * its font is drawn from a bundled typeface in the patch.
 	 */
 	static boolean changed(FontPatcher fonts, Usage u) {
-		return !fonts.overrides().get(u.layout(), u.pane().name()).isEmpty()
-				|| fonts.settings().lettersFrom(fonts.fontName(u)).bundled();
+		return !fonts.overrides().get(u.layout(), u.pane().name()).isEmpty() || fonts.drawnWith(u).bundled();
 	}
 
 	/** Which of the three is largest; a tie goes to the earlier one. */

@@ -28,6 +28,8 @@ public final class LayoutOverrides {
 	private static final String[] FIELDS = {"boxWidth", "boxHeight", "fontSizeX", "fontSizeY", "charSpace", "lineSpace"};
 	/** Another of the layout's fonts, by file name. */
 	private static final String FONT = "font";
+	/** What the pane alone draws with: a typeface's id, or "game". */
+	private static final String DRAW_WITH = "drawWith";
 
 	private final Path file;
 	/** Layout path to pane name to its change; never an empty change. */
@@ -52,7 +54,7 @@ public final class LayoutOverrides {
 							v[i] = f.has(FIELDS[i]) ? (float) f.getDouble(FIELDS[i]) : null;
 						}
 						TextOverride t = new TextOverride(v[0], v[1], v[2], v[3], v[4], v[5],
-								f.has(FONT) ? f.getString(FONT) : null);
+								f.has(FONT) ? f.getString(FONT) : null, f.has(DRAW_WITH) ? f.getString(DRAW_WITH) : null);
 						if (!t.isEmpty()) {
 							o.changes.computeIfAbsent(layout, k -> new TreeMap<>()).put(pane, t);
 						}
@@ -122,6 +124,9 @@ public final class LayoutOverrides {
 				}
 				if (t.font() != null) {
 					f.put(FONT, t.font());
+				}
+				if (t.drawWith() != null) {
+					f.put(DRAW_WITH, t.drawWith());
 				}
 				p.put(pane, f);
 			});

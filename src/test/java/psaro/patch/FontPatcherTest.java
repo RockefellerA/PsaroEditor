@@ -385,6 +385,65 @@ class FontPatcherTest {
 	}
 
 	/**
+	 * One pane drawn with a typeface of its own: the archive gains the drawn font, the layout
+	 * lists it beside the game's, and only that pane points at it; its neighbour keeps the game
+	 * font, which is lent its English as before.
+	 */
+	@Test
+	void aPaneOfItsOwnIsDrawnFromATypefaceAndItsNeighbourIsNot() throws IOException {
+		Path other = dir.resolve("own");
+		SampleRomfs.table(other, "menu", Map.of("menu_0001", "はい", "menu_0002", "いいえ"));
+		SampleRomfs.archive(other, "scene/menu/menu.arc.lz", "blyt/menu.bclyt", List.of(FONT),
+				Map.of(FONT, SampleRomfs.font("はいえ", 10)), SampleRomfs.pane("Txt_Yes", "menu_0001"),
+				SampleRomfs.pane("Txt_No", "menu_0002"));
+		SampleRomfs.archive(other, "scene/plaza/plaza.arc.lz", "blyt/plaza.bclyt", List.of(FONT),
+				Map.of(FONT, SampleRomfs.font(ALPHABET + "はいえ", 8)));
+		RomfsIndex idx = RomfsIndex.scan(other);
+		FontPatcher p = new FontPatcher(idx, PatchSettings.open(other), LayoutOverrides.open(other));
+		p.overrides().set("blyt/menu.bclyt", List.of("Txt_Yes"), TextOverride.NONE.withDrawWith(Typeface.M_PLUS_ROUNDED.id()));
+		Usage yes = idx.usages(idx.table("menu"), "menu_0001").get(0);
+		Usage no = idx.usages(idx.table("menu"), "menu_0002").get(0);
+		assertEquals(Typeface.M_PLUS_ROUNDED, p.drawnWith(yes));
+		assertEquals(Typeface.GAME, p.drawnWith(no));
+
+		List<Text> english = List.of(new Text(idx.table("menu"), "menu_0001", "Yes"), new Text(idx.table("menu"), "menu_0002", "No"));
+		Plan plan = p.plan(english);
+		String drawn = FreeFont.name(FONT, Typeface.M_PLUS_ROUNDED);
+		Path menu = other.resolve("scene/menu/menu.arc.lz");
+		assertTrue(plan.fonts().stream().anyMatch(f -> f.archive().equals(menu) && f.font().equals(drawn) && f.lent().contains((int) 'Y')));
+		assertTrue(plan.fonts().stream().anyMatch(f -> f.archive().equals(menu) && f.font().equals(FONT) && f.lent().contains((int) 'N')),
+				"the neighbour's English goes to the game font");
+		assertTrue(plan.fonts().stream().noneMatch(f -> f.font().equals(drawn) && !f.archive().equals(menu)),
+				"no other archive has a pane drawn with it");
+
+		p.write(plan, step -> { });
+		Map<String, Darc.Node> files = Darc.files(Archive.load(p.outputPath(menu)));
+		Bclyt.Layout layout = Bclyt.read(files.get("blyt/menu.bclyt").data);
+		assertEquals(List.of(FONT, drawn), layout.fonts());
+		assertEquals(drawn, layout.textPanes().get(0).text().font());
+		assertEquals(FONT, layout.textPanes().get(1).text().font());
+		assertTrue(Bcfnt.parse(files.get("font/" + drawn).data).has('Y'));
+		assertTrue(Bcfnt.parse(files.get("font/" + FONT).data).has('N'));
+		assertFalse(p.plan(english).hasWork());
+	}
+
+	/** A font set to a typeface for every pane, but one pane keeping the game font: it points back at it. */
+	@Test
+	void aPaneCanKeepTheGameFontWhenItsFontIsDrawnAnew() throws IOException {
+		settings.setLettersFrom(FONT, Typeface.NOTO_SANS);
+		patcher.settingsChanged();
+		patcher.overrides().set("blyt/menu.bclyt", List.of("Txt_Yes"), TextOverride.NONE.withDrawWith(Typeface.GAME.id()));
+		Usage u = index.usages(index.table("menu"), "menu_0001").get(0);
+		assertEquals(Typeface.GAME, patcher.drawnWith(u));
+		patcher.write(patcher.plan(english("Yes")), step -> { });
+		Bclyt.Layout layout = Bclyt.read(Darc.files(Archive.load(patcher.outputPath(menu()))).get("blyt/menu.bclyt").data);
+		assertEquals(List.of(FreeFont.name(FONT, Typeface.NOTO_SANS), FONT), layout.fonts(), "renamed for every pane, the game font added back");
+		assertEquals(FONT, layout.textPanes().get(0).text().font());
+		assertTrue(written().has('Y'), "lent its English as a game font");
+		assertFalse(patcher.plan(english("Yes")).hasWork());
+	}
+
+	/**
 	 * A replaced image goes into every archive holding that very image, and only there; taking
 	 * the replacement back puts the game's image back.
 	 */

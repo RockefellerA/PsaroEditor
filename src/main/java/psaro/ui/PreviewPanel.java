@@ -273,11 +273,12 @@ final class PreviewPanel extends JPanel {
 					+ "key from " + sharedFrom + ". The game may read either copy, so Patch gives these fonts the "
 					+ "characters of both.");
 		}
-		Typeface face = fonts.settings().lettersFrom(fonts.fontName(u));
+		Typeface face = fonts.drawnWith(u);
 		if (face.bundled() && font != null) {
-			lines.add("Drawn from " + face.label() + ": Patch adds " + FreeFont.name(fonts.fontName(u), face) + " beside "
-					+ fonts.fontName(u) + " in each archive that carries it and points the layouts at it, leaving the "
-					+ "game's font as it is.");
+			boolean ownChoice = fonts.overrides().get(u.layout(), u.pane().name()).drawWith() != null;
+			lines.add("Drawn from " + face.label() + (ownChoice ? " for this pane" : " for every pane in " + fonts.fontName(u))
+					+ ": Patch adds " + FreeFont.name(fonts.fontName(u), face) + " beside " + fonts.fontName(u)
+					+ " and points " + (ownChoice ? "this pane" : "the layouts") + " at it, leaving the game's font as it is.");
 		}
 		if (font == null) {
 			lines.add(fonts.fontName(u) + " is not in this archive (the 3DS system font is not part of the romfs), "

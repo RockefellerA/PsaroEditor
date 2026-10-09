@@ -38,6 +38,24 @@ class GlyphDrawingTest {
 		assertEquals(0xFFFFFFFF, look.fill());
 	}
 
+	/** A font of dark letters has no light pixels to take a fill from: its fill is its dark. */
+	@Test
+	void aFontOfDarkLettersIsReadAsDark() {
+		Bcfnt dark = SampleRomfs.font("あいうえお", 10);
+		for (Bcfnt.Glyph g : dark.glyphs) {
+			for (int i = 0; i < g.pixels.length; i++) {
+				if (g.pixels[i] != 0) {
+					g.pixels[i] = Texture.fromRgba(0x202020FF, dark.format);
+				}
+			}
+		}
+		GlyphDrawing.Look look = GlyphDrawing.look(dark);
+		assertEquals(0, look.radius());
+		assertEquals(0x202020FF, look.fill());
+		// and a font can be drawn for it
+		assertTrue(GlyphDrawing.draw(Typeface.M_PLUS_ROUNDED, "SulaPro_B_Tutorial_03.bcfnt", dark, List.of((int) 'A')).has('A'));
+	}
+
 	@Test
 	void anOutlinedFontsColoursAndThicknessAreRead() {
 		GlyphDrawing.Look look = GlyphDrawing.look(outlined("あいうえお"));

@@ -40,7 +40,7 @@ import javax.swing.Timer;
 import javax.swing.WindowConstants;
 import com.formdev.flatlaf.FlatClientProperties;
 import psaro.dialog.FontPatchDialog;
-import psaro.dialog.ImagesDialog;
+import psaro.dialog.ImagesWindow;
 import psaro.patch.ImageEdits;
 import psaro.dialog.PreferencesDialog;
 import psaro.menu.HelpMenu;
@@ -86,6 +86,8 @@ public final class MainWindow {
 	/** Opens the font patch; lit while the patched fonts are behind the English. */
 	private final JButton patchButton = new JButton("Patch");
 	private final JButton imagesButton = new JButton("Images…");
+	/** The images window while it is open; one at a time, for the romfs that is open. */
+	private ImagesWindow imagesWindow;
 	/** Patch and Save, which the editor shows above its strings. */
 	private final JPanel actions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
 	/** Checks the fonts against the English a moment after the typing stops. */
@@ -340,6 +342,11 @@ public final class MainWindow {
 		prefs.put(PREF_ROMFS, dir.toString());
 		unused = o.unused();
 		patcher = new FontPatcher(index, o.patchSettings(), o.layoutOverrides(), o.imageEdits());
+		if (imagesWindow != null) {
+			// it lists the romfs that was open
+			imagesWindow.dispose();
+			imagesWindow = null;
+		}
 		plan = null;
 		editor = new EditorPanel(patcher, translations, colors, unused, actions, this::refresh);
 		setBody(editor);
@@ -432,10 +439,17 @@ public final class MainWindow {
 		startPlan();
 	}
 
+	/** Opens the images window, or brings it forward when it is open already. */
 	private void openImages() {
-		if (patcher != null) {
-			new ImagesDialog(frame, index, patcher.images(), this::startPlan).setVisible(true);
+		if (patcher == null) {
+			return;
 		}
+		if (imagesWindow == null || !imagesWindow.isDisplayable()) {
+			imagesWindow = new ImagesWindow(frame, index, patcher.images(), this::startPlan);
+		}
+		imagesWindow.setVisible(true);
+		imagesWindow.setExtendedState(imagesWindow.getExtendedState() & ~JFrame.ICONIFIED);
+		imagesWindow.toFront();
 	}
 
 	private boolean save() {
