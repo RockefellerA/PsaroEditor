@@ -302,11 +302,25 @@ public final class FontPatcher {
 
 	/**
 	 * What {@code usage}'s pane draws with: its own choice ({@link TextOverride#drawWith}) when it
-	 * has one, else what its font is set to for every pane ({@link PatchSettings#lettersFrom}).
+	 * has one; else, for a lower layer of one text, what the pane on top draws with
+	 * ({@link RomfsIndex#paneOnTop}), so the layers stay one text; else what its font is set to
+	 * for every pane ({@link PatchSettings#lettersFrom}).
 	 */
 	public Typeface drawnWith(Usage usage) {
-		String own = overrides.get(usage.layout(), usage.pane().name()).drawWith();
-		return own != null ? Typeface.of(own) : settings.lettersFrom(fontName(usage));
+		return faceOf(usage.layout(), usage.pane(), overrides.forLayout(usage.layout()));
+	}
+
+	/** What pane {@code p} of {@code layout} draws with, given the layout's changes {@code panes}; see {@link #drawnWith}. */
+	private Typeface faceOf(String layout, Bclyt.Pane p, Map<String, TextOverride> panes) {
+		TextOverride t = panes.getOrDefault(p.name(), TextOverride.NONE);
+		if (t.drawWith() != null) {
+			return Typeface.of(t.drawWith());
+		}
+		Bclyt.Pane top = index.paneOnTop(layout, p.name());
+		if (top != null) {
+			return faceOf(layout, top, panes);
+		}
+		return settings.lettersFrom(t.font() != null ? t.font() : p.text().font());
 	}
 
 	/** The font {@code usage}'s pane draws with when that is a bundled typeface; else null. */
@@ -352,9 +366,30 @@ public final class FontPatcher {
 			if (index.layeredUnder(top) != null) {
 				return Optional.empty();
 			}
-			Bcfnt mine = fullestCopy(font);
-			Bcfnt theirs = fullestCopy(top);
-			return Optional.ofNullable(mine == null || theirs == null ? null : UnderLayer.learn(mine, theirs));
+			// read where both are carried, from the copies sharing the most letters: each archive's
+			// copy holds only what its own text uses, so two archives' copies may share none
+			Bcfnt mine = null;
+			Bcfnt theirs = null;
+			long most = -1;
+			Set<Path> withTop = new HashSet<>(index.archivesWithFont(top));
+			for (Path archive : index.archivesWithFont(font)) {
+				if (!withTop.contains(archive)) {
+					continue;
+				}
+				try {
+					Bcfnt u = index.font(archive, font);
+					Bcfnt t = index.font(archive, top);
+					long shared = u == null || t == null ? -1 : u.cmap.keySet().stream().filter(t::has).count();
+					if (shared > most) {
+						most = shared;
+						mine = u;
+						theirs = t;
+					}
+				} catch (IOException | RuntimeException unreadable) {
+					// another archive's copies will do
+				}
+			}
+			return Optional.ofNullable(mine == null ? null : UnderLayer.learn(mine, theirs));
 		}).orElse(null);
 	}
 
@@ -640,17 +675,17 @@ public final class FontPatcher {
 				out.add(new FreeUse(archive, gameFont, face));
 			}
 		});
-		for (String layout : overrides.layouts()) {
+		Set<String> layouts = new TreeSet<>(overrides.layouts());
+		// a lower layer of one text follows the pane on top, which may draw from a typeface
+		layouts.addAll(index.layeredLayouts());
+		for (String layout : layouts) {
 			Map<String, TextOverride> panes = overrides.forLayout(layout);
-			if (panes.values().stream().noneMatch(t -> t.drawWith() != null && Typeface.of(t.drawWith()).bundled())) {
-				continue;
-			}
 			for (Path archive : index.archivesWithLayout(layout)) {
 				byte[] original = originalLayouts(archive).get(layout);
 				if (original == null) {
 					continue;
 				}
-				for (PaneFont pf : paneFonts(original, panes)) {
+				for (PaneFont pf : paneFonts(layout, original, panes)) {
 					if (pf.face().bundled() && carries(archive, pf.gameFont())) {
 						out.add(new FreeUse(archive, pf.gameFont(), pf.face()));
 					}
@@ -669,20 +704,25 @@ public final class FontPatcher {
 		}
 	}
 
-	/** The panes of layout {@code original} with a draw-with of their own in {@code panes}. */
-	private static List<PaneFont> paneFonts(byte[] original, Map<String, TextOverride> panes) {
+	/**
+	 * The panes of {@code layout} (as {@code original}) that draw with other than what their font
+	 * is set to: those with a draw-with of their own in {@code panes}, and lower layers of one
+	 * text following a pane on top that draws otherwise ({@link #drawnWith}).
+	 */
+	private List<PaneFont> paneFonts(String layout, byte[] original, Map<String, TextOverride> panes) {
 		List<PaneFont> out = new ArrayList<>();
-		if (panes.values().stream().allMatch(t -> t.drawWith() == null)) {
+		if (panes.values().stream().allMatch(t -> t.drawWith() == null) && !index.layeredLayouts().contains(layout)) {
 			return out;
 		}
 		for (Bclyt.Pane p : Bclyt.read(original).textPanes()) {
-			TextOverride t = panes.get(p.name());
-			if (t == null || t.drawWith() == null) {
+			TextOverride t = panes.getOrDefault(p.name(), TextOverride.NONE);
+			String gameFont = t.font() != null ? t.font() : p.text().font();
+			if (gameFont == null) {
 				continue;
 			}
-			String gameFont = t.font() != null ? t.font() : p.text().font();
-			if (gameFont != null) {
-				out.add(new PaneFont(p.name(), gameFont, Typeface.of(t.drawWith())));
+			Typeface face = faceOf(layout, p, panes);
+			if (t.drawWith() != null || face != settings.lettersFrom(gameFont)) {
+				out.add(new PaneFont(p.name(), gameFont, face));
 			}
 		}
 		return out;
@@ -792,7 +832,7 @@ public final class FontPatcher {
 		}
 		Map<String, TextOverride> panes = overrides.forLayout(layout);
 		Map<String, String> names = freeNames(archive);
-		byte[] expected = expected(original, panes, names);
+		byte[] expected = expected(layout, original, panes, names);
 		Map<String, String> renamed = new TreeMap<>(names);
 		renamed.keySet().retainAll(Bclyt.read(original).fonts());
 		boolean changed = !Arrays.equals(expected, original);
@@ -809,11 +849,11 @@ public final class FontPatcher {
 	 * font set to a typeface, for every pane), then pointing each pane with a draw-with of its own
 	 * at the font for it, added to the font list when need be.
 	 */
-	private static byte[] expected(byte[] original, Map<String, TextOverride> panes, Map<String, String> names) {
+	private byte[] expected(String layout, byte[] original, Map<String, TextOverride> panes, Map<String, String> names) {
 		byte[] out = panes.isEmpty() ? original : Bclyt.withText(original, panes);
 		out = names.isEmpty() ? out : Bclyt.withFontNames(out, names);
 		Map<String, String> own = new TreeMap<>();
-		for (PaneFont pf : paneFonts(original, panes)) {
+		for (PaneFont pf : paneFonts(layout, original, panes)) {
 			own.put(pf.pane(), pf.fontFile());
 		}
 		return Bclyt.withPaneFonts(out, own);
@@ -982,7 +1022,7 @@ public final class FontPatcher {
 					file.getValue().data = font.toBytes();
 				}
 				if (path.endsWith(".bclyt")) {
-					file.getValue().data = expected(file.getValue().data, overrides.forLayout(path), names);
+					file.getValue().data = expected(path, file.getValue().data, overrides.forLayout(path), names);
 				}
 				if (replaced.contains(path)) {
 					byte[] image = images.replacement(file.getValue().data);

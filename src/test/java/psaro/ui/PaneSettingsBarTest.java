@@ -99,7 +99,8 @@ class PaneSettingsBarTest {
 		FontPatcher fonts = new FontPatcher(index, PatchSettings.open(romfs), LayoutOverrides.open(romfs));
 		PaneSettingsBar bar = new PaneSettingsBar(fonts, () -> { });
 		List<Usage> usages = index.usages(index.table("menu"), "menu_0001");
-		assertEquals(List.of("Txt_Titl_03", "Txt_Elsewhere"), Fit.previewable(usages).stream().map(u -> u.pane().name()).toList());
+		// of the stack, the pane drawn on top is previewed
+		assertEquals(List.of("Txt_Titl_01", "Txt_Elsewhere"), Fit.previewable(usages).stream().map(u -> u.pane().name()).toList());
 
 		bar.show(usages.get(0), usages);
 		@SuppressWarnings("unchecked")

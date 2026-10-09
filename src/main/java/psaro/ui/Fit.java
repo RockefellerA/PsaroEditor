@@ -190,15 +190,19 @@ public record Fit(boolean shown, boolean tooWide, boolean tooTall, Set<Integer> 
 
 	/**
 	 * The panes worth previewing: a layout's shadow panes are dropped when it has a main pane, and
-	 * of panes stacked into one ({@link #layers}) only the first is kept.
+	 * of panes stacked into one ({@link #layers}) only the one drawn on top, the letters, is kept:
+	 * the layers under it follow what it draws with.
 	 */
 	public static List<Usage> previewable(List<Usage> usages) {
 		List<Usage> out = new ArrayList<>();
-		for (Usage u : usages) {
+		for (int i = 0; i < usages.size(); i++) {
+			Usage u = usages.get(i);
 			boolean twin = isShadow(u) && usages.stream()
 					.anyMatch(o -> !isShadow(o) && o.archive().equals(u.archive()) && o.layout().equals(u.layout()));
+			List<Usage> with = layers(u, usages);
+			boolean under = usages.subList(i + 1, usages.size()).stream().anyMatch(o -> !isShadow(o) && with.contains(o));
 			boolean layer = out.stream().anyMatch(o -> layers(o, usages).contains(u));
-			if (!twin && !layer) {
+			if (!twin && !under && !layer) {
 				out.add(u);
 			}
 		}

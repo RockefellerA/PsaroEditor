@@ -427,6 +427,45 @@ class FontPatcherTest {
 		assertFalse(p.plan(english).hasWork());
 	}
 
+	/**
+	 * One text in two layers of two fonts, the outline's font set to a typeface for every pane:
+	 * the outline here follows the letters on top, which keep the game font, so the layout points
+	 * it back at its game font; with the letters drawn anew, it follows them, unless it has a
+	 * choice of its own.
+	 */
+	@Test
+	void aLowerLayerDrawsWithWhatThePaneOnTopDrawsWith() throws IOException {
+		Path other = dir.resolve("layers");
+		String outline = "SulaPro_B_04a_20.bcfnt";
+		String letters = "SulaPro_B_01a_20.bcfnt";
+		SampleRomfs.table(other, "menu", Map.of("menu_0001", "はい"));
+		byte[] top = SampleRomfs.pane("Txt_Bd", "menu_0001");
+		top[0x52] = 1;
+		SampleRomfs.archive(other, "scene/menu/menu.arc.lz", "blyt/menu.bclyt", List.of(outline, letters),
+				Map.of(outline, SampleRomfs.font("はいえお漢", 10), letters, SampleRomfs.font("はいえお漢", 10)),
+				SampleRomfs.pane("Txt_Bk", "menu_0001"), top);
+		RomfsIndex idx = RomfsIndex.scan(other);
+		PatchSettings s = PatchSettings.open(other);
+		FontPatcher p = new FontPatcher(idx, s, LayoutOverrides.open(other));
+		Usage under = idx.usages(idx.table("menu"), "menu_0001").get(0);
+		assertEquals("Txt_Bd", idx.paneOnTop("blyt/menu.bclyt", "Txt_Bk").name());
+
+		s.setLettersFrom(outline, Typeface.M_PLUS_ROUNDED);
+		p.settingsChanged();
+		assertEquals(Typeface.GAME, p.drawnWith(under), "as the letters on top");
+		p.write(p.plan(List.of(new Text(idx.table("menu"), "menu_0001", "Yes"))), step -> { });
+		Bclyt.Layout layout = Bclyt.read(Darc.files(Archive.load(p.outputPath(other.resolve("scene/menu/menu.arc.lz"))))
+				.get("blyt/menu.bclyt").data);
+		assertEquals(outline, layout.textPanes().get(0).text().font(), "pointed back at the game font");
+		assertEquals(letters, layout.textPanes().get(1).text().font());
+
+		s.setLettersFrom(letters, Typeface.NOTO_SANS);
+		p.settingsChanged();
+		assertEquals(Typeface.NOTO_SANS, p.drawnWith(under));
+		p.overrides().set("blyt/menu.bclyt", List.of("Txt_Bk"), TextOverride.NONE.withDrawWith(Typeface.GAME.id()));
+		assertEquals(Typeface.GAME, p.drawnWith(under), "a choice of its own comes first");
+	}
+
 	/** A font set to a typeface for every pane, but one pane keeping the game font: it points back at it. */
 	@Test
 	void aPaneCanKeepTheGameFontWhenItsFontIsDrawnAnew() throws IOException {
