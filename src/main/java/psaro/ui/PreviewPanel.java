@@ -10,7 +10,6 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
@@ -82,16 +81,14 @@ final class PreviewPanel extends JPanel {
 	/** The table whose copy of the key the panes show, when they are not matched to this one's. */
 	private String sharedFrom;
 
-	/** Told the pane drawn after each redraw, null when none is. */
-	private Consumer<Usage> onPaneShown = u -> { };
-
 	/** Run after a color code is renamed or recolored, so the editor can show the new tags. */
 	private final Runnable onCodesChanged;
 	private ColorCodesDialog colorDialog;
 
 	/**
 	 * {@code onCodesChanged} runs after a color code is renamed or recolored; {@code onLayoutChanged}
-	 * after a pane's box or type settings change, so the editor can measure every string again.
+	 * after a pane's box or type settings, or its font's patch settings, change, so the editor can
+	 * measure every string again.
 	 */
 	PreviewPanel(FontPatcher fonts, CodeColors colors, Runnable onCodesChanged, Runnable onLayoutChanged) {
 		super(new BorderLayout());
@@ -181,16 +178,9 @@ final class PreviewPanel extends JPanel {
 		redraw();
 	}
 
-	/** Tells {@code listener} the pane drawn after each redraw, so it can follow the chosen pane's font. */
-	void onPaneShown(Consumer<Usage> listener) {
-		onPaneShown = listener;
-	}
-
-	/** Measures and draws again, keeping the chosen pane, after the fonts' settings change. */
-	void remeasure() {
-		measure();
-		pane.repaint();
-		redraw();
+	/** Shows the font settings as saved, after they were changed elsewhere (the Patch list). */
+	void fontsChanged() {
+		settings.reload();
 	}
 
 	/** Redraws with new English, keeping the chosen pane. */
@@ -247,21 +237,20 @@ final class PreviewPanel extends JPanel {
 			english.setText(" ");
 			notes.setText("");
 			settings.clear();
-			onPaneShown.accept(null);
 			return;
 		}
 		Usage u = choice.usage();
 		settings.show(u, usages);
 		double z = ZOOMS[Math.max(zoom.getSelectedIndex(), 0)];
-		fonts.prepare(u, englishRaw);
+		// the panes drawn as one text with this one, an outline under a fill, say, drawn together as the game does
+		List<Usage> stack = stack(u);
+		int measured = stack.indexOf(u);
+		stack.forEach(o -> fonts.prepare(o, englishRaw));
 		Bcfnt font = fonts.current(u);
 
-		var donors = Fit.donors(fonts, u);
 		// a changed pane: the Japanese as the game ships it, the English with the changes, to compare
 		boolean changed = Fit.changed(fonts, u);
-		TextRenderer.Result jp = changed
-				? TextRenderer.render(Fit.font(index, u), List::of, u.pane().text(), japaneseRaw, z, colors.palette())
-				: TextRenderer.render(font, donors, fonts.text(u), japaneseRaw, z, colors.palette());
+		TextRenderer.Result jp = TextRenderer.render(layers(stack, u, changed), measured, japaneseRaw, z, colors.palette());
 		japaneseHeading.setText(changed ? "Japanese — as the game ships it" : "Japanese");
 		englishHeading.setText(changed ? "English — with this pane's changes" : "English");
 		japanese.setText(null);
@@ -280,6 +269,7 @@ final class PreviewPanel extends JPanel {
 					+ ": Patch adds " + FreeFont.name(fonts.fontName(u), face) + " beside " + fonts.fontName(u)
 					+ " and points " + (ownChoice ? "this pane" : "the layouts") + " at it, leaving the game's font as it is.");
 		}
+		describeMixedLayers(stack, lines);
 		if (font == null) {
 			lines.add(fonts.fontName(u) + " is not in this archive (the 3DS system font is not part of the romfs), "
 					+ "so this pane is drawn with a stand-in typeface and its fit is approximate.");
@@ -288,7 +278,7 @@ final class PreviewPanel extends JPanel {
 			english.setIcon(null);
 			english.setText("Not translated yet.");
 		} else {
-			TextRenderer.Result en = TextRenderer.render(font, donors, fonts.text(u), englishRaw, z, colors.palette());
+			TextRenderer.Result en = TextRenderer.render(layers(stack, u, false), measured, englishRaw, z, colors.palette());
 			english.setText(null);
 			english.setIcon(new ImageIcon(en.image()));
 			describeFit(Fit.judge(fonts, u, englishRaw, japaneseRaw), lines);
@@ -296,7 +286,43 @@ final class PreviewPanel extends JPanel {
 			describeMissing(lines);
 		}
 		notes.setText(lines.stream().map(s -> "• " + s).collect(Collectors.joining("\n")));
-		onPaneShown.accept(u);
+	}
+
+	/** {@code u} and the panes drawn as one text with it ({@link Fit#layers}), in the order the layout draws them. */
+	private List<Usage> stack(Usage u) {
+		List<Usage> with = Fit.layers(u, usages);
+		return usages.stream().filter(o -> o.equals(u) || with.contains(o)).toList();
+	}
+
+	/**
+	 * The panes of {@code stack} to draw, each placed against {@code u}'s: as the game ships them
+	 * when {@code shipped}, else as patched, with their changes.
+	 */
+	private List<TextRenderer.Layer> layers(List<Usage> stack, Usage u, boolean shipped) {
+		List<TextRenderer.Layer> out = new ArrayList<>();
+		for (Usage o : stack) {
+			// a layout's y runs up, the image's down
+			double dx = o.pane().x() - u.pane().x();
+			double dy = u.pane().y() - o.pane().y();
+			out.add(shipped ? new TextRenderer.Layer(Fit.font(index, o), List::of, o.pane().text(), dx, dy)
+					: new TextRenderer.Layer(fonts.current(o), Fit.donors(fonts, o), fonts.text(o), dx, dy));
+		}
+		return out;
+	}
+
+	/**
+	 * When the layers of one text draw with different typefaces: the game draws each layer's
+	 * letters from its own, so a layer left in a game font without them shows nothing there.
+	 */
+	private void describeMixedLayers(List<Usage> stack, List<String> lines) {
+		Set<Typeface> faces = stack.stream().map(fonts::drawnWith).collect(Collectors.toSet());
+		if (faces.size() <= 1) {
+			return;
+		}
+		String each = stack.stream().map(o -> o.pane().name() + " (" + fonts.fontName(o).replace(".bcfnt", "") + ") with "
+				+ fonts.drawnWith(o).label()).collect(Collectors.joining(", "));
+		lines.add("This text is drawn in " + stack.size() + " layers that draw with different typefaces: " + each
+				+ ". Choose one under \"This pane draws with\" and every layer takes it.");
 	}
 
 	private static void describeFit(Fit.Judgement j, List<String> lines) {

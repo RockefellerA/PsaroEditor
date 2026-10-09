@@ -1,19 +1,27 @@
 package psaro.ui;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.awt.BorderLayout;
 import java.awt.Component;
 import java.awt.Container;
+import java.awt.Rectangle;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 
 import javax.swing.JButton;
 import javax.swing.JComboBox;
+import javax.swing.JLabel;
+import javax.swing.JPanel;
 import javax.swing.JSpinner;
+import javax.swing.JTextField;
+import javax.swing.SwingUtilities;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -22,6 +30,7 @@ import psaro.format.Bclyt.TextOverride;
 import psaro.patch.FontPatcher;
 import psaro.patch.LayoutOverrides;
 import psaro.patch.PatchSettings;
+import psaro.patch.Typeface;
 import psaro.romfs.RomfsIndex;
 import psaro.romfs.RomfsIndex.Usage;
 import psaro.romfs.SampleRomfs;
@@ -102,6 +111,13 @@ class PaneSettingsBarTest {
 		assertEquals(new TextOverride(null, null, null, null, 0.5f, null), fonts.overrides().get("blyt/menu.bclyt", "Txt_Titl_01"),
 				"the outline keeps its own font");
 		assertTrue(fonts.overrides().get("blyt/menu.bclyt", "Txt_Elsewhere").isEmpty());
+
+		// what the text draws with every layer takes, the outline in its own font too, or it would show nothing
+		JComboBox<?> drawWith = all(bar, JComboBox.class, new ArrayList<>()).get(1);
+		drawWith.setSelectedIndex(2); // M PLUS Rounded 1c
+		assertEquals("m-plus-rounded-1c", fonts.overrides().get("blyt/menu.bclyt", "Txt_Titl_02").drawWith());
+		assertEquals("m-plus-rounded-1c", fonts.overrides().get("blyt/menu.bclyt", "Txt_Titl_01").drawWith());
+		assertEquals(null, fonts.overrides().get("blyt/menu.bclyt", "Txt_Titl_01").font(), "and keeps its font");
 	}
 
 	@Test
@@ -160,5 +176,103 @@ class PaneSettingsBarTest {
 
 		drawWith.setSelectedIndex(0);
 		assertTrue(fonts.overrides().layouts().isEmpty());
+	}
+
+	@Test
+	void theFontsSettingsAreSavedForTheFontAndFollowThePanesFont() throws IOException {
+		Path romfs = dir.resolve("game");
+		SampleRomfs.table(romfs, "menu", Map.of("menu_0001", "はい"));
+		SampleRomfs.archive(romfs, "scene/menu/menu.arc.lz", "blyt/menu.bclyt", List.of("a.bcfnt", "b.bcfnt"), Map.of(),
+				SampleRomfs.pane("Txt_Yes", "menu_0001"));
+		RomfsIndex index = RomfsIndex.scan(romfs);
+		FontPatcher fonts = new FontPatcher(index, PatchSettings.open(romfs), LayoutOverrides.open(romfs));
+		int[] changes = {0};
+		PaneSettingsBar bar = new PaneSettingsBar(fonts, () -> changes[0]++);
+		JTextField field = all(bar, JTextField.class, new ArrayList<>()).stream()
+				.filter(f -> SwingUtilities.getAncestorOfClass(JSpinner.class, f) == null).findFirst().orElseThrow();
+		@SuppressWarnings("unchecked")
+		List<JComboBox<?>> combos = (List<JComboBox<?>>) (List<?>) all(bar, JComboBox.class, new ArrayList<>());
+		JComboBox<?> font = combos.get(0);
+		JComboBox<?> drawWith = combos.get(1);
+		JComboBox<?> everyPane = combos.get(2);
+		List<Usage> usages = index.usages(index.table("menu"), "menu_0001");
+
+		assertFalse(field.isEnabled(), "no pane, nothing to edit");
+		bar.show(usages.get(0), usages);
+		assertTrue(field.isEnabled());
+		assertTrue(labels(bar).contains("Every pane in a draws with:"));
+		assertEquals(0, changes[0], "showing a font is not a change");
+
+		field.setText("ty");
+		field.postActionEvent();
+		assertEquals("ty", fonts.settings().extraSpace("a.bcfnt"));
+		assertEquals(1, changes[0]);
+		assertEquals("ty", PatchSettings.open(romfs).extraSpace("a.bcfnt"), "saved for the Patch list");
+
+		assertEquals(Typeface.GAME, everyPane.getSelectedItem());
+		everyPane.setSelectedItem(Typeface.M_PLUS_ROUNDED);
+		assertEquals(Typeface.M_PLUS_ROUNDED, PatchSettings.open(romfs).lettersFrom("a.bcfnt"));
+		assertEquals(2, changes[0]);
+		assertEquals("Same as a (M PLUS Rounded 1c)", drawWith.getItemAt(0), "the pane's default names the font's setting");
+		assertTrue(fonts.overrides().layouts().isEmpty(), "a font setting, not the pane's");
+
+		// the pane switched to the layout's other font: the row edits that one, saving what was typed first
+		field.setText("tyl");
+		font.setSelectedItem("b.bcfnt");
+		assertEquals("tyl", fonts.settings().extraSpace("a.bcfnt"));
+		assertEquals("", field.getText());
+		assertEquals(Typeface.GAME, everyPane.getSelectedItem(), "b's own setting");
+		assertTrue(labels(bar).contains("Every pane in b draws with:"));
+		assertEquals("Same as b (Game font)", drawWith.getItemAt(0));
+
+		// changed in the Patch list: the bar shows it
+		fonts.settings().setExtraSpace("b.bcfnt", "r");
+		bar.reload();
+		assertEquals("r", field.getText());
+	}
+
+	/** In a panel too narrow for a row on one line, the bar wraps: everything stays inside it, the letters box too. */
+	@Test
+	void aNarrowBarWrapsInsteadOfCuttingOffTheLettersBox() throws IOException {
+		Path romfs = dir.resolve("game");
+		SampleRomfs.table(romfs, "menu", Map.of("menu_0001", "はい"));
+		SampleRomfs.archive(romfs, "scene/menu/menu.arc.lz", "blyt/menu.bclyt", List.of("a.bcfnt"), Map.of(),
+				SampleRomfs.pane("Txt_Yes", "menu_0001"));
+		RomfsIndex index = RomfsIndex.scan(romfs);
+		PaneSettingsBar bar = new PaneSettingsBar(new FontPatcher(index, PatchSettings.open(romfs),
+				LayoutOverrides.open(romfs)), () -> { });
+		List<Usage> usages = index.usages(index.table("menu"), "menu_0001");
+		bar.show(usages.get(0), usages);
+		JPanel holder = new JPanel(new BorderLayout());
+		holder.add(bar, BorderLayout.NORTH);
+		int unwrapped = bar.getPreferredSize().height;
+		// room for the widest label and its controls but not for every row on one line, whatever the platform's font
+		Container[] rows = Arrays.stream(bar.getComponents()).map(Container.class::cast).toArray(Container[]::new);
+		int widest = Arrays.stream(rows).flatMap(r -> Arrays.stream(r.getComponents()))
+				.mapToInt(c -> c.getPreferredSize().width).max().orElseThrow();
+		int width = widest + 2 * ((WrapLayout) rows[0].getLayout()).getHgap() + bar.getInsets().left + bar.getInsets().right;
+		assertTrue(width < bar.getPreferredSize().width, "too narrow for one line");
+		holder.setSize(width, 600);
+		// validate() lays out only what is on screen; lay the tree out as it would be
+		layOut(holder);
+		JTextField field = all(bar, JTextField.class, new ArrayList<>()).stream()
+				.filter(f -> SwingUtilities.getAncestorOfClass(JSpinner.class, f) == null).findFirst().orElseThrow();
+		Rectangle inBar = SwingUtilities.convertRectangle(field.getParent(), field.getBounds(), bar);
+		assertTrue(bar.getHeight() > unwrapped, "wrapped to more lines");
+		assertTrue(inBar.x >= 0 && inBar.getMaxX() <= bar.getWidth() && inBar.getMaxY() <= bar.getHeight(),
+				"the letters box " + inBar + " lies inside the bar " + bar.getSize());
+	}
+
+	private static void layOut(Container c) {
+		c.doLayout();
+		for (Component k : c.getComponents()) {
+			if (k instanceof Container cc) {
+				layOut(cc);
+			}
+		}
+	}
+
+	private static List<String> labels(Container c) {
+		return all(c, JLabel.class, new ArrayList<>()).stream().map(JLabel::getText).toList();
 	}
 }

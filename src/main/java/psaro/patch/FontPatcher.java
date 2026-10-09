@@ -312,27 +312,35 @@ public final class FontPatcher {
 	/**
 	 * The font drawn from {@code face} for game font {@code gameFont}, when {@code face} is a
 	 * bundled typeface and some archive carries the game font; else null. Measured on the copy
-	 * with the most glyphs.
+	 * with the most glyphs, and, for a font a layout draws under another in one text's layers
+	 * ({@link RomfsIndex#layeredUnder}), on that one's too, so the layers line up.
 	 */
 	public synchronized FreeFont freeFont(String gameFont, Typeface face) {
 		if (!face.bundled()) {
 			return null;
 		}
 		return freeFonts.computeIfAbsent(gameFont + "!" + face.id(), k -> {
-			Bcfnt reference = null;
-			for (Path archive : index.archivesWithFont(gameFont)) {
-				try {
-					Bcfnt copy = index.font(archive, gameFont);
-					if (copy != null && (reference == null || copy.cmap.size() > reference.cmap.size())) {
-						reference = copy;
-					}
-				} catch (IOException | RuntimeException unreadable) {
-					// another copy will do
-				}
-			}
-			return Optional.ofNullable(reference)
-					.map(r -> new FreeFont(gameFont, face, r, settings.extraSpace(gameFont)));
+			String bodyName = index.layeredUnder(gameFont);
+			Bcfnt body = bodyName == null ? null : fullestCopy(bodyName);
+			return Optional.ofNullable(fullestCopy(gameFont)).map(r -> new FreeFont(gameFont, face, r,
+					body == null ? null : bodyName, body, settings.extraSpace(gameFont)));
 		}).orElse(null);
+	}
+
+	/** The copy of {@code font} with the most glyphs, or null when no archive's can be read. */
+	private Bcfnt fullestCopy(String font) {
+		Bcfnt fullest = null;
+		for (Path archive : index.archivesWithFont(font)) {
+			try {
+				Bcfnt copy = index.font(archive, font);
+				if (copy != null && (fullest == null || copy.cmap.size() > fullest.cmap.size())) {
+					fullest = copy;
+				}
+			} catch (IOException | RuntimeException unreadable) {
+				// another copy will do
+			}
+		}
+		return fullest;
 	}
 
 	/**

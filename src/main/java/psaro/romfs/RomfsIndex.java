@@ -120,6 +120,8 @@ public final class RomfsIndex {
 	private final Map<Shape, List<Shown>> shapes;
 	/** Every layout image in every archive. */
 	private final List<Image> images;
+	/** A font drawn under another in one text's layers to the font drawn on top ({@link #layeredUnder}). */
+	private final Map<String, String> bodies;
 	/** Keyed by archive path + "!" + font name; empty when the archive does not carry the font. */
 	private final Map<String, Optional<Bcfnt>> fonts = new HashMap<>();
 	/** Keyed by font name. */
@@ -127,7 +129,8 @@ public final class RomfsIndex {
 
 	private RomfsIndex(Path root, Map<String, StringTable> tables, Map<String, List<Usage>> usages,
 			List<Usage> unresolved, int layoutCount, Map<String, List<Path>> fontHomes,
-			Map<String, List<Path>> layoutHomes, Map<Shape, List<Shown>> shapes, List<Image> images) {
+			Map<String, List<Path>> layoutHomes, Map<Shape, List<Shown>> shapes, List<Image> images,
+			Map<String, String> bodies) {
 		this.root = root;
 		this.tables = tables;
 		this.usages = usages;
@@ -137,6 +140,7 @@ public final class RomfsIndex {
 		this.layoutHomes = layoutHomes;
 		this.shapes = shapes;
 		this.images = images;
+		this.bodies = bodies;
 	}
 
 	/** Whether {@code dir} has the string tables an index is built from. */
@@ -163,6 +167,7 @@ public final class RomfsIndex {
 		Map<String, List<Path>> layoutHomes = new HashMap<>();
 		Map<Shape, List<Shown>> shapes = new HashMap<>();
 		List<Image> images = new ArrayList<>();
+		Map<String, String> bodies = new HashMap<>();
 		int layouts = 0;
 		for (Path archive : archives(root)) {
 			StringTable own = tables.get(strip(archive, ARCHIVE_SUFFIX));
@@ -192,6 +197,7 @@ public final class RomfsIndex {
 				layoutHomes.computeIfAbsent(file.getKey(), k -> new ArrayList<>()).add(archive);
 				Bclyt.Layout layout = Bclyt.read(file.getValue().data);
 				List<String> layoutFonts = List.copyOf(layout.fonts());
+				addBodies(layout.textPanes(), bodies);
 				for (Bclyt.Pane pane : layout.textPanes()) {
 					Usage usage = new Usage(archive, file.getKey(), pane, layoutFonts);
 					for (String key : pane.keys()) {
@@ -212,7 +218,39 @@ public final class RomfsIndex {
 		}
 		shapes.replaceAll((shape, shown) -> List.copyOf(shown));
 		return new RomfsIndex(root, Collections.unmodifiableMap(tables), usages, List.copyOf(unresolved), layouts,
-				fontHomes, layoutHomes, shapes, List.copyOf(images));
+				fontHomes, layoutHomes, shapes, List.copyOf(images), bodies);
+	}
+
+	/**
+	 * Notes, for each text pane drawn under others of one text in another font (an outline under
+	 * its fill: the same string, from the same place, in the same box), the font of the last of
+	 * them, the one drawn on top. A font seen first keeps what it was first seen under.
+	 */
+	private static void addBodies(List<Bclyt.Pane> text, Map<String, String> bodies) {
+		for (int i = 0; i < text.size(); i++) {
+			Bclyt.Pane under = text.get(i);
+			String body = null;
+			for (int j = i + 1; j < text.size(); j++) {
+				Bclyt.Pane over = text.get(j);
+				if (!under.keys().isEmpty() && under.keys().equals(over.keys()) && under.stacksOn(over)
+						&& under.text().boxWidth() == over.text().boxWidth()
+						&& under.text().boxHeight() == over.text().boxHeight()
+						&& !under.text().font().equals(over.text().font())) {
+					body = over.text().font();
+				}
+			}
+			if (body != null) {
+				bodies.putIfAbsent(under.text().font(), body);
+			}
+		}
+	}
+
+	/**
+	 * The font drawn on top of {@code font} where a layout draws one text in layers of different
+	 * fonts (a fill over an outline, the outline a font of its own), or null when no layout does.
+	 */
+	public String layeredUnder(String font) {
+		return bodies.get(font);
 	}
 
 	public Path root() {

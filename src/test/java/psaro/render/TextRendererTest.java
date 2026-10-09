@@ -161,4 +161,21 @@ class TextRendererTest {
 		assertEquals(0xFF, argb >>> 24);
 		assertTrue((argb & 0xFF) > 0xE0, Integer.toHexString(argb));
 	}
+
+	/** A text drawn in layers: a black one 3 down and right, under the white letters, shows where they do not cover it. */
+	@Test
+	void layersAreDrawnInOrderEachPlacedAgainstTheMeasuredOne() {
+		TextInfo black = new TextInfo("f.bcfnt", 100, 40, 4, 20, 20, 0, 0, "*", 0, 0, 0x000000FF, 0x000000FF);
+		List<TextRenderer.Layer> layers = List.of(new TextRenderer.Layer(font(), List::of, black, 3, 3),
+				new TextRenderer.Layer(font(), List::of, pane(100, 40, 0, 0, 0, 0), 0, 0));
+		Result r = TextRenderer.render(layers, 1, "A", 2, java.util.Map.of());
+		int pad = 6;
+		// the white block spans image x 8..21, y 14..37; the black one 6 pixels further on each way
+		int white = r.image().getRGB(pad + 3 * 2, pad + 7 * 2);
+		int shadow = r.image().getRGB(pad + 9 * 2 + 1, pad + 17 * 2 + 1);
+		assertTrue((white & 0xFF) > 0xE0, Integer.toHexString(white));
+		assertTrue((shadow & 0xFFFFFF) < 0x101010, Integer.toHexString(shadow));
+		assertEquals(TextRenderer.measure(font(), pane(100, 40, 0, 0, 0, 0), "A").textBounds(), r.textBounds(),
+				"measured as the white layer");
+	}
 }

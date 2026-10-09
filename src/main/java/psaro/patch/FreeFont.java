@@ -43,6 +43,15 @@ public final class FreeFont {
 	 * game font), each code in {@code extraSpace} one pixel wider.
 	 */
 	public FreeFont(String gameFont, Typeface face, Bcfnt reference, String extraSpace) {
+		this(gameFont, face, reference, null, null, extraSpace);
+	}
+
+	/**
+	 * As {@link #FreeFont(String, Typeface, Bcfnt, String)}, for a game font drawn under
+	 * {@code bodyName} in a text's layers, {@code body} a copy of that; null for none. Its letters
+	 * are then drawn as {@code body}'s grown, so the layers line up ({@link GlyphDrawing}).
+	 */
+	public FreeFont(String gameFont, Typeface face, Bcfnt reference, String bodyName, Bcfnt body, String extraSpace) {
 		if (!face.bundled()) {
 			throw new IllegalArgumentException("the game's fonts are not a typeface to draw from");
 		}
@@ -50,8 +59,9 @@ public final class FreeFont {
 		this.face = face;
 		this.reference = reference;
 		this.extraSpace = extraSpace;
-		this.pen = new GlyphDrawing.Pen(face, gameFont, reference);
-		this.fallback = face == Typeface.M_PLUS_ROUNDED ? null : new GlyphDrawing.Pen(Typeface.M_PLUS_ROUNDED, gameFont, reference);
+		this.pen = new GlyphDrawing.Pen(face, gameFont, reference, bodyName, body);
+		this.fallback = face == Typeface.M_PLUS_ROUNDED ? null
+				: new GlyphDrawing.Pen(Typeface.M_PLUS_ROUNDED, gameFont, reference, bodyName, body);
 		// both typefaces' cells, whatever is drawn, so a glyph comes out the same whichever others are
 		this.glyphs = pen.draw(List.of());
 		if (fallback != null) {

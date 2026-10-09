@@ -74,6 +74,13 @@ public final class TextRenderer {
 			boolean placeholder) {
 	}
 
+	/**
+	 * One pane of a text drawn in layers: its font, the donors for what that lacks, its settings,
+	 * and where its box sits against the measured layer's, in box units, down positive.
+	 */
+	public record Layer(Bcfnt font, Supplier<List<Bcfnt>> donors, TextInfo info, double dx, double dy) {
+	}
+
 	private record Line(List<Placed> chars, double width) {
 	}
 
@@ -112,9 +119,21 @@ public final class TextRenderer {
 	 */
 	public static Result render(Bcfnt font, Supplier<List<Bcfnt>> donors, TextInfo info, String raw, double zoom,
 			Map<Integer, Color> colors) {
-		Layout l = layout(font, donors, info, raw);
-		return new Result(draw(font, info, l, zoom, colors), l.missing, l.unborrowed, l.breaks, l.tooWide, l.tooTall,
-				l.bounds, font == null);
+		return render(List.of(new Layer(font, donors, info, 0, 0)), 0, raw, zoom, colors);
+	}
+
+	/**
+	 * Draws {@code raw} as the game draws a text made of several panes stacked into one (a fill
+	 * over an outline, say): {@code layers} in the order the layout draws them, each one's letters
+	 * over the last's. What fits and what is missing are those of {@code layers.get(measured)},
+	 * whose box the others are placed against.
+	 */
+	public static Result render(List<Layer> layers, int measured, String raw, double zoom, Map<Integer, Color> colors) {
+		List<Layout> layouts = layers.stream().map(p -> layout(p.font(), p.donors(), p.info(), raw)).toList();
+		Layout l = layouts.get(measured);
+		Bcfnt font = layers.get(measured).font();
+		return new Result(draw(layers, layouts, measured, zoom, colors), l.missing, l.unborrowed, l.breaks, l.tooWide,
+				l.tooTall, l.bounds, font == null);
 	}
 
 	private static Layout layout(Bcfnt font, Supplier<List<Bcfnt>> donors, TextInfo info, String raw) {
@@ -201,9 +220,16 @@ public final class TextRenderer {
 				!breaks.isEmpty() || blockW > info.boxWidth() + TOLERANCE, blockH > info.boxHeight() + TOLERANCE);
 	}
 
-	private static BufferedImage draw(Bcfnt font, TextInfo info, Layout l, double zoom, Map<Integer, Color> colors) {
+	private static BufferedImage draw(List<Layer> layers, List<Layout> layouts, int measured, double zoom,
+			Map<Integer, Color> colors) {
+		TextInfo info = layers.get(measured).info();
 		Rectangle2D box = new Rectangle2D.Double(0, 0, info.boxWidth(), info.boxHeight());
-		Rectangle2D all = box.createUnion(l.bounds);
+		Rectangle2D all = box;
+		for (int i = 0; i < layers.size(); i++) {
+			Rectangle2D b = layouts.get(i).bounds;
+			all = all.createUnion(new Rectangle2D.Double(b.getX() + layers.get(i).dx(), b.getY() + layers.get(i).dy(),
+					b.getWidth(), b.getHeight()));
+		}
 		double pad = 6 / zoom;
 		double ox = (pad - all.getMinX()) * zoom;
 		double oy = (pad - all.getMinY()) * zoom;
@@ -215,14 +241,31 @@ public final class TextRenderer {
 		g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
 		g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
 
-		Color base = textColour(info);
-		boolean lightText = luminance(base) > 0.5;
+		// the background set off against the layer drawn on top, the one that shows most
+		boolean lightText = luminance(textColour(layers.get(layers.size() - 1).info())) > 0.5;
 		g.setColor(lightText ? new Color(0x26, 0x26, 0x2B) : new Color(0xE9, 0xE6, 0xDF));
 		g.fillRect(0, 0, img.getWidth(), img.getHeight());
 		Rectangle2D.Double boxPx = new Rectangle2D.Double(ox, oy, info.boxWidth() * zoom, info.boxHeight() * zoom);
 		g.setColor(lightText ? new Color(0x3A, 0x3A, 0x42) : new Color(0xFF, 0xFF, 0xFF));
 		g.fill(boxPx);
 
+		for (int i = 0; i < layers.size(); i++) {
+			Layer layer = layers.get(i);
+			drawLetters(g, layer.font(), layer.info(), layouts.get(i), ox + layer.dx() * zoom, oy + layer.dy() * zoom,
+					zoom, colors);
+		}
+
+		g.setStroke(new BasicStroke(1f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 10f, new float[] {4f, 3f}, 0f));
+		g.setColor(lightText ? new Color(0x8A, 0x8A, 0x99) : new Color(0x99, 0x99, 0x99));
+		g.draw(new Rectangle2D.Double(boxPx.x - 0.5, boxPx.y - 0.5, boxPx.width + 1, boxPx.height + 1));
+		g.dispose();
+		return img;
+	}
+
+	/** One layer's letters, its box's top left at ({@code ox}, {@code oy}) on the image. */
+	private static void drawLetters(Graphics2D g, Bcfnt font, TextInfo info, Layout l, double ox, double oy, double zoom,
+			Map<Integer, Color> colors) {
+		Color base = textColour(info);
 		Map<String, BufferedImage> cells = new HashMap<>();
 		for (int i = 0; i < l.lines.size(); i++) {
 			double lineTop = l.bounds.getY() + i * (l.lineFeed + info.lineSpace());
@@ -263,12 +306,6 @@ public final class TextRenderer {
 				}
 			}
 		}
-
-		g.setStroke(new BasicStroke(1f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 10f, new float[] {4f, 3f}, 0f));
-		g.setColor(lightText ? new Color(0x8A, 0x8A, 0x99) : new Color(0x99, 0x99, 0x99));
-		g.draw(new Rectangle2D.Double(boxPx.x - 0.5, boxPx.y - 0.5, boxPx.width + 1, boxPx.height + 1));
-		g.dispose();
-		return img;
 	}
 
 	/** One glyph cell as ARGB, its grey level multiplied by {@code colour}. */

@@ -100,8 +100,6 @@ public final class EditorPanel extends JPanel {
 	/** Share of all strings done, beside the "String tables" heading. */
 	private final JProgressBar progress = new JProgressBar(0, 1000);
 	private final PreviewPanel preview;
-	/** The previewed pane's font's extra-space letters, under the English. */
-	private final ExtraSpaceBar extraSpace;
 	private static final String TRANSLATE = "Translate with Google";
 	private final JButton translate = new JButton(TRANSLATE);
 	/** The machine translation of the current string: shown, never saved. */
@@ -126,8 +124,6 @@ public final class EditorPanel extends JPanel {
 		this.unused = unused;
 		this.actions = actions;
 		this.preview = new PreviewPanel(fonts, colors, this::codesChanged, this::layoutChanged);
-		this.extraSpace = new ExtraSpaceBar(fonts, this::extraSpaceChanged);
-		preview.onPaneShown(extraSpace::show);
 
 		DefaultListModel<StringTable> tableItems = new DefaultListModel<>();
 		index.tables().forEach(tableItems::addElement);
@@ -271,10 +267,7 @@ public final class EditorPanel extends JPanel {
 		enHeader.add(enActions, BorderLayout.EAST);
 		enBody.add(enHeader, BorderLayout.NORTH);
 		enBody.add(new JScrollPane(english), BorderLayout.CENTER);
-		JPanel below = new JPanel(new BorderLayout());
-		below.add(extraSpace, BorderLayout.NORTH);
-		below.add(hint, BorderLayout.SOUTH);
-		enBody.add(below, BorderLayout.SOUTH);
+		enBody.add(hint, BorderLayout.SOUTH);
 		en.add(enBody, BorderLayout.CENTER);
 		JSplitPane split = new JSplitPane(JSplitPane.VERTICAL_SPLIT, jp, en);
 		split.setResizeWeight(0.4);
@@ -507,21 +500,14 @@ public final class EditorPanel extends JPanel {
 
 	/** Measures every string again, after the font patch settings change. */
 	public void fontsChanged() {
-		extraSpace.reload();
+		preview.fontsChanged();
 		strings.remeasure();
 		if (key != null) {
 			codesChanged();
 		}
 	}
 
-	/** After a font's extra-space letters change: every fit and the preview again, and the window's patch check. */
-	private void extraSpaceChanged() {
-		strings.remeasure();
-		preview.remeasure();
-		onChange.run();
-	}
-
-	/** After a pane's box or type settings change: every fit again, and the window's patch check. */
+	/** After a pane's or its font's settings change: every fit again, and the window's patch check. */
 	private void layoutChanged() {
 		strings.remeasure();
 		onChange.run();

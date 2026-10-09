@@ -119,6 +119,25 @@ class RomfsIndexTest {
 		assertTrue(index.sameShape(yes) == index.sameShape(index.usages(index.table("common"), "comm_0001").get(0)));
 	}
 
+	/**
+	 * One text drawn in three layers of three fonts, as the tutorial titles are: each lower layer's
+	 * font is under the top one's. A pane of another string at the same place is not a layer.
+	 */
+	@Test
+	void aFontDrawnUnderAnotherInOneTextsLayersKnowsTheTopOne() throws IOException {
+		table("menu", Map.of("menu_0001", "はい", "menu_0002", "いいえ"));
+		byte[] middle = pane("Txt_Fr", "menu_0001");
+		middle[0x52] = 2;
+		byte[] top = pane("Txt_Bd", "menu_0001");
+		top[0x52] = 1;
+		archive("scene/menu/menu.arc.lz", "blyt/menu.bclyt", List.of("a.bcfnt", "b.bcfnt", "c.bcfnt"),
+				pane("Txt_Bk", "menu_0001"), middle, top, pane("Txt_Alt", "menu_0002"));
+		RomfsIndex index = RomfsIndex.scan(romfs);
+		assertEquals("b.bcfnt", index.layeredUnder("a.bcfnt"));
+		assertEquals("b.bcfnt", index.layeredUnder("c.bcfnt"));
+		assertNull(index.layeredUnder("b.bcfnt"), "drawn on top");
+	}
+
 	@Test
 	void folderWithoutStringTablesIsNotARomfs() throws IOException {
 		assertFalse(RomfsIndex.looksLikeRomfs(romfs));

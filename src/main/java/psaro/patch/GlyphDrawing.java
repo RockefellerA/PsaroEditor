@@ -27,6 +27,11 @@ import psaro.format.Texture;
  * letter takes the share of the Japanese a Japanese font gives it. The game's fonts set their
  * nominal size their own way, so it cannot say.
  *
+ * <p>A font drawn under another in one text's layers (an outline of its own under the fill's
+ * font, as the tutorial titles' black layers under their white letters) holds the top font's
+ * letters grown outward. It is drawn so: at the top font's size, grown by as much as its glyphs
+ * are wider and taller than that font's, so the layers line up as the game's do.
+ *
  * <p>Like the game's own, an outline overhangs the letter's advance rather than widening it.
  * Every glyph sits in a cell of one size per font, so the same letter comes out the same
  * whichever others are drawn with it.
@@ -58,10 +63,33 @@ public final class GlyphDrawing {
 		private final int width;
 
 		Pen(Typeface face, String targetName, Bcfnt target) {
-			String weight = Typeface.weightFor(targetName);
+			this(face, targetName, target, null, null);
+		}
+
+		/**
+		 * {@code body} is the font drawn on top of {@code target} in a text's layers, named
+		 * {@code bodyName}; null for none. When {@code target}'s letters are {@code body}'s grown,
+		 * they are drawn at {@code body}'s size, grown by as much.
+		 */
+		Pen(Typeface face, String targetName, Bcfnt target, String bodyName, Bcfnt body) {
 			this.target = target;
-			this.look = look(target);
-			this.sized = face.font(weight).deriveFont((float) emSize(target, look, weight));
+			Look own = look(target);
+			double grown = body == null ? Double.NaN : grownBy(target, body);
+			String weight;
+			double size;
+			if (Double.isNaN(grown)) {
+				weight = Typeface.weightFor(targetName);
+				this.look = own;
+				size = emSize(target, own, weight);
+			} else {
+				// the top font's letters at its size, scaled as the pane scales this font against it
+				weight = Typeface.weightFor(bodyName);
+				Look top = look(body);
+				double scale = (double) target.height / body.height;
+				this.look = new Look(own.fill, own.outline, top.radius * scale + grown);
+				size = emSize(body, top, weight) * scale;
+			}
+			this.sized = face.font(weight).deriveFont((float) size);
 			// one cell size per font: tall enough for the typeface, wide enough for its ASCII
 			this.pad = (int) Math.ceil(look.radius) + 1;
 			var lm = sized.getLineMetrics("Ag", FRC);
@@ -303,6 +331,56 @@ public final class GlyphDrawing {
 			}
 		}
 		return sizes;
+	}
+
+	/**
+	 * How many pixels {@code font}'s letters are {@code top}'s grown by on each side, scaled as a
+	 * pane scales the two fonts against each other: the median, over letters both have, of half
+	 * how much wider and taller their ink is. NaN when they share too few letters, or the letters
+	 * do not grow by about one amount, so the two are not one text's layers after all.
+	 */
+	static double grownBy(Bcfnt font, Bcfnt top) {
+		double scale = (double) font.height / top.height;
+		List<Double> grown = new ArrayList<>();
+		for (int c : font.cmap.keySet()) {
+			if (grown.size() >= 80 || c <= 0x20 || !top.has(c)) {
+				continue;
+			}
+			int[] mine = inkBox(font, c);
+			int[] theirs = inkBox(top, c);
+			if (mine == null || theirs == null) {
+				continue;
+			}
+			grown.add(((mine[2] - mine[0]) - scale * (theirs[2] - theirs[0])) / 2);
+			grown.add(((mine[3] - mine[1]) - scale * (theirs[3] - theirs[1])) / 2);
+		}
+		if (grown.size() < 6) {
+			return Double.NaN;
+		}
+		grown.sort(null);
+		double median = grown.get(grown.size() / 2);
+		double spread = grown.get(grown.size() * 3 / 4) - grown.get(grown.size() / 4);
+		return median < -0.5 || spread > 1.5 ? Double.NaN : Math.max(0, median);
+	}
+
+	/** {@code c}'s clearly visible pixels' bounds in its cell, as left, top, right, bottom (exclusive); null when blank. */
+	private static int[] inkBox(Bcfnt font, int c) {
+		int[] px = font.rgba(font.cmap.get(c));
+		int x0 = font.cellW;
+		int y0 = font.cellH;
+		int x1 = -1;
+		int y1 = -1;
+		for (int y = 0; y < font.cellH; y++) {
+			for (int x = 0; x < font.cellW; x++) {
+				if ((px[y * font.cellW + x] & 0xFF) > 64) {
+					x0 = Math.min(x0, x);
+					y0 = Math.min(y0, y);
+					x1 = Math.max(x1, x);
+					y1 = Math.max(y1, y);
+				}
+			}
+		}
+		return x1 < 0 ? null : new int[] {x0, y0, x1 + 1, y1 + 1};
 	}
 
 	/** Rows of {@code c}'s cell holding a clearly visible pixel, top to bottom; 0 for a blank glyph. */
