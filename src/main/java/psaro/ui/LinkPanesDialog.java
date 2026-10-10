@@ -40,6 +40,9 @@ import psaro.romfs.RomfsIndex.Usage;
  * Picks the panes a string is shown in, for one the game draws from code ({@link
  * psaro.project.PaneLinks}): every text pane in the romfs, those linked first, then those whose
  * key no table has (the panes the game fills from code), filtered by what is typed.
+ *
+ * <p>The ticks can be copied and pasted into another string's, for strings shown in the same
+ * panes (every character's name in a data table): the copy is kept while the editor runs.
  */
 final class LinkPanesDialog extends JDialog {
 
@@ -47,10 +50,16 @@ final class LinkPanesDialog extends JDialog {
 	private record Entry(PaneRef ref, String label, boolean noString) {
 	}
 
+	/** The ticks last copied, in list order, and the string they were copied from. */
+	private static List<PaneRef> copied = List.of();
+	private static String copiedFrom;
+
 	private final List<Entry> all;
 	private final Set<PaneRef> chosen;
 	private final DefaultListModel<Entry> shown = new DefaultListModel<>();
 	private final JTextField filter = new JTextField(30);
+	private final JButton copy = new JButton("Copy selections");
+	private final JButton paste = new JButton("Paste selections");
 	private boolean accepted;
 
 	private LinkPanesDialog(Window owner, RomfsIndex index, String what, Collection<PaneRef> linked) {
@@ -115,6 +124,27 @@ final class LinkPanesDialog extends JDialog {
 			}
 		});
 
+		copy.addActionListener(e -> copySelections(what));
+		paste.addActionListener(e -> {
+			pasteSelections();
+			list.repaint();
+		});
+		// in the list the keys copy and paste the ticks; the filter keeps them for its text
+		list.getInputMap().put(KeyStroke.getKeyStroke("ctrl C"), "copyTicks");
+		list.getActionMap().put("copyTicks", new AbstractAction() {
+			@Override
+			public void actionPerformed(java.awt.event.ActionEvent e) {
+				copy.doClick();
+			}
+		});
+		list.getInputMap().put(KeyStroke.getKeyStroke("ctrl V"), "pasteTicks");
+		list.getActionMap().put("pasteTicks", new AbstractAction() {
+			@Override
+			public void actionPerformed(java.awt.event.ActionEvent e) {
+				paste.doClick();
+			}
+		});
+
 		JButton ok = new JButton("OK");
 		ok.addActionListener(e -> {
 			accepted = true;
@@ -129,9 +159,16 @@ final class LinkPanesDialog extends JDialog {
 		JPanel top = new JPanel(new BorderLayout());
 		top.add(help, BorderLayout.NORTH);
 		top.add(filter, BorderLayout.CENTER);
-		JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT));
-		buttons.add(ok);
-		buttons.add(cancel);
+		JPanel clipboard = new JPanel(new FlowLayout(FlowLayout.LEFT));
+		clipboard.add(copy);
+		clipboard.add(paste);
+		JPanel close = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+		close.add(ok);
+		close.add(cancel);
+		JPanel buttons = new JPanel(new BorderLayout());
+		buttons.add(clipboard, BorderLayout.WEST);
+		buttons.add(close, BorderLayout.EAST);
+		updateClipboard();
 		JPanel content = new JPanel(new BorderLayout(0, 6));
 		content.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
 		content.add(top, BorderLayout.NORTH);
@@ -154,14 +191,45 @@ final class LinkPanesDialog extends JDialog {
 		if (!d.accepted) {
 			return null;
 		}
-		// in list order, so the file reads the same whatever order they were ticked in
-		return d.all.stream().map(Entry::ref).filter(d.chosen::contains).toList();
+		return d.ticked();
+	}
+
+	/** The ticked panes in list order, so the file reads the same whatever order they were ticked in. */
+	private List<PaneRef> ticked() {
+		return all.stream().map(Entry::ref).filter(chosen::contains).toList();
 	}
 
 	private void toggle(Entry e) {
 		if (!chosen.remove(e.ref())) {
 			chosen.add(e.ref());
 		}
+		updateClipboard();
+	}
+
+	/** Keeps the ticks as they stand, {@code what}'s, for {@link #pasteSelections} here or in another string's. */
+	private void copySelections(String what) {
+		copied = ticked();
+		copiedFrom = what;
+		updateClipboard();
+	}
+
+	/** Ticks the panes copied, and only them, bringing them to the top of the list. */
+	private void pasteSelections() {
+		chosen.clear();
+		chosen.addAll(copied);
+		all.sort(order(chosen));
+		refilter();
+		updateClipboard();
+	}
+
+	private void updateClipboard() {
+		copy.setEnabled(!chosen.isEmpty());
+		copy.setToolTipText("Copy the " + chosen.size() + " ticked pane" + (chosen.size() == 1 ? "" : "s")
+				+ ", to paste into another string's (Ctrl+C in the list)");
+		paste.setEnabled(!copied.isEmpty());
+		paste.setToolTipText(copied.isEmpty() ? "Copy a string's ticks first, then paste them here"
+				: "Tick the " + copied.size() + " pane" + (copied.size() == 1 ? "" : "s") + " copied from " + copiedFrom
+						+ " instead of these (Ctrl+V in the list)");
 	}
 
 	private void refilter() {
@@ -202,8 +270,13 @@ final class LinkPanesDialog extends JDialog {
 					ref.pane(), keys, none ? ", no string" : "", t.font() == null ? "system font" : t.font().replace(".bcfnt", ""),
 					t.boxWidth(), t.boxHeight()), none));
 		});
-		out.sort(Comparator.comparing((Entry e) -> !linked.contains(e.ref())).thenComparing(e -> !e.noString())
-				.thenComparing(e -> e.ref().layout()).thenComparing(e -> e.ref().pane()));
+		out.sort(order(linked));
 		return out;
+	}
+
+	/** Those in {@code linked} first, then those with no string, then by layout and pane. */
+	private static Comparator<Entry> order(Set<PaneRef> linked) {
+		return Comparator.comparing((Entry e) -> !linked.contains(e.ref())).thenComparing(e -> !e.noString())
+				.thenComparing(e -> e.ref().layout()).thenComparing(e -> e.ref().pane());
 	}
 }
