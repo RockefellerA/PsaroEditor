@@ -183,7 +183,9 @@ public final class GlyphDrawing {
 	/**
 	 * {@code font}'s fill, outline and outline thickness, from its glyphs. The colours are those of
 	 * its clearly light and clearly dark opaque pixels, so the blend between them does not grey
-	 * them; the thickness counts the outline's faint outer pixels by how opaque they are.
+	 * them; the thickness counts the outline's faint outer pixels by how opaque they are. Whichever
+	 * kind borders the transparent background is the outline: dark round light letters (04a), or
+	 * light round dark ones (10a), where the dark letters hardly meet the background.
 	 */
 	static Look look(Bcfnt font) {
 		long[] light = new long[4];
@@ -192,8 +194,11 @@ public final class GlyphDrawing {
 		long[] darkest = new long[4];
 		long lightEdge = 0;
 		long darkEdge = 0;
-		long boundary = 0;
+		// light pixels' sides against dark ones, and dark pixels' against light: where fill meets outline
+		long lightBoundary = 0;
+		long darkBoundary = 0;
 		double darkArea = 0;
+		double lightArea = 0;
 		int step = Math.max(1, font.glyphs.size() / 300);
 		for (int i = 0; i < font.glyphs.size(); i += step) {
 			int[] px = font.rgba(i);
@@ -201,8 +206,12 @@ public final class GlyphDrawing {
 				for (int x = 0; x < font.cellW; x++) {
 					int p = px[y * font.cellW + x];
 					int lum = luminance(p);
-					if ((p & 0xFF) >= 40 && lum < 128) {
-						darkArea += (p & 0xFF) / 255.0;
+					if ((p & 0xFF) >= 40) {
+						if (lum < 128) {
+							darkArea += (p & 0xFF) / 255.0;
+						} else {
+							lightArea += (p & 0xFF) / 255.0;
+						}
 					}
 					if ((p & 0xFF) < 200) {
 						continue;
@@ -221,8 +230,12 @@ public final class GlyphDrawing {
 						int ny = y + d[1];
 						int q = nx < 0 || ny < 0 || nx >= font.cellW || ny >= font.cellH ? 0 : px[ny * font.cellW + nx];
 						edge |= (q & 0xFF) < 40;
-						if (isLight && (q & 0xFF) >= 40 && luminance(q) < 128) {
-							boundary++;
+						if ((q & 0xFF) >= 40 && isLight != luminance(q) >= 128) {
+							if (isLight) {
+								lightBoundary++;
+							} else {
+								darkBoundary++;
+							}
 						}
 					}
 					if (edge) {
@@ -239,14 +252,21 @@ public final class GlyphDrawing {
 		if (all == 0) {
 			return new Look(0xFFFFFFFF, 0xFFFFFFFF, 0);
 		}
-		boolean outlined = dark[3] > 0.15 * all && light[3] > 0.15 * all && darkEdge > lightEdge && boundary > 0;
-		if (!outlined) {
-			// a font of dark letters (no light pixels at all) is drawn dark: each colour only from pixels it has
-			int colour = light[3] >= dark[3] ? mean(lightest[3] > 0 ? lightest : light) : mean(dark);
-			return new Look(colour, colour, 0);
+		if (dark[3] > 0.15 * all && light[3] > 0.15 * all) {
+			int lightColour = mean(lightest[3] > 0 ? lightest : light);
+			int darkColour = mean(darkest[3] > 0 ? darkest : dark);
+			if (darkEdge > lightEdge && lightBoundary > 0) {
+				return new Look(lightColour, darkColour, Math.max(0.5, darkArea / lightBoundary));
+			}
+			// light round dark letters only when the dark all but never meets the background: a drop
+			// shadow (02a) or a light-to-dark gradient meets it about as often as the light does
+			if (lightEdge > darkEdge && darkEdge < 0.2 * (lightEdge + darkEdge) && darkBoundary > 0) {
+				return new Look(darkColour, lightColour, Math.max(0.5, lightArea / darkBoundary));
+			}
 		}
-		return new Look(mean(lightest[3] > 0 ? lightest : light), mean(darkest[3] > 0 ? darkest : dark),
-				Math.max(0.5, darkArea / boundary));
+		// a font of dark letters (no light pixels at all) is drawn dark: each colour only from pixels it has
+		int colour = light[3] >= dark[3] ? mean(lightest[3] > 0 ? lightest : light) : mean(dark);
+		return new Look(colour, colour, 0);
 	}
 
 	private static void add(long[] sum, int rgba) {

@@ -6,6 +6,7 @@ import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -95,6 +96,13 @@ final class PreviewPanel extends JPanel {
 	/** The string shown, or null. */
 	private StringTable table;
 	private String key;
+	/**
+	 * Per string, by {@code table + "/" + key}, the pane last picked or changed, which the preview
+	 * opens on again: opened on another, a change made to this one would look undone.
+	 */
+	private final Map<String, PaneRef> picked = new HashMap<>();
+	/** Set while the picker is filled in, so that is not taken as a pick. */
+	private boolean filling;
 	private ColorCodesDialog colorDialog;
 
 	/**
@@ -107,6 +115,7 @@ final class PreviewPanel extends JPanel {
 		this.index = fonts.index();
 		this.fonts = fonts;
 		this.settings = new PaneSettingsBar(fonts, () -> {
+			remember();
 			measure();
 			pane.repaint();
 			redraw();
@@ -117,7 +126,12 @@ final class PreviewPanel extends JPanel {
 		this.onCodesChanged = onCodesChanged;
 		this.onLayoutChanged = onLayoutChanged;
 		zoom.setSelectedIndex(1);
-		pane.addActionListener(e -> redraw());
+		pane.addActionListener(e -> {
+			if (!filling) {
+				remember();
+			}
+			redraw();
+		});
 		zoom.addActionListener(e -> redraw());
 		JButton colorButton = new JButton("Colors…");
 		colorButton.setToolTipText("Match the game's color codes to the colors it shows");
@@ -171,8 +185,9 @@ final class PreviewPanel extends JPanel {
 	/**
 	 * Shows {@code key} of {@code table}: the panes that use it, its Japanese, and its English (null if none).
 	 * {@code sharedFrom} names the table whose copy of the same key those panes are matched to,
-	 * when none is matched to this one's; else null. The first pane the English does not fit is
-	 * chosen, so the preview shows what the Fits column flags.
+	 * when none is matched to this one's; else null. The pane last picked or changed for the string
+	 * is chosen again; for a string with none, the first pane the English does not fit, so the
+	 * preview shows what the Fits column flags.
 	 */
 	void showString(StringTable table, String key, List<Usage> all, String japaneseText, String englishText,
 			String sharedFrom) {
@@ -184,20 +199,39 @@ final class PreviewPanel extends JPanel {
 		japaneseRaw = japaneseText;
 		englishRaw = englishText;
 		measure();
+		PaneRef last = picked.get(table.name() + "/" + key);
+		filling = true;
 		pane.removeAllItems();
 		Choice first = null;
+		Choice again = null;
 		for (Usage u : Fit.previewable(all)) {
 			Choice c = new Choice(u);
 			pane.addItem(c);
 			if (first == null && overflowing.contains(u)) {
 				first = c;
 			}
+			if (again == null && ref(u).equals(last)) {
+				again = c;
+			}
 		}
-		if (first != null) {
-			pane.setSelectedItem(first);
+		if (again != null || first != null) {
+			pane.setSelectedItem(again != null ? again : first);
 		}
+		filling = false;
 		pane.setEnabled(pane.getItemCount() > 1);
 		redraw();
+	}
+
+	/** Notes the pane shown as the one picked for the string. */
+	private void remember() {
+		Choice choice = (Choice) pane.getSelectedItem();
+		if (table != null && choice != null) {
+			picked.put(table.name() + "/" + key, ref(choice.usage()));
+		}
+	}
+
+	private static PaneRef ref(Usage u) {
+		return new PaneRef(u.layout(), u.pane().name());
 	}
 
 	/** Shows the font settings as saved, after they were changed elsewhere (the Patch list). */

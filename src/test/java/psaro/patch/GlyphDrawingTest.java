@@ -17,13 +17,18 @@ class GlyphDrawingTest {
 
 	/** An LA8 font of white blocks ringed by a 1-pixel black outline, like the game's 04a style. */
 	private static Bcfnt outlined(String chars) {
+		return blocks(chars, 0xFFFFFFFF, 0x000000FF);
+	}
+
+	/** An LA8 font of {@code fill} blocks ringed by a 1-pixel {@code ring} outline. */
+	private static Bcfnt blocks(String chars, int fill, int ring) {
 		Bcfnt f = SampleRomfs.font(chars, 10);
 		for (Bcfnt.Glyph g : f.glyphs) {
 			int[] px = new int[f.cellW * f.cellH];
 			for (int y = 1; y <= f.baseline; y++) {
 				for (int x = 0; x < f.cellW; x++) {
-					boolean ring = y == 1 || y == f.baseline || x == 0 || x == f.cellW - 1;
-					px[y * f.cellW + x] = Texture.fromRgba(ring ? 0x000000FF : 0xFFFFFFFF, f.format);
+					boolean edge = y == 1 || y == f.baseline || x == 0 || x == f.cellW - 1;
+					px[y * f.cellW + x] = Texture.fromRgba(edge ? ring : fill, f.format);
 				}
 			}
 			g.pixels = px;
@@ -62,6 +67,34 @@ class GlyphDrawingTest {
 		assertEquals(0xFFFFFFFF, look.fill());
 		assertEquals(0x000000FF, look.outline());
 		assertTrue(look.radius() > 0.5 && look.radius() < 2, "radius " + look.radius());
+	}
+
+	/** Dark letters in a light outline, like the game's 10a style: not white letters with no outline. */
+	@Test
+	void aLightOutlineRoundDarkLettersIsRead() {
+		GlyphDrawing.Look look = GlyphDrawing.look(blocks("あいうえお", 0x000000FF, 0xFFFFFFFF));
+		assertEquals(0x000000FF, look.fill());
+		assertEquals(0xFFFFFFFF, look.outline());
+		assertTrue(look.radius() > 0.5 && look.radius() < 2, "radius " + look.radius());
+	}
+
+	/** Light letters over a dark shadow below, like the game's 02a style: no outline. */
+	@Test
+	void aDropShadowIsNotAnOutline() {
+		Bcfnt f = SampleRomfs.font("あいうえお", 10);
+		for (Bcfnt.Glyph g : f.glyphs) {
+			int[] px = new int[f.cellW * f.cellH];
+			for (int y = 1; y <= f.baseline; y++) {
+				for (int x = 0; x < f.cellW; x++) {
+					boolean shadow = y >= f.baseline - 1;
+					px[y * f.cellW + x] = Texture.fromRgba(shadow ? 0x000000FF : 0xFFFFFFFF, f.format);
+				}
+			}
+			g.pixels = px;
+		}
+		GlyphDrawing.Look look = GlyphDrawing.look(f);
+		assertEquals(0, look.radius());
+		assertEquals(0xFFFFFFFF, look.fill());
 	}
 
 	@Test

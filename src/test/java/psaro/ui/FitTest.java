@@ -12,6 +12,7 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import psaro.format.Bclyt;
 import psaro.format.Bclyt.TextOverride;
 import psaro.patch.FontPatcher;
 import psaro.patch.LayoutOverrides;
@@ -67,5 +68,28 @@ class FitTest {
 		Fit.Judgement after = Fit.judge(fonts, u, "いは", japanese);
 		assertEquals(Fit.Limit.JAPANESE, after.heightBy());
 		assertEquals(before.limitHeight(), after.limitHeight(), 1e-6);
+	}
+
+	/** A list's rows show one string in one shape: a change to one is a change to all. */
+	@Test
+	void theRowsOfOneListTakeEachOthersChanges() {
+		Bclyt.TextInfo row = new Bclyt.TextInfo("a.bcfnt", 48, 20, 4, 22, 22, 0, 0, "*", 3, 0, -1, -1);
+		Bclyt.TextInfo wider = new Bclyt.TextInfo("a.bcfnt", 164, 20, 4, 22, 22, 0, 0, "*", 3, 0, -1, -1);
+		Usage first = usage("blyt/record.bclyt", "Txt_beat_01", "rcrd_0062", row, 0);
+		Usage second = usage("blyt/record.bclyt", "Txt_beat_02", "rcrd_0062", row, 30);
+		Usage otherShape = usage("blyt/record.bclyt", "Txt_cont_01", "rcrd_0062", wider, 60);
+		Usage otherString = usage("blyt/record.bclyt", "Txt_cont_02", "rcrd_0063", row, 90);
+		Usage otherLayout = usage("blyt/total.bclyt", "Txt_beat_01", "rcrd_0062", row, 0);
+		Usage elsewhere = usage("blyt/record.bclyt", "Txt_Elsewhere", "rcrd_0062", row, -60);
+		List<Usage> all = List.of(first, second, otherShape, otherString, otherLayout, elsewhere);
+
+		assertEquals(List.of(second), Fit.together(first, all));
+		assertEquals(List.of(first), Fit.together(second, all));
+		assertTrue(Fit.layers(first, all).isEmpty(), "rows are not layers of one text");
+	}
+
+	private static Usage usage(String layout, String pane, String key, Bclyt.TextInfo text, float y) {
+		return new Usage(Path.of("record.arc.lz"), layout, new Bclyt.Pane("txt1", pane, List.of(key), text, null, 0, y),
+				List.of(text.font()));
 	}
 }

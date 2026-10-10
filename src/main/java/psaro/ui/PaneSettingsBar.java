@@ -44,8 +44,9 @@ import psaro.romfs.RomfsIndex.Usage;
  * dialog lists (a letter from another font can crowd the next one, its outline included);
  * <li>the pane's box, font size and spacing.
  * </ol>
- * A pane's change is made to the layout, so it applies to that pane, and its drop-shadow twin or
- * the panes layered with it ({@link Fit#layers}), in every archive that carries the layout; a
+ * A pane's change is made to the layout, so it applies to that pane, and its drop-shadow twin, the
+ * panes layered with it and the other rows of a list it is one row of ({@link Fit#together}), in
+ * every archive that carries the layout; a
  * pane value that differs from the layout's own shows in bold. The font can be any the layout
  * lists, since a pane only points into that list. A font's letters are saved a moment after
  * typing stops, and on Enter; everything else at once. The preview and the fit follow, and the
@@ -87,7 +88,7 @@ final class PaneSettingsBar extends JPanel {
 	private final Timer pause = new Timer(400, e -> saveLetters());
 	private Usage usage;
 	private List<String> panes = List.of();
-	/** The pane's drop-shadow twins and layers, which take its changes. */
+	/** The pane's drop-shadow twins, layers and fellow rows, which take its changes. */
 	private List<Usage> twins = List.of();
 	/** The font the second row edits, or null. */
 	private String fontName;
@@ -210,7 +211,7 @@ final class PaneSettingsBar extends JPanel {
 		flushLetters();
 		usage = u;
 		panes = new ArrayList<>(List.of(u.pane().name()));
-		twins = Fit.layers(u, all);
+		twins = Fit.together(u, all);
 		twins.forEach(o -> panes.add(o.pane().name()));
 		loading = true;
 		font.removeAllItems();

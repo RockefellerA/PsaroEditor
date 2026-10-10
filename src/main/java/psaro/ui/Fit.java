@@ -11,6 +11,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.WeakHashMap;
 import java.util.function.Supplier;
+import java.util.regex.Pattern;
 import psaro.format.Bclyt.TextInfo;
 import psaro.format.Bcfnt;
 import psaro.patch.FontPatcher;
@@ -45,6 +46,8 @@ public record Fit(boolean shown, boolean tooWide, boolean tooTall, Set<Integer> 
 
 	private static final Fit NOT_SHOWN = new Fit(false, false, false, Set.of(), Set.of(), false);
 	private static final double TOLERANCE = 0.5;
+	/** The number a list's row pane is named with, at the end: {@code 02} of {@code Txt_beat_02}. */
+	private static final Pattern ROW_NUMBER = Pattern.compile("\\d+$");
 	/**
 	 * Per index, the tallest Japanese in each group of same-shaped panes, keyed by the group's
 	 * list from {@link RomfsIndex#sameShape}.
@@ -234,6 +237,42 @@ public record Fit(boolean shown, boolean tooWide, boolean tooTall, Set<Integer> 
 			}
 		}
 		return out;
+	}
+
+	/**
+	 * The panes among {@code all} that take {@code u}'s changes: its {@link #layers}, and the other
+	 * rows of a list it is one row of, with their layers. A row is a pane of the same layout, named
+	 * as it is but for the number it ends in, showing the same string in the same font, box, size
+	 * and spacing (a record screen's {@code Txt_beat_01} to {@code Txt_beat_08}): changed alone, the
+	 * other rows would draw as before, and the preview, which opens on the first pane the English
+	 * overflows, would open on one of them next. A copy of the string elsewhere in the layout, under
+	 * another name, keeps its own settings.
+	 */
+	public static List<Usage> together(Usage u, List<Usage> all) {
+		List<Usage> out = new ArrayList<>(layers(u, all));
+		for (Usage o : all) {
+			if (!isShadow(o) && sameRow(u, o)) {
+				addPane(out, u, o);
+				layers(o, all).forEach(l -> addPane(out, u, l));
+			}
+		}
+		return out;
+	}
+
+	/** Whether {@code a} and {@code b} are rows of one list ({@link #together}). */
+	private static boolean sameRow(Usage a, Usage b) {
+		TextInfo x = a.pane().text();
+		TextInfo y = b.pane().text();
+		return a.layout().equals(b.layout()) && !a.pane().keys().isEmpty() && a.pane().keys().equals(b.pane().keys())
+				&& ROW_NUMBER.matcher(a.pane().name()).find() && ROW_NUMBER.matcher(b.pane().name()).find()
+				&& stem(a).equals(stem(b)) && x.font().equals(y.font()) && x.boxWidth() == y.boxWidth() && x.boxHeight() == y.boxHeight()
+				&& x.fontSizeX() == y.fontSizeX() && x.fontSizeY() == y.fontSizeY() && x.charSpace() == y.charSpace()
+				&& x.lineSpace() == y.lineSpace();
+	}
+
+	/** A pane's name without the number it ends in: {@code Txt_beat_} of {@code Txt_beat_02}. */
+	private static String stem(Usage u) {
+		return ROW_NUMBER.matcher(u.pane().name()).replaceFirst("");
 	}
 
 	/** Adds {@code o} to {@code out} unless it is {@code u}'s pane or one already there. */
