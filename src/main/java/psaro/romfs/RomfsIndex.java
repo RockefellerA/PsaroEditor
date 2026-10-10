@@ -27,6 +27,7 @@ import psaro.format.Archive;
 import psaro.format.Bclim;
 import psaro.format.Bclyt;
 import psaro.format.Bcfnt;
+import psaro.format.Csv;
 import psaro.format.Darc;
 import psaro.format.Msgd;
 import psaro.format.Tdt;
@@ -35,9 +36,10 @@ import psaro.format.Tdt;
  * What an extracted romfs holds for translation: every string table, and for each string the
  * layout text panes that show it.
  *
- * <p>The tables ({@code text/<name>_Japanese.tdt}) are the unit of translation: some hold
- * strings no layout shows, which the game draws from code. A pane's key resolves to the table
- * named after its archive ({@code config.arc.lz} reads {@code config_Japanese.tdt}); a key that
+ * <p>The tables ({@code text/<name>.tdt}, often with a language tag: {@code <name>_Japanese.tdt})
+ * are the unit of translation: some hold strings no layout shows, which the game draws from code.
+ * A pane's key resolves to the table named after its archive ({@code config.arc.lz} reads
+ * {@code config_Japanese.tdt}, or {@code config.tdt} in a game that tags none); a key that
  * table lacks resolves to every other table that has it, which is how archives sharing common
  * buttons pick up their labels. Keys are not unique across tables, so the archive's own table
  * always wins.
@@ -54,20 +56,31 @@ import psaro.format.Tdt;
 public final class RomfsIndex {
 
 	/**
-	 * {@code text/<name>_Japanese.tdt}: its keys and Japanese text, in file order. Or a message
+	 * {@code text/<name>.tdt}: its keys and Japanese text, in file order. Or a message
 	 * file, {@code message/<name>_jp.mdt}, named {@code message/<name>}, keyed by each string's
-	 * number ({@code 062}): strings the game draws from code, so no layout names them.
+	 * number ({@code 062}): strings the game draws from code, so no layout names them. Or a data
+	 * table, {@code table/<name>.csv}, named {@code table/<name>}, keyed by row and column
+	 * ({@code dqc0101a:1}): its Japanese cells, names the game also draws from code.
 	 */
 	public record StringTable(String name, Path path, Map<String, String> strings, Kind kind) {
 
-		/** A table or a message file, told apart by its file's name. */
+		/** A table, a message file or a data table, told apart by its file's name. */
 		public StringTable(String name, Path path, Map<String, String> strings) {
-			this(name, path, strings, path.getFileName().toString().endsWith(MESSAGE_SUFFIX) ? Kind.MESSAGE : Kind.TABLE);
+			this(name, path, strings, kindOf(path.getFileName().toString()));
+		}
+
+		private static Kind kindOf(String file) {
+			return file.endsWith(MESSAGE_SUFFIX) ? Kind.MESSAGE : file.endsWith(DATA_SUFFIX) ? Kind.DATA : Kind.TABLE;
 		}
 
 		/** True for a message file ({@link psaro.format.Msgd}). */
 		public boolean message() {
 			return kind == Kind.MESSAGE;
+		}
+
+		/** True for a data table ({@link psaro.format.Csv}). */
+		public boolean data() {
+			return kind == Kind.DATA;
 		}
 
 		/** True for the text layouts hold themselves ({@link #BUILT_IN}). */
@@ -78,10 +91,12 @@ public final class RomfsIndex {
 
 	/** Where a {@link StringTable}'s strings live. */
 	public enum Kind {
-		/** {@code text/<name>_Japanese.tdt}, keyed by what layouts name. */
+		/** {@code text/<name>.tdt}, keyed by what layouts name. */
 		TABLE,
 		/** {@code message/<name>_jp.mdt}, numbered strings the game draws from code. */
 		MESSAGE,
+		/** {@code table/<name>.csv}, the Japanese cells of the game's records, drawn from code. */
+		DATA,
 		/**
 		 * The text text panes hold in their layouts, for panes the game shows it in: those with no
 		 * key, a key no table has, or in an archive with no table of its own. Keyed by
@@ -132,10 +147,18 @@ public final class RomfsIndex {
 		}
 	}
 
-	private static final String TABLE_SUFFIX = "_Japanese.tdt";
+	private static final String TABLE_SUFFIX = ".tdt";
+	/**
+	 * A table file's tag for Japanese, which its name goes without, so {@code config_Japanese.tdt}
+	 * and {@code config_jp.tdt} pair with {@code config.arc.lz} as {@code config.tdt} does.
+	 */
+	private static final Pattern JAPANESE_TAG = Pattern.compile("(?i)_(?:japanese|jpn|jp|ja)$");
 	private static final String MESSAGE_SUFFIX = "_jp.mdt";
 	/** The name a message file's table takes before its own: {@code message/tutorial_and_help}. */
 	public static final String MESSAGE_PREFIX = "message/";
+	private static final String DATA_SUFFIX = ".csv";
+	/** The name a data table takes before its own: {@code table/CharaTable}. */
+	public static final String DATA_PREFIX = "table/";
 	private static final String ARCHIVE_SUFFIX = ".arc.lz";
 	/**
 	 * {@code SulaPro_B_04a_22_C.bcfnt}: family, weight (some fonts have none), style (the look
@@ -205,7 +228,7 @@ public final class RomfsIndex {
 		Map<String, StringTable> tables = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
 		Map<String, List<String>> tablesByKey = new HashMap<>();
 		for (Path p : tableFiles(root)) {
-			String name = strip(p, TABLE_SUFFIX);
+			String name = tableName(p, tables.keySet());
 			Map<String, String> strings = Collections.unmodifiableMap(Tdt.read(Files.readAllBytes(p)));
 			tables.put(name, new StringTable(name, p, strings));
 			for (String key : strings.keySet()) {
@@ -226,6 +249,19 @@ public final class RomfsIndex {
 			}
 			String name = MESSAGE_PREFIX + strip(p, MESSAGE_SUFFIX);
 			tables.put(name, new StringTable(name, p, Collections.unmodifiableMap(strings)));
+		}
+		// keyed by row id and column, none of which a pane's key is; a table with no Japanese is left out
+		for (Path p : dataFiles(root)) {
+			Map<String, String> strings;
+			try {
+				strings = Csv.read(Files.readAllBytes(p));
+			} catch (IllegalArgumentException notCsv) {
+				continue;
+			}
+			if (!strings.isEmpty()) {
+				String name = DATA_PREFIX + strip(p, DATA_SUFFIX);
+				tables.put(name, new StringTable(name, p, Collections.unmodifiableMap(strings)));
+			}
 		}
 
 		Map<String, List<Usage>> usages = new HashMap<>();
@@ -453,12 +489,13 @@ public final class RomfsIndex {
 	 * config_select) is matched to only one, though the game may read either.
 	 */
 	public StringTable sharedWith(StringTable table, String key) {
-		// a message file's keys are numbers every one of them repeats: none shares another's
-		if (table.message() || !usages(table, key).isEmpty()) {
+		// a message file's keys are numbers every one of them repeats, a data table's its own rows: none shares another's
+		if (table.message() || table.data() || !usages(table, key).isEmpty()) {
 			return null;
 		}
 		for (StringTable other : tables.values()) {
-			if (other != table && !other.message() && other.strings().containsKey(key) && !usages(other, key).isEmpty()) {
+			if (other != table && !other.message() && !other.data() && other.strings().containsKey(key)
+					&& !usages(other, key).isEmpty()) {
 				return other;
 			}
 		}
@@ -637,13 +674,36 @@ public final class RomfsIndex {
 			return List.of();
 		}
 		try (Stream<Path> files = Files.list(text)) {
-			return files.filter(p -> p.getFileName().toString().endsWith(TABLE_SUFFIX)).sorted().toList();
+			// the Japanese first, to have the name when another language's table shares it
+			return files.filter(p -> p.getFileName().toString().endsWith(TABLE_SUFFIX))
+					.sorted(Comparator.comparing((Path p) -> !JAPANESE_TAG.matcher(strip(p, TABLE_SUFFIX)).find())
+							.thenComparing(Comparator.naturalOrder()))
+					.toList();
 		}
+	}
+
+	/**
+	 * {@code p}'s table name: its file name without {@code .tdt} or a tag for Japanese, which the
+	 * archive it pairs with is named; its whole file name when another table already has that.
+	 */
+	private static String tableName(Path p, Set<String> taken) {
+		String name = JAPANESE_TAG.matcher(strip(p, TABLE_SUFFIX)).replaceFirst("");
+		return name.isEmpty() || taken.contains(name) ? p.getFileName().toString() : name;
 	}
 
 	/** Whether {@code text} holds kana or kanji, so it reads as text rather than a placeholder ({@code *}, {@code 123}). */
 	private static boolean japanese(String text) {
 		return text != null && text.codePoints().anyMatch(c -> c >= 0x3040 && c < 0xA000 || c >= 0xFF00 && c < 0xFFF0);
+	}
+
+	private static List<Path> dataFiles(Path root) throws IOException {
+		Path table = root.resolve("table");
+		if (!Files.isDirectory(table)) {
+			return List.of();
+		}
+		try (Stream<Path> files = Files.list(table)) {
+			return files.filter(p -> p.getFileName().toString().endsWith(DATA_SUFFIX)).sorted().toList();
+		}
 	}
 
 	private static List<Path> messageFiles(Path root) throws IOException {

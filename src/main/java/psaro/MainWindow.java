@@ -46,6 +46,7 @@ import psaro.dialog.FontPatchDialog;
 import psaro.dialog.ImagesWindow;
 import psaro.patch.ImageEdits;
 import psaro.dialog.PreferencesDialog;
+import psaro.format.Csv;
 import psaro.menu.HelpMenu;
 import psaro.patch.FontPatcher;
 import psaro.patch.FontPatcher.Plan;
@@ -239,7 +240,7 @@ public final class MainWindow {
 
 	/**
 	 * Opens {@code dir} if it looks like an extracted romfs: a {@code text} folder of
-	 * {@code *_Japanese.tdt} string tables. {@code explain} reports a rejection; a romfs
+	 * {@code *.tdt} string tables. {@code explain} reports a rejection; a romfs
 	 * reopened at launch fails quietly instead.
 	 */
 	private void open(Path dir, boolean explain) {
@@ -326,7 +327,7 @@ public final class MainWindow {
 
 	/**
 	 * Reads {@code dir} if it looks like an extracted romfs: a {@code text} folder of
-	 * {@code *_Japanese.tdt} string tables. Touches nothing in the window, so it can run in the
+	 * {@code *.tdt} string tables. Touches nothing in the window, so it can run in the
 	 * background.
 	 */
 	private static Opened read(Path dir) throws OpenFailure {
@@ -334,7 +335,7 @@ public final class MainWindow {
 		try {
 			if (!RomfsIndex.looksLikeRomfs(dir)) {
 				throw new OpenFailure("No string tables were found in " + dir + ".\n"
-						+ "PsaroEditor looks for text/*_Japanese.tdt inside an extracted romfs.", false);
+						+ "PsaroEditor looks for text/*.tdt inside an extracted romfs.", false);
 			}
 			scanned = RomfsIndex.scan(dir);
 		} catch (IOException | UncheckedIOException | IllegalArgumentException e) {
@@ -389,14 +390,14 @@ public final class MainWindow {
 		}
 	}
 
-	/** Every string with English, as the game would show it. */
+	/** Every string with English, as the game would show it: a data table's with its commas full-width. */
 	private List<Text> texts() {
 		List<Text> out = new ArrayList<>();
 		for (StringTable t : index.tables()) {
 			for (String key : t.strings().keySet()) {
 				String text = translations.get(t, key);
 				if (text != null) {
-					out.add(new Text(t, key, text));
+					out.add(new Text(t, key, t.data() ? Csv.shown(text) : text));
 				}
 			}
 		}

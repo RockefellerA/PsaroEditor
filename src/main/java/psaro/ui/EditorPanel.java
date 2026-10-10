@@ -86,7 +86,10 @@ public final class EditorPanel extends JPanel {
 	/** The window's Save and Patch buttons, shown at the right of the bar above the strings. */
 	private final JComponent actions;
 
-	/** The string tables under a {@link Header} per kind: the .tdt tables, the .mdt message files, the layouts' own text. */
+	/**
+	 * The string tables under a {@link Header} per kind: the .tdt tables, the .mdt message files,
+	 * the .csv data tables, the layouts' own text.
+	 */
 	private final JList<Object> tables;
 	private final StringsModel strings = new StringsModel();
 	private final JTable stringTable = new JTable(strings);
@@ -100,7 +103,6 @@ public final class EditorPanel extends JPanel {
 	/** Gives the string's English to the others with the same Japanese. */
 	private final JButton applyToMatching = new JButton("Apply to matching…");
 	/** Share of all strings done, beside the "String tables" heading. */
-	private final JProgressBar progress = new JProgressBar(0, 1000);
 	private final PreviewPanel preview;
 	private static final String TRANSLATE = "Translate with Google";
 	private final JButton translate = new JButton(TRANSLATE);
@@ -179,15 +181,7 @@ public final class EditorPanel extends JPanel {
 		right.setDividerLocation(280);
 		JScrollPane tableScroll = new JScrollPane(tables);
 		JPanel left = new JPanel(new BorderLayout());
-		progress.setStringPainted(true);
-		progress.setPreferredSize(new Dimension(110, progress.getPreferredSize().height));
-		updateProgress();
-		JPanel leftHeader = new JPanel(new BorderLayout(6, 0));
-		leftHeader.add(caption("String tables"), BorderLayout.WEST);
-		JPanel progressBox = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 6));
-		progressBox.add(progress);
-		leftHeader.add(progressBox, BorderLayout.CENTER);
-		left.add(leftHeader, BorderLayout.NORTH);
+		left.add(caption("String tables"), BorderLayout.NORTH);
 		left.add(tableScroll, BorderLayout.CENTER);
 		JSplitPane root = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, left, right);
 		root.setDividerLocation(240);
@@ -470,15 +464,9 @@ public final class EditorPanel extends JPanel {
 		return menu;
 	}
 
-	/** The share of all strings that are done: given English or marked to keep their Japanese. */
+	/** Redraws each section's bar ({@link HeaderCell}) and each table's count after strings are done or undone. */
 	private void updateProgress() {
-		List<StringTable> inUse = unused.inUse(index.tables());
-		int done = translations.translatedCountIn(inUse);
-		int total = inUse.stream().mapToInt(t -> t.strings().size()).sum();
-		double share = total == 0 ? 0 : (double) done / total;
-		progress.setValue((int) Math.round(share * progress.getMaximum()));
-		progress.setString(String.format("%.1f%%", share * 100));
-		progress.setToolTipText(String.format("%,d of %,d strings translated or kept in Japanese (tables marked unused are not counted)", done, total));
+		tables.repaint();
 	}
 
 	/**
@@ -711,12 +699,16 @@ public final class EditorPanel extends JPanel {
 
 	/** The heading over each kind of string table in the list. */
 	private enum Header {
-		TDT(RomfsIndex.Kind.TABLE, ".tdt", "String tables (text/*_Japanese.tdt): the strings layouts name by key"),
+		TDT(RomfsIndex.Kind.TABLE, ".tdt", "String tables (text/*.tdt): the strings layouts name by key"),
 		MDT(RomfsIndex.Kind.MESSAGE, ".mdt", "Message files (message/*_jp.mdt): numbered strings the game draws "
 				+ "from code; link a string's panes under Panes… in the preview"),
-		BCLYT(RomfsIndex.Kind.BUILT_IN, ".bclyt", "<html>Text the layouts hold themselves, which the game shows in "
+		CSV(RomfsIndex.Kind.DATA, ".csv", "Data tables (table/*.csv): the Japanese cells of the game's records, "
+				+ "such as character and card names, which the game draws from code. Keyed by row and column; "
+				+ "link a string's panes under Panes… in the preview. A comma shows full-width (，), "
+				+ "as a cell cannot hold one."),
+		BCLYT(RomfsIndex.Kind.BUILT_IN, ".bclyt", "Text the layouts hold themselves, which the game shows in "
 				+ "panes no table fills: no key, a key no table has, or an archive with no table of its own. "
-				+ "Keyed by layout and pane; Patch writes the English into the layouts.</html>");
+				+ "Keyed by layout and pane; Patch writes the English into the layouts.");
 
 		final RomfsIndex.Kind kind;
 		final String label;
@@ -761,26 +753,56 @@ public final class EditorPanel extends JPanel {
 	}
 
 	/**
+	 * A section's heading: its kind, and a bar of the share of its strings that are done (given
+	 * English or marked to keep their Japanese), leaving out its tables marked unused.
+	 */
+	private final class HeaderCell extends JPanel {
+		private final JLabel label = new JLabel();
+		private final JProgressBar bar = new JProgressBar(0, 1000);
+
+		HeaderCell() {
+			super(new BorderLayout(6, 0));
+			setOpaque(false);
+			label.putClientProperty(FlatClientProperties.STYLE, "font: bold");
+			bar.setStringPainted(true);
+			bar.setPreferredSize(new Dimension(110, bar.getPreferredSize().height));
+			add(label, BorderLayout.WEST);
+			add(bar, BorderLayout.EAST);
+		}
+
+		HeaderCell show(Header h, boolean first) {
+			List<StringTable> inUse = unused.inUse(index.tables().stream().filter(t -> t.kind() == h.kind).toList());
+			int done = translations.translatedCountIn(inUse);
+			int total = inUse.stream().mapToInt(t -> t.strings().size()).sum();
+			double share = total == 0 ? 0 : (double) done / total;
+			label.setText(h.label);
+			label.setForeground(UIManager.getColor("Label.disabledForeground"));
+			bar.setValue((int) Math.round(share * bar.getMaximum()));
+			bar.setString(String.format("%.1f%%", share * 100));
+			setBorder(BorderFactory.createEmptyBorder(first ? 2 : 8, 4, 2, 4));
+			setToolTipText(String.format("<html>%s<br><br>%,d of %,d strings translated or kept in Japanese "
+					+ "(tables marked unused are not counted)</html>", h.tip, done, total));
+			return this;
+		}
+	}
+
+	/**
 	 * A table's name with how many of its strings have English; a complete table is blue with a
-	 * green check. A message file's name goes without the folder its heading already names.
+	 * green check. A message file's or data table's name goes without the folder its heading already names.
 	 */
 	private final class TableRenderer extends DefaultListCellRenderer {
+		private final HeaderCell header = new HeaderCell();
+
 		@Override
 		public Component getListCellRendererComponent(JList<?> list, Object value, int i, boolean selected,
 				boolean focus) {
 			if (value instanceof Header h) {
-				super.getListCellRendererComponent(list, h.label, i, false, false);
-				putClientProperty(FlatClientProperties.STYLE, "font: bold");
-				setForeground(UIManager.getColor("Label.disabledForeground"));
-				setBorder(BorderFactory.createEmptyBorder(i == 0 ? 2 : 8, 4, 2, 4));
-				setIcon(null);
-				setToolTipText(h.tip);
-				return this;
+				return header.show(h, i == 0);
 			}
 			StringTable t = (StringTable) value;
 			super.getListCellRendererComponent(list, t.name(), i, selected, focus);
-			putClientProperty(FlatClientProperties.STYLE, null);
-			String name = t.message() ? t.name().substring(RomfsIndex.MESSAGE_PREFIX.length()) : t.name();
+			String name = t.message() ? t.name().substring(RomfsIndex.MESSAGE_PREFIX.length())
+					: t.data() ? t.name().substring(RomfsIndex.DATA_PREFIX.length()) : t.name();
 			int done = translations.translatedCount(t);
 			boolean complete = done >= t.strings().size();
 			setText(name + "   " + done + " / " + t.strings().size());

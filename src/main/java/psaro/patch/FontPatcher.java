@@ -1068,7 +1068,7 @@ public final class FontPatcher {
 			Archive.save(root, out);
 			wrote.add(out);
 		}
-		copyToMods(outputFiles(".arc.lz", ".tdt", ".mdt"), progress);
+		copyToMods(outputFiles(".arc.lz", ".tdt", ".mdt", ".csv"), progress);
 		return wrote;
 	}
 

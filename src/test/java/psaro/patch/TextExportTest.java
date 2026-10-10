@@ -60,6 +60,21 @@ class TextExportTest {
 		assertEquals(List.of("もう一度練習", "Yes"), psaro.format.Msgd.read(Files.readAllBytes(out)));
 	}
 
+	/** A data table with English is written as a data table, its other cells as they were. */
+	@Test
+	void writesADataTableWithItsEnglish() throws IOException {
+		psaro.romfs.SampleRomfs.data(romfs, "CharaTable", List.of("dqc0101a,ロトの血を引く者,True", "dqc0102a,ローラ姫,True"));
+		index = RomfsIndex.scan(romfs);
+		translations = Translations.open(index);
+		StringTable chara = index.table("table/CharaTable");
+		translations.set(chara, "dqc0101a:1", "Descendant of Erdrick");
+		Path out = dir.resolve("game.psaro/romfs/table/CharaTable.csv");
+		assertEquals(List.of(out), TextExport.export(index, translations));
+		assertEquals(psaro.romfs.SampleRomfs.csv(List.of("dqc0101a,Descendant of Erdrick,True", "dqc0102a,ローラ姫,True")).length,
+				Files.size(out));
+		assertEquals(Map.of("dqc0102a:1", "ローラ姫"), psaro.format.Csv.read(Files.readAllBytes(out)));
+	}
+
 	@Test
 	void writesTheTableWithItsEnglishAndTheRestInJapanese() throws IOException {
 		translations.set(menu, "menu_0001", "Yes");

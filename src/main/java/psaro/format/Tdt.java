@@ -13,8 +13,8 @@ import java.util.Map;
  *         ASCII key + NUL, UTF-16LE text + NUL     (offsets relative to the entry)
  * </pre>
  *
- * A table pairs with the archive of the same name ({@code config.arc.lz} reads
- * {@code config_Japanese.tdt}); keys are what that archive's layouts reference. Text may hold
+ * A table pairs with the archive of the same name, any language tag aside ({@code config.arc.lz}
+ * reads {@code config_Japanese.tdt}); keys are what that archive's layouts reference. Text may hold
  * {@code \u0002\u0001}..{@code \u0002\u0003} colour switches and {@code \n} line breaks.
  */
 public final class Tdt {

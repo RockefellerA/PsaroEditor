@@ -48,6 +48,26 @@ class RomfsIndexTest {
 		assertEquals(1, index.layoutCount());
 	}
 
+	/**
+	 * A table's file may carry a tag for Japanese or none: either way it is named, and pairs with
+	 * its archive, without it. Where two files come to one name, the Japanese one has it.
+	 */
+	@Test
+	void aTablesNameGoesWithoutItsJapaneseTag() throws IOException {
+		Files.createDirectories(romfs.resolve("text"));
+		Files.write(romfs.resolve("text/menu.tdt"), Tdt.write(new LinkedHashMap<>(Map.of("menu_0001", "Yes"))));
+		Files.write(romfs.resolve("text/menu_jp.tdt"), Tdt.write(new LinkedHashMap<>(Map.of("menu_0001", "はい"))));
+		Files.write(romfs.resolve("text/title.tdt"), Tdt.write(new LinkedHashMap<>(Map.of("titl_0001", "はじめから"))));
+		Files.write(romfs.resolve("text/notes.txt"), new byte[] {1});
+		archive("scene/menu/menu.arc.lz", "blyt/menu.bclyt", List.of("a.bcfnt"), pane("Txt_Yes", "menu_0001"));
+		assertTrue(RomfsIndex.looksLikeRomfs(romfs));
+		RomfsIndex index = RomfsIndex.scan(romfs);
+		assertEquals(List.of("menu", "menu.tdt", "title"), index.tables().stream().map(StringTable::name).toList());
+		assertEquals("はい", index.table("menu").strings().get("menu_0001"));
+		assertEquals(1, index.usages(index.table("menu"), "menu_0001").size());
+		assertTrue(index.usages(index.table("menu.tdt"), "menu_0001").isEmpty());
+	}
+
 	@Test
 	void paneResolvesToItsArchivesOwnTableFirst() throws IOException {
 		RomfsIndex index = sample();
@@ -164,6 +184,29 @@ class RomfsIndexTest {
 		assertTrue(index.usages(help, "000").isEmpty(), "only the string linked");
 		index.link(help, "001", List.of());
 		assertTrue(index.usages(help, "001").isEmpty());
+	}
+
+	/**
+	 * A data table is a table of its Japanese cells, which no layout names either, and can be
+	 * linked to the panes the game draws them in; a data table with no Japanese is left out.
+	 */
+	@Test
+	void dataTablesAreTablesOfTheirJapaneseCellsPanesCanBeLinkedTo() throws IOException {
+		table("menu", Map.of("menu_0001", "はい"));
+		SampleRomfs.data(romfs, "CharaTable", List.of("dqc0101a,ロトの血を引く者,True", "dqc0102a,ローラ姫,True"));
+		SampleRomfs.data(romfs, "SoundTable_MENU", List.of("BGM_MENU_TITLE_001,0,1.96"));
+		archive("scene/party/party_up.arc.lz", "blyt/party_select_up.bclyt", List.of("a.bcfnt"), pane("Txt_Name", "x"));
+		RomfsIndex index = RomfsIndex.scan(romfs);
+		StringTable chara = index.table("table/CharaTable");
+		assertTrue(chara.data());
+		assertFalse(chara.message());
+		assertNull(index.table("table/SoundTable_MENU"));
+		assertEquals(List.of("dqc0101a:1", "dqc0102a:1"), List.copyOf(chara.strings().keySet()));
+		assertEquals("ロトの血を引く者", chara.strings().get("dqc0101a:1"));
+		assertNull(index.sharedWith(chara, "dqc0101a:1"));
+
+		index.link(chara, "dqc0101a:1", List.of(new RomfsIndex.PaneRef("blyt/party_select_up.bclyt", "Txt_Name")));
+		assertEquals(List.of("Txt_Name"), index.panes(chara, "dqc0101a:1").stream().map(u -> u.pane().name()).toList());
 	}
 
 	/**

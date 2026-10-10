@@ -10,6 +10,7 @@ import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import psaro.format.Csv;
 import psaro.format.Msgd;
 import psaro.format.Tdt;
 import psaro.project.Translations;
@@ -18,8 +19,8 @@ import psaro.romfs.RomfsIndex.StringTable;
 
 /**
  * Writes the game's string tables with the English in them to {@code <romfs>.psaro/romfs/text},
- * and its message files to {@code .../message}, beside the patched archives, so that folder is a
- * romfs patch as it stands.
+ * its message files to {@code .../message} and its data tables to {@code .../table}, beside the
+ * patched archives, so that folder is a romfs patch as it stands.
  *
  * <p>A table with English becomes a copy of its {@code .tdt} with each translated string
  * replaced and every other string left in Japanese; a table with none has no copy. The JSON in
@@ -56,9 +57,11 @@ public final class TextExport {
 				Files.deleteIfExists(out);
 				continue;
 			}
-			byte[] bytes = table.message()
-					? Msgd.write(Files.readAllBytes(table.path()), new ArrayList<>(strings.values()))
-					: Tdt.write(strings);
+			byte[] bytes = switch (table.kind()) {
+				case MESSAGE -> Msgd.write(Files.readAllBytes(table.path()), new ArrayList<>(strings.values()));
+				case DATA -> Csv.write(Files.readAllBytes(table.path()), strings);
+				default -> Tdt.write(strings);
+			};
 			if (Files.isRegularFile(out) && Arrays.equals(bytes, Files.readAllBytes(out))) {
 				continue;
 			}
