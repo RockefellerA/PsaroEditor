@@ -204,14 +204,17 @@ public final class ImagesWindow extends JFrame {
 	private void refilter() {
 		Group was = list.getSelectedValue();
 		String needle = filter.getText().trim().toLowerCase(Locale.ROOT);
-		shown.clear();
+		List<Group> matching = new ArrayList<>();
 		for (Group g : groups) {
 			boolean matches = needle.isEmpty() || g.copies().stream().anyMatch(i -> i.path().toLowerCase(Locale.ROOT).contains(needle)
 					|| i.archive().getFileName().toString().toLowerCase(Locale.ROOT).contains(needle));
 			if (matches && (!editedOnly.isSelected() || edits.get(g.hash()) != null)) {
-				shown.addElement(g);
+				matching.add(g);
 			}
 		}
+		// added all at once: added one by one, each addition had the list measure every line again
+		shown.clear();
+		shown.addAll(matching);
 		if (was != null && shown.contains(was)) {
 			list.setSelectedValue(was, true);
 		} else if (!shown.isEmpty()) {
