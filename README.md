@@ -11,4 +11,5 @@ No game data is included or distributed. You need your own extracted romfs.
 The 3DS file formats PsaroEditor reads and writes (BCFNT, BCLYT, BCLIM, DARC, CGFX) are documented by the community at 3dbrew, and Nintendo's LZ compression by Martin Korth's GBATEK. Thanks to their contributors.
 
 ### AI Disclosure: 
-Claude was used for most of the construction of this tool as a personal project to help understand how translation/romhacking works and to streamline tedious aspects of string replacement.  Code written was reviewed manually, tested and unit tested.
+Claude was used for most of the construction of this tool - a personal project to help understand how translation/romhacking works and to streamline tedious aspects of string replacement.  
+Code written by Claude was reviewed manually, tested and unit tested.
