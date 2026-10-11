@@ -260,17 +260,20 @@ final class PreviewPanel extends JPanel {
 		overflowing = out;
 	}
 
-	/** Asks which panes show the string, and links them; the editor then measures and shows it again. */
+	/**
+	 * Asks which panes show the string, and any of its table's other strings shown in the same
+	 * panes, and links them; the editor then measures and shows them again.
+	 */
 	private void showLinks() {
 		if (table == null) {
 			return;
 		}
-		List<PaneRef> chosen = LinkPanesDialog.choose(this, index, table.name() + " › " + key, links.get(table, key));
+		LinkPanesDialog.Choice chosen = LinkPanesDialog.choose(this, index, table, key, links);
 		if (chosen == null) {
 			return;
 		}
 		try {
-			links.set(table, key, chosen);
+			links.set(table, chosen.keys(), chosen.panes());
 		} catch (IOException e) {
 			JOptionPane.showMessageDialog(this, "Could not save the linked panes:\n" + e.getMessage(), "Panes",
 					JOptionPane.ERROR_MESSAGE);

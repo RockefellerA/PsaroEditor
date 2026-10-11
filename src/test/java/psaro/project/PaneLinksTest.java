@@ -49,4 +49,28 @@ class PaneLinksTest {
 		reopened.set(again.table("message/tutorial_and_help"), "000", List.of());
 		assertFalse(Files.exists(file), "the last link gone, the file goes");
 	}
+
+	/** Strings shown in the same panes (every character's name) are linked in one go, and unlinked so. */
+	@Test
+	void severalStringsAreLinkedAtOnce() throws IOException {
+		Path romfs = dir.resolve("game");
+		SampleRomfs.table(romfs, "menu", Map.of("menu_0001", "はい"));
+		SampleRomfs.data(romfs, "CharaTable", List.of("dqc0101a,ロトの血を引く者,True", "dqc0102a,ローラ姫,True", "dqc0201a,ローレシアの王子,True"));
+		SampleRomfs.archive(romfs, "scene/party/party_up.arc.lz", "blyt/party_select_up.bclyt", List.of("a.bcfnt"), Map.of(),
+				SampleRomfs.pane("Txt_Name", "x"));
+		RomfsIndex index = RomfsIndex.scan(romfs);
+		PaneLinks links = PaneLinks.open(index);
+		var chara = index.table("table/CharaTable");
+		PaneRef name = new PaneRef("blyt/party_select_up.bclyt", "Txt_Name");
+
+		links.set(chara, List.of("dqc0101a:1", "dqc0102a:1"), List.of(name));
+		assertEquals(List.of(name), links.get(chara, "dqc0101a:1"));
+		assertEquals(List.of(name), links.get(chara, "dqc0102a:1"));
+		assertTrue(links.get(chara, "dqc0201a:1").isEmpty(), "only those named");
+		assertEquals(1, index.usages(chara, "dqc0102a:1").size());
+		assertEquals(List.of(name), PaneLinks.open(RomfsIndex.scan(romfs)).get(chara, "dqc0102a:1"), "saved");
+
+		links.set(chara, List.of("dqc0101a:1", "dqc0102a:1"), List.of());
+		assertFalse(Files.exists(dir.resolve("game.psaro/links.json")));
+	}
 }

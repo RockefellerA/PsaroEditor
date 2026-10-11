@@ -165,7 +165,8 @@ public final class SearchBox extends JTextField {
 		}
 		Result r = search.find(getText(), LISTED);
 		results.clear();
-		r.hits().forEach(results::addElement);
+		// all at once: one by one, each addition had the list measure every line again
+		results.addAll(r.hits());
 		count.setText(r.total() == 0 ? "No string contains this."
 				: r.total() > r.hits().size() ? "First " + r.hits().size() + " of " + r.total() + " matches"
 				: r.total() + (r.total() == 1 ? " match" : " matches"));

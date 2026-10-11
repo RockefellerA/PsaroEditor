@@ -78,17 +78,27 @@ public final class PaneLinks {
 	}
 
 	/** Links {@code panes} to {@code key} of {@code table} in place of what it had, and saves; none unlinks. */
-	public synchronized void set(StringTable table, String key, Collection<PaneRef> panes) throws IOException {
-		Map<String, List<PaneRef>> keys = links.computeIfAbsent(table.name(), k -> new TreeMap<>());
-		if (panes.isEmpty()) {
-			keys.remove(key);
-			if (keys.isEmpty()) {
-				links.remove(table.name());
+	public void set(StringTable table, String key, Collection<PaneRef> panes) throws IOException {
+		set(table, List.of(key), panes);
+	}
+
+	/**
+	 * Links {@code panes} to each of {@code keys} of {@code table} in place of what they had (strings
+	 * shown in the same panes, as every character's name is), and saves once; none unlinks them.
+	 */
+	public synchronized void set(StringTable table, Collection<String> keys, Collection<PaneRef> panes) throws IOException {
+		Map<String, List<PaneRef>> linked = links.computeIfAbsent(table.name(), k -> new TreeMap<>());
+		for (String key : keys) {
+			if (panes.isEmpty()) {
+				linked.remove(key);
+			} else {
+				linked.put(key, List.copyOf(panes));
 			}
-		} else {
-			keys.put(key, List.copyOf(panes));
+			index.link(table, key, panes);
 		}
-		index.link(table, key, panes);
+		if (linked.isEmpty()) {
+			links.remove(table.name());
+		}
 		save();
 	}
 
