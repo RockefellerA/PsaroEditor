@@ -37,6 +37,7 @@ import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JSplitPane;
+import javax.swing.JTabbedPane;
 import javax.swing.JTextArea;
 import javax.swing.JTextField;
 import javax.swing.KeyStroke;
@@ -47,6 +48,7 @@ import javax.swing.event.DocumentListener;
 import javax.swing.filechooser.FileNameExtensionFilter;
 import com.formdev.flatlaf.FlatClientProperties;
 import psaro.format.Bclim;
+import psaro.format.Cgfx;
 import psaro.format.Texture;
 import psaro.patch.ImageEdits;
 import psaro.romfs.RomfsIndex;
@@ -58,6 +60,9 @@ import psaro.romfs.RomfsIndex.Image;
  * replaced. Export one as a PNG, change it in any image editor, and import it back; Patch writes
  * it, in the image's own format and size, into every archive that has it.
  *
+ * <p>Layout images ({@code .bclim}, in the archives) and models' textures ({@code .bcmdl}) are
+ * listed under a tab each, each tab with how many match the filter and the one last picked in it.
+ *
  * <p>A window of its own, not a dialog, so it can be minimized and maximized and left open
  * beside the editor.
  */
@@ -68,7 +73,17 @@ public final class ImagesWindow extends JFrame {
 		Image first() {
 			return copies.get(0);
 		}
+
+		/** A model's texture rather than a layout's image. */
+		boolean model() {
+			return Cgfx.isModel(first().archive().getFileName().toString());
+		}
 	}
+
+	/** The tabs, in order: layout images, then models' textures; short, as the list's width takes both. */
+	private static final String[] KINDS = {"Layouts .bclim", "Models .bcmdl"};
+	private static final String[] KIND_TIPS = {"Layout images (.bclim) in the archives: buttons, titles, labels",
+			"Textures of 3D models (.bcmdl), such as the record book's pages"};
 
 	/** The last folder a PNG was exported to or imported from, this session. */
 	private static File folder;
@@ -81,6 +96,10 @@ public final class ImagesWindow extends JFrame {
 	private final JList<Group> list = new JList<>(shown);
 	private final JTextField filter = new JTextField(16);
 	private final JCheckBox editedOnly = new JCheckBox("Edited only");
+	/** Which kind of image the list shows: a tab per kind, over the one list. */
+	private final JTabbedPane kinds = new JTabbedPane();
+	/** The image last picked under each tab, to pick again on coming back to it. */
+	private final Group[] pickedIn = new Group[KINDS.length];
 	private final JComboBox<String> zoom = new JComboBox<>(new String[] {"1×", "2×", "3×", "4×", "6×"});
 	private final Picture original = new Picture();
 	private final Picture replaced = new Picture();
@@ -140,8 +159,19 @@ public final class ImagesWindow extends JFrame {
 				showSelected();
 			}
 		});
+		// the tabs pick what the list shows; the list itself is below them, shared
+		for (int k = 0; k < KINDS.length; k++) {
+			kinds.addTab(KINDS[k], null);
+			kinds.setToolTipTextAt(k, KIND_TIPS[k]);
+		}
+		// one row, scrolling should the titles ever outgrow it, rather than wrapping
+		kinds.setTabLayoutPolicy(JTabbedPane.SCROLL_TAB_LAYOUT);
+		kinds.addChangeListener(e -> refilter());
+		JPanel top = new JPanel(new BorderLayout());
+		top.add(filters, BorderLayout.NORTH);
+		top.add(kinds, BorderLayout.SOUTH);
 		JPanel left = new JPanel(new BorderLayout());
-		left.add(filters, BorderLayout.NORTH);
+		left.add(top, BorderLayout.NORTH);
 		left.add(new JScrollPane(list), BorderLayout.CENTER);
 
 		zoom.setSelectedIndex(0);
@@ -202,16 +232,31 @@ public final class ImagesWindow extends JFrame {
 	}
 
 	private void refilter() {
-		Group was = list.getSelectedValue();
+		int kind = Math.max(0, kinds.getSelectedIndex());
+		Group shownBefore = list.getSelectedValue();
+		if (shownBefore != null) {
+			pickedIn[shownBefore.model() ? 1 : 0] = shownBefore;
+		}
+		Group was = pickedIn[kind];
 		String needle = filter.getText().trim().toLowerCase(Locale.ROOT);
 		List<Group> matching = new ArrayList<>();
+		int[] counts = new int[KINDS.length];
 		for (Group g : groups) {
+			// the archive's folder too: a model's file is named no better than NW4C.bcmdl.lz, its folder scene/record
 			boolean matches = needle.isEmpty() || g.copies().stream().anyMatch(i -> i.path().toLowerCase(Locale.ROOT).contains(needle)
-					|| i.archive().getFileName().toString().toLowerCase(Locale.ROOT).contains(needle));
+					|| index.root().relativize(i.archive()).toString().replace('\\', '/').toLowerCase(Locale.ROOT).contains(needle));
 			if (matches && (!editedOnly.isSelected() || edits.get(g.hash()) != null)) {
-				matching.add(g);
+				int k = g.model() ? 1 : 0;
+				counts[k]++;
+				if (k == kind) {
+					matching.add(g);
+				}
 			}
 		}
+		for (int k = 0; k < KINDS.length; k++) {
+			kinds.setTitleAt(k, KINDS[k] + "  " + String.format(Locale.ROOT, "%,d", counts[k]));
+		}
+		kinds.revalidate();
 		// added all at once: added one by one, each addition had the list measure every line again
 		shown.clear();
 		shown.addAll(matching);

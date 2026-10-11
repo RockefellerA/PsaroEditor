@@ -28,6 +28,7 @@ import psaro.format.Bclyt;
 import psaro.format.Bclyt.TextInfo;
 import psaro.format.Bclyt.TextOverride;
 import psaro.format.Bcfnt;
+import psaro.format.Cgfx;
 import psaro.format.Darc;
 import psaro.project.Translations;
 import psaro.romfs.RomfsIndex;
@@ -627,7 +628,7 @@ public final class FontPatcher {
 				imageChange(image, seen, out);
 			}
 		}
-		for (Path archive : writtenArchives()) {
+		for (Path archive : outputFiles(".arc.lz", ".bcmdl", ".bcmdl.lz")) {
 			Path original = index.root().resolve(output.relativize(archive).toString());
 			for (String path : written(archive).images().keySet()) {
 				Image image = image(original, path);
@@ -978,8 +979,9 @@ public final class FontPatcher {
 
 	/**
 	 * Carries out {@code plan}: rebuilds from the romfs every archive with a font or layout to
-	 * change, removes written archives nothing needs any more, then, if the settings say so,
-	 * copies every written archive and string table into the mods folder ({@link #copyToMods}).
+	 * change, and every model with a texture replaced, removes written ones nothing needs any more,
+	 * then, if the settings say so, copies every written archive, model and string table into the
+	 * mods folder ({@link #copyToMods}).
 	 * Reports each step to {@code progress}. Returns the archives written.
 	 */
 	public List<Path> write(Plan plan, Consumer<String> progress) throws IOException {
@@ -1006,6 +1008,12 @@ public final class FontPatcher {
 			Set<String> replaced = new HashSet<>();
 			imageChanges.stream().filter(ImageChange::changed).forEach(i -> replaced.add(i.path()));
 			Path out = outputPath(archive);
+			if (Cgfx.isModel(archive.getFileName().toString())) {
+				if (writeModel(archive, out, replaced, imageChanges, progress)) {
+					wrote.add(out);
+				}
+				continue;
+			}
 			Map<String, Set<Integer>> lend = new HashMap<>();
 			List<FontChange> free = new ArrayList<>();
 			Map<String, String> names = new TreeMap<>();
@@ -1068,8 +1076,39 @@ public final class FontPatcher {
 			Archive.save(root, out);
 			wrote.add(out);
 		}
-		copyToMods(outputFiles(".arc.lz", ".tdt", ".mdt", ".csv"), progress);
+		copyToMods(outputFiles(".arc.lz", ".bcmdl", ".bcmdl.lz", ".tdt", ".mdt", ".csv"), progress);
 		return wrote;
+	}
+
+	/**
+	 * Writes {@code model} to {@code out} with its textures named in {@code replaced} replaced, or
+	 * removes {@code out} when none is; true when it wrote. A model has no fonts or layouts, only
+	 * the images some of its textures are ({@link Cgfx}).
+	 */
+	private boolean writeModel(Path model, Path out, Set<String> replaced, List<ImageChange> changes, Consumer<String> progress)
+			throws IOException {
+		if (replaced.isEmpty()) {
+			progress.accept("Removing " + index.root().relativize(model));
+			Files.deleteIfExists(out);
+			return false;
+		}
+		if (changes.stream().noneMatch(ImageChange::hasWork) && Files.isRegularFile(out)) {
+			return false;
+		}
+		progress.accept("Patching " + index.root().relativize(model));
+		byte[] d = Cgfx.read(model);
+		for (Cgfx.Tex t : Cgfx.textures(d)) {
+			if (replaced.contains(t.name())) {
+				byte[] original = Cgfx.asBclim(d, t);
+				byte[] image = images.replacement(original);
+				if (image == null) {
+					throw new IOException("cannot read the replacement for " + t.name() + " (" + images.png(Bclim.hash(original)) + ")");
+				}
+				d = Cgfx.with(d, t, image);
+			}
+		}
+		Cgfx.write(d, out);
+		return true;
 	}
 
 	/**
@@ -1120,6 +1159,16 @@ public final class FontPatcher {
 			}
 			FileTime time = Files.getLastModifiedTime(out);
 			Written w = written.get(out);
+			if ((w == null || !w.time().equals(time)) && Cgfx.isModel(out.getFileName().toString())) {
+				// a model holds only images: its textures, by name
+				byte[] d = Cgfx.read(out);
+				Map<String, String> images = new HashMap<>();
+				for (Cgfx.Tex t : Cgfx.textures(d)) {
+					images.put(t.name(), Bclim.hash(Cgfx.asBclim(d, t)));
+				}
+				w = new Written(time, Map.of(), layoutsOf(Map.of()), images);
+				written.put(out, w);
+			}
 			if (w == null || !w.time().equals(time)) {
 				Map<String, Darc.Node> files = Darc.files(Archive.load(out));
 				Map<String, Bcfnt> fonts = new HashMap<>();

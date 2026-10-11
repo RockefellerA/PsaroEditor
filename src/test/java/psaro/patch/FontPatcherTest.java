@@ -565,6 +565,50 @@ class FontPatcherTest {
 		assertFalse(patcher.plan(List.of()).hasWork());
 	}
 
+	/**
+	 * A model's texture is an image like a layout's: replaced, the patch writes the model with its
+	 * pixels changed and the rest as it was, compressed as the game's is; taken back, the model goes.
+	 */
+	@Test
+	void aReplacedModelTextureIsWrittenIntoItsModel() throws IOException {
+		int[] red = new int[16 * 8];
+		java.util.Arrays.fill(red, 0xFFFF0000);
+		byte[] page = SampleRomfs.bclim(16, 8, 9, red);
+		SampleRomfs.model(romfs, "scene/record/NW4C.bcmdl.lz", "Garai_book", page, psaro.format.Texture.RGBA8);
+		index = RomfsIndex.scan(romfs);
+		ImageEdits edits = ImageEdits.open(romfs);
+		patcher = new FontPatcher(index, settings, LayoutOverrides.open(romfs), edits);
+		RomfsIndex.Image texture = index.images().stream().filter(i -> i.name().equals("Garai_book")).findFirst().orElseThrow();
+		assertEquals(16, texture.width());
+		assertArrayEquals(page, index.imageBytes(texture));
+		assertFalse(patcher.plan(List.of()).hasWork());
+
+		java.awt.image.BufferedImage english = new java.awt.image.BufferedImage(16, 8, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+		english.setRGB(1, 1, 0xFFFFFFFF);
+		edits.set(index.imageBytes(texture), texture.path(), english);
+		Plan plan = patcher.plan(List.of());
+		assertEquals(1, plan.imagesToWrite());
+		patcher.write(plan, step -> { });
+		Path out = patcher.outputPath(romfs.resolve("scene/record/NW4C.bcmdl.lz"));
+		assertTrue(psaro.format.Lz11.isCompressed(Files.readAllBytes(out)), "compressed, as the game's is");
+		byte[] model = psaro.format.Cgfx.read(out);
+		psaro.format.Cgfx.Tex t = psaro.format.Cgfx.textures(model).get(0);
+		java.awt.image.BufferedImage written = psaro.format.Bclim.read(psaro.format.Cgfx.asBclim(model, t)).image();
+		assertEquals(0xFFFFFFFF, written.getRGB(1, 1));
+		assertEquals(0, written.getRGB(0, 0));
+		byte[] before = psaro.format.Cgfx.read(romfs.resolve("scene/record/NW4C.bcmdl.lz"));
+		assertArrayEquals(java.util.Arrays.copyOf(before, t.dataOffset()), java.util.Arrays.copyOf(model, t.dataOffset()),
+				"the rest of the model as it was");
+		assertFalse(patcher.plan(List.of()).hasWork());
+
+		edits.remove(ImageEdits.hash(page));
+		Plan undo = patcher.plan(List.of());
+		assertTrue(undo.hasWork());
+		patcher.write(undo, step -> { });
+		assertFalse(Files.exists(out), "nothing replaced in it: the model goes");
+		assertFalse(patcher.plan(List.of()).hasWork());
+	}
+
 	@Test
 	void copiesToTheModsFolderWhenAsked() throws IOException {
 		Path mods = dir.resolve("mods/romfs");

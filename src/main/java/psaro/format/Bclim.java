@@ -53,6 +53,35 @@ public final class Bclim {
 		return new Bclim(d, Bytes.u16(d, imag + 8), Bytes.u16(d, imag + 10), GPU[f]);
 	}
 
+	/**
+	 * A BCLIM holding {@code data}, an image {@code width} x {@code height} in GPU format
+	 * {@code format} ({@link Texture}), the data already the power-of-two size it needs: how an
+	 * image held elsewhere (a model's texture, {@link Cgfx}) is read and replaced as a layout's is.
+	 */
+	public static byte[] of(byte[] data, int width, int height, int format) {
+		int code = -1;
+		for (int i = 0; i < GPU.length; i++) {
+			if (GPU[i] == format) {
+				code = i;
+			}
+		}
+		if (code < 0) {
+			throw new IllegalArgumentException("no CLIM format for " + Texture.formatName(format));
+		}
+		ByteBuffer b = ByteBuffer.allocate(data.length + 0x28).order(ByteOrder.LITTLE_ENDIAN);
+		b.put(data);
+		b.put((byte) 'C').put((byte) 'L').put((byte) 'I').put((byte) 'M').putShort((short) 0xFEFF).putShort((short) 0x14)
+				.putInt(0x02020000).putInt(data.length + 0x28).putShort((short) 1).putShort((short) 0);
+		b.put((byte) 'i').put((byte) 'm').put((byte) 'a').put((byte) 'g').putInt(0x10).putShort((short) width)
+				.putShort((short) height).putInt(code).putInt(data.length);
+		return b.array();
+	}
+
+	/** {@code bclim}'s pixel data, without the trailer. */
+	public static byte[] data(byte[] bclim) {
+		return java.util.Arrays.copyOf(bclim, bclim.length - 0x28);
+	}
+
 	/** The SHA-256 of an image file, hex: the same for every archive's copy of one image. */
 	public static String hash(byte[] file) {
 		try {

@@ -27,6 +27,7 @@ import psaro.format.Archive;
 import psaro.format.Bclim;
 import psaro.format.Bclyt;
 import psaro.format.Bcfnt;
+import psaro.format.Cgfx;
 import psaro.format.Csv;
 import psaro.format.Darc;
 import psaro.format.Msgd;
@@ -339,6 +340,17 @@ public final class RomfsIndex {
 		if (!held.isEmpty()) {
 			tables.put(BUILT_IN, new StringTable(BUILT_IN, root, Collections.unmodifiableMap(held), Kind.BUILT_IN));
 		}
+		// models' textures, which hold text too (the record book's page headers), as images of their own
+		for (Path model : files(root, Cgfx::isModel)) {
+			try {
+				byte[] d = Cgfx.read(model);
+				for (Cgfx.Tex t : Cgfx.textures(d)) {
+					images.add(new Image(model, t.name(), Bclim.hash(Cgfx.asBclim(d, t)), t.width(), t.height(), t.format()));
+				}
+			} catch (IllegalArgumentException | IndexOutOfBoundsException notAModel) {
+				// a model this cannot read is left out
+			}
+		}
 		shapes.replaceAll((shape, shown) -> List.copyOf(shown));
 		return new RomfsIndex(root, Collections.unmodifiableMap(tables), usages, List.copyOf(unresolved), layouts,
 				fontHomes, layoutHomes, shapes, List.copyOf(images), bodies, tops, List.copyOf(textPanes));
@@ -405,8 +417,17 @@ public final class RomfsIndex {
 		return images;
 	}
 
-	/** {@code image}'s file, read from its archive. */
+	/** {@code image}'s file, read from its archive; a model's texture as a BCLIM ({@link Cgfx#asBclim}). */
 	public byte[] imageBytes(Image image) throws IOException {
+		if (Cgfx.isModel(image.archive().getFileName().toString())) {
+			byte[] d = Cgfx.read(image.archive());
+			for (Cgfx.Tex t : Cgfx.textures(d)) {
+				if (t.name().equals(image.path())) {
+					return Cgfx.asBclim(d, t);
+				}
+			}
+			throw new IOException(image.path() + " is no longer in " + image.archive());
+		}
 		Darc.Node node = Darc.find(Archive.load(image.archive()), image.path());
 		if (node == null) {
 			throw new IOException(image.path() + " is no longer in " + image.archive());
@@ -718,6 +739,11 @@ public final class RomfsIndex {
 
 	/** Every archive under {@code root}, leaving out any other romfs nested inside it. */
 	private static List<Path> archives(Path root) throws IOException {
+		return files(root, name -> name.endsWith(ARCHIVE_SUFFIX));
+	}
+
+	/** Every file under {@code root} whose name {@code wanted} takes, leaving out any other romfs nested inside it. */
+	private static List<Path> files(Path root, java.util.function.Predicate<String> wanted) throws IOException {
 		List<Path> found = new ArrayList<>();
 		Files.walkFileTree(root, new SimpleFileVisitor<>() {
 			@Override
@@ -727,7 +753,7 @@ public final class RomfsIndex {
 
 			@Override
 			public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
-				if (file.getFileName().toString().endsWith(ARCHIVE_SUFFIX)) {
+				if (wanted.test(file.getFileName().toString())) {
 					found.add(file);
 				}
 				return FileVisitResult.CONTINUE;

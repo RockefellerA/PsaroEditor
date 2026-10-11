@@ -17,7 +17,7 @@ import javax.swing.SwingConstants;
 import psaro.AppIcon;
 import psaro.UpdateChecker;
 
-/** Help → About: the icon, version, author and copyright. */
+/** Help → About: the icon, version, author and copyright, and the third-party notices. */
 public final class About extends JDialog {
 
 	public About(Frame owner) {
@@ -43,9 +43,13 @@ public final class About extends JDialog {
 				+ "or the publishers of the games it edits.</div></html>");
 		text.setHorizontalAlignment(SwingConstants.CENTER);
 
+		JButton notices = new JButton("Third-party notices…");
+		notices.setToolTipText("The licences of the libraries PsaroEditor uses");
+		notices.addActionListener(e -> new ThirdPartyNotices(this).setVisible(true));
 		JButton ok = new JButton("OK");
 		ok.addActionListener(e -> dispose());
 		JPanel buttons = new JPanel(new FlowLayout(FlowLayout.CENTER));
+		buttons.add(notices);
 		buttons.add(ok);
 		getRootPane().setDefaultButton(ok);
 
