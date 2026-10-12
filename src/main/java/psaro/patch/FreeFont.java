@@ -13,7 +13,9 @@ import psaro.romfs.RomfsIndex;
  * A font drawn from a bundled {@link Typeface} to stand in for a game font, so the patch can
  * leave the game's fonts as they are: each archive that carries the game font gets this one
  * beside it, holding what the game font holds plus what the English adds, and its layouts are
- * pointed at it. Every glyph is the typeface's, in the game font's size and outline
+ * pointed at it (the game font then goes, where no layout names it any more). Its cells keep
+ * only the rows its glyphs draw in, as the game's own fonts' do, for the archive is held in the
+ * scene's memory. Every glyph is the typeface's, in the game font's size and outline
  * ({@link GlyphDrawing}); what the typeface lacks (Noto Sans has no kana or kanji) is drawn from
  * M PLUS Rounded 1c, and what neither has is left out.
  *
@@ -256,6 +258,9 @@ public final class FreeFont {
 		}
 		// a character the font lacks draws as the space, as in the game's own fonts
 		out.altIndex = out.cmap.get((int) ' ');
+		// the cells have room for any letter the typefaces draw; the file keeps only the rows its own use,
+		// as the game's fonts do, for an archive's memory is the scene's
+		out.trimRows();
 		out.fitSheets(256, 512);
 		return out;
 	}

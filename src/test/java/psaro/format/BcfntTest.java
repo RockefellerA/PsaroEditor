@@ -2,6 +2,7 @@ package psaro.format;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
@@ -93,5 +94,29 @@ class BcfntTest {
 		f.fitSheets(256, 512);
 		// 136 cells of 27x33: five 128x256 sheets (4x7 grid) beat two 256x512 ones
 		assertEquals(List.of(128, 256, 4, 7), List.of(f.sheetW, f.sheetH, f.cols, f.rows));
+	}
+
+	/** Rows no glyph draws in go from the top and bottom; each glyph's rows keep their place against the baseline. */
+	@Test
+	void trimmingDropsEmptyRowsAndKeepsGlyphsOnTheBaseline() {
+		Bcfnt f = font(10, 20, 15, 20, 11, "AB");
+		Bcfnt before = f.copy();
+		// the blocks run from row 2 to the row above the baseline; row 15 counts as the baseline's
+		assertTrue(f.trimmable());
+		assertArrayEquals(new int[] {2, 15}, f.inkRows());
+		f.trimRows();
+		assertEquals(14, f.cellH);
+		assertEquals(13, f.baseline);
+		assertFalse(f.trimmable());
+		for (int i = 0; i < f.glyphs.size(); i++) {
+			for (int y = 0; y < f.cellH; y++) {
+				for (int x = 0; x < f.cellW; x++) {
+					assertEquals(before.glyphs.get(i).pixels[(y + 2) * f.cellW + x], f.glyphs.get(i).pixels[y * f.cellW + x]);
+				}
+			}
+		}
+		// a font with nothing drawn (only a space) stays as it is
+		Bcfnt blank = font(10, 20, 2, 20, 11, " ");
+		assertFalse(blank.trimmable());
 	}
 }

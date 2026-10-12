@@ -352,6 +352,52 @@ public final class Bcfnt {
 	}
 
 	/**
+	 * The first and last cell rows any glyph draws in, as {@code {top, bottom}}; null when none
+	 * draws at all. The baseline row always counts, so a trim never moves the baseline out.
+	 */
+	public int[] inkRows() {
+		int top = cellH;
+		int bottom = -1;
+		for (Glyph g : glyphs) {
+			for (int y = 0; y < cellH; y++) {
+				if (y >= top && y <= bottom) {
+					continue;
+				}
+				for (int x = 0; x < cellW; x++) {
+					if ((Texture.toRgba(g.pixels[y * cellW + x], format) & 0xFF) != 0) {
+						top = Math.min(top, y);
+						bottom = Math.max(bottom, y);
+						break;
+					}
+				}
+			}
+		}
+		if (bottom < 0) {
+			return null;
+		}
+		return new int[] {Math.min(top, baseline), Math.max(bottom, Math.min(baseline, cellH - 1))};
+	}
+
+	/** Whether {@link #trimRows} would make the cells shorter. */
+	public boolean trimmable() {
+		int[] ink = inkRows();
+		return ink != null && ink[1] - ink[0] + 1 < cellH;
+	}
+
+	/**
+	 * Drops the rows no glyph draws in from the top and bottom of every cell. The game seats a
+	 * cell by its baseline row, which moves up with the rows dropped, so every glyph stays where
+	 * it was on screen. The sheets are left for the caller to fit.
+	 */
+	public void trimRows() {
+		int[] ink = inkRows();
+		if (ink == null || ink[1] - ink[0] + 1 == cellH) {
+			return;
+		}
+		recell(cellW, ink[1] - ink[0] + 1, baseline - ink[0]);
+	}
+
+	/**
 	 * Copies the glyphs for {@code codes} out of {@code donor}, widening cells to fit and
 	 * re-seating the donor's cells on this font's baseline; pixel formats are converted if they
 	 * differ. Existing glyphs are kept unless {@code replace}. Returns the code points added.

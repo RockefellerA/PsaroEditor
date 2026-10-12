@@ -198,6 +198,12 @@ public final class Darc {
 		return true;
 	}
 
+	/** Takes {@code file} out of the archive; false when it is not in it. */
+	public static boolean remove(Node root, Node file) {
+		Node dir = file == null ? null : parentOf(root, file);
+		return dir != null && dir.children.remove(file);
+	}
+
 	private static Node parentOf(Node dir, Node child) {
 		for (Node c : dir.children) {
 			if (c == child) {

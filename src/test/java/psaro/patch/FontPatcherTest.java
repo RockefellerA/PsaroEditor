@@ -122,10 +122,11 @@ class FontPatcherTest {
 	}
 
 	/**
-	 * A font set to a bundled typeface is left as the game ships it: beside every copy of it the
-	 * patch adds a font drawn from the typeface, holding that copy's characters and the English
-	 * (kana drawn from M PLUS Rounded 1c, which Noto Sans lacks), and the layouts name that font
-	 * instead. The written glyphs are those measured; going back to the game font takes it all out.
+	 * A font set to a bundled typeface is not changed: beside every copy of it the patch adds a
+	 * font drawn from the typeface, holding that copy's characters and the English (kana drawn
+	 * from M PLUS Rounded 1c, which Noto Sans lacks), and the layouts name that font instead, so
+	 * the game font, named by none, is left out. The written glyphs are those measured, in cells
+	 * cut to the rows they draw in; going back to the game font takes it all out.
 	 */
 	@Test
 	void aFontSetToABundledTypefaceIsDrawnAnewBesideTheGameFont() throws IOException {
@@ -149,15 +150,19 @@ class FontPatcherTest {
 
 		patcher.write(plan, step -> { });
 		Map<String, Darc.Node> files = Darc.files(Archive.load(patcher.outputPath(menu())));
-		assertArrayEquals(Darc.files(Archive.load(menu())).get("font/" + FONT).data, files.get("font/" + FONT).data,
-				"the game font is written as it was");
+		assertFalse(files.containsKey("font/" + FONT), "no layout names the game font, so it is left out");
 		Bcfnt writtenFree = Bcfnt.parse(files.get("font/" + drawn).data);
 		assertEquals(codes("Yes! はい"), writtenFree.cmap.keySet());
 		assertEquals(writtenFree.cmap.get((int) ' '), writtenFree.altIndex, "what it lacks draws as a space");
 		assertEquals(drawn, Bclyt.read(files.get("blyt/menu.bclyt").data).textPanes().get(0).text().font());
 		Usage u = index.usages(index.table("menu"), "menu_0001").get(0);
+		Bcfnt measured = patcher.current(u).copy();
+		assertTrue(writtenFree.cellH < measured.cellH, "the cells keep only the rows drawn in");
+		assertFalse(writtenFree.trimmable());
+		// seated on the written baseline, the measured cells are the written ones
+		measured.recell(measured.cellW, writtenFree.cellH, writtenFree.baseline);
 		for (char c : "Yes!".toCharArray()) {
-			assertArrayEquals(patcher.current(u).glyph(c).pixels, writtenFree.glyph(c).pixels, "as measured: " + c);
+			assertArrayEquals(measured.glyph(c).pixels, writtenFree.glyph(c).pixels, "as measured: " + c);
 		}
 		assertFalse(patcher.plan(english("Yes!")).hasWork());
 
@@ -516,6 +521,49 @@ class FontPatcherTest {
 		assertEquals(FONT, layout.textPanes().get(0).text().font());
 		assertTrue(written().has('Y'), "lent its English as a game font");
 		assertFalse(patcher.plan(english("Yes")).hasWork());
+	}
+
+	/** An archive written with the game font still beside its stand-in is written again without it. */
+	@Test
+	void aGameFontLeftBesideItsStandInIsTakenOutOnTheNextPatch() throws IOException {
+		settings.setLettersFrom(FONT, Typeface.NOTO_SANS);
+		patcher.settingsChanged();
+		patcher.write(patcher.plan(english("Yes")), step -> { });
+		// as an earlier patch wrote it: the game font kept
+		Path out = patcher.outputPath(menu());
+		Darc.Node root = Archive.load(out);
+		Darc.Node free = Darc.files(root).get("font/" + FreeFont.name(FONT, Typeface.NOTO_SANS));
+		Darc.addBeside(root, free, FONT, Darc.files(Archive.load(menu())).get("font/" + FONT).data);
+		Archive.save(root, out);
+
+		Plan plan = patcher.plan(english("Yes"));
+		assertTrue(plan.hasWork());
+		patcher.write(plan, step -> { });
+		assertFalse(Darc.files(Archive.load(out)).containsKey("font/" + FONT));
+		assertFalse(patcher.plan(english("Yes")).hasWork());
+	}
+
+	/**
+	 * A font some layout names from another archive (as the game's cbf_std, which the game loads
+	 * itself) stays in the archives that carry it, though their own layouts name its stand-in.
+	 */
+	@Test
+	void aFontAnotherArchivesLayoutNamesIsKept() throws IOException {
+		Path other = dir.resolve("shared");
+		SampleRomfs.table(other, "menu", Map.of("menu_0001", "はい", "menu_0002", "いいえ"));
+		SampleRomfs.archive(other, "scene/menu/menu.arc.lz", "blyt/menu.bclyt", List.of(FONT),
+				Map.of(FONT, SampleRomfs.font("はいえ", 10)), SampleRomfs.pane("Txt_Yes", "menu_0001"));
+		SampleRomfs.archive(other, "scene/list/list.arc.lz", "blyt/list.bclyt", List.of(FONT), Map.of(),
+				SampleRomfs.pane("Txt_No", "menu_0002"));
+		RomfsIndex idx = RomfsIndex.scan(other);
+		PatchSettings s = PatchSettings.open(other);
+		s.setLettersFrom(FONT, Typeface.NOTO_SANS);
+		FontPatcher p = new FontPatcher(idx, s, LayoutOverrides.open(other));
+		p.write(p.plan(List.of(new Text(idx.table("menu"), "menu_0001", "Yes"))), step -> { });
+		Path menu = other.resolve("scene/menu/menu.arc.lz");
+		Map<String, Darc.Node> files = Darc.files(Archive.load(p.outputPath(menu)));
+		assertTrue(files.containsKey("font/" + FreeFont.name(FONT, Typeface.NOTO_SANS)));
+		assertTrue(files.containsKey("font/" + FONT), "list.bclyt reads it from here");
 	}
 
 	/**

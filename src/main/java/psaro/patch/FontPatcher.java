@@ -206,6 +206,8 @@ public final class FontPatcher {
 	private final Map<Path, Written> written = new HashMap<>();
 	/** Each romfs archive's layouts by path, as read; they never change. */
 	private final Map<Path, Map<String, byte[]>> originalLayouts = new HashMap<>();
+	/** Fonts a layout names from another archive ({@link #sharedFonts}); null until first asked for. */
+	private Set<String> sharedFonts;
 
 	public FontPatcher(RomfsIndex index, PatchSettings settings, LayoutOverrides overrides, ImageEdits images) {
 		this.index = index;
@@ -774,13 +776,16 @@ public final class FontPatcher {
 		Set<Integer> unavailable = free.draw(needed);
 		Set<Integer> lent = new TreeSet<>(needed);
 		lent.removeAll(unavailable);
-		Bcfnt out = written(outputPath(archive)).fonts().get(free.name());
+		Written w = written(outputPath(archive));
+		Bcfnt out = w.fonts().get(free.name());
 		Set<Integer> have = out == null ? Set.of() : out.cmap.keySet();
 		Set<Integer> add = new TreeSet<>(lent);
 		add.removeAll(have);
 		Set<Integer> remove = new TreeSet<>(have);
 		remove.removeAll(lent);
-		boolean stale = false;
+		// written before stand-ins were trimmed and the fonts they replace dropped: written again
+		boolean stale = out != null && (out.trimmable()
+				|| w.fonts().containsKey(free.gameFont()) && droppable(free.gameFont(), namedFonts(w.layouts())));
 		Map<Typeface, Donor> donors = new HashMap<>();
 		Map<Integer, Donor> from = new TreeMap<>();
 		String weight = Typeface.weightFor(free.gameFont());
@@ -810,6 +815,41 @@ public final class FontPatcher {
 			}
 		});
 		return out;
+	}
+
+	/** Every font {@code layouts} (by path) name in their font lists. */
+	private static Set<String> namedFonts(Map<String, byte[]> layouts) {
+		Set<String> out = new HashSet<>();
+		for (byte[] layout : layouts.values()) {
+			out.addAll(Bclyt.read(layout).fonts());
+		}
+		return out;
+	}
+
+	/**
+	 * Whether game font {@code font} can leave an archive whose layouts name {@code named}: the
+	 * game reads its fonts only through the layouts, save one a layout names from another
+	 * archive (cbf_std, which the game loads itself), which stays wherever it is.
+	 */
+	private boolean droppable(String font, Set<String> named) {
+		return !named.contains(font) && !sharedFonts().contains(font);
+	}
+
+	/** The fonts some layout names that its own archive does not carry, made when first asked for. */
+	private synchronized Set<String> sharedFonts() {
+		if (sharedFonts == null) {
+			Set<String> out = new HashSet<>();
+			Map<String, Set<Path>> carriers = new HashMap<>();
+			for (Usage u : index.textPanes()) {
+				for (String font : u.layoutFonts()) {
+					if (!carriers.computeIfAbsent(font, f -> Set.copyOf(index.archivesWithFont(f))).contains(u.archive())) {
+						out.add(font);
+					}
+				}
+			}
+			sharedFonts = Set.copyOf(out);
+		}
+		return sharedFonts;
 	}
 
 	/**
@@ -1064,7 +1104,7 @@ public final class FontPatcher {
 					file.getValue().data = image;
 				}
 			}
-			// the drawn fonts beside the game's, which are left as they are
+			// the drawn fonts beside the game's, which are not changed
 			for (FontChange f : free) {
 				FreeFont ff = freeFont(f.drawnFor(), FreeFont.typefaceOf(f.font()));
 				Darc.Node game = byName.get(f.drawnFor());
@@ -1072,6 +1112,14 @@ public final class FontPatcher {
 					throw new IOException("cannot add " + f.font() + " beside " + f.drawnFor() + " in " + archive);
 				}
 				Darc.addBeside(root, game, f.font(), ff.build(f.lent()).toBytes());
+			}
+			// but a game font no layout here names any more is only weight: the whole archive sits in
+			// the scene's memory, and a stand-in beside a big font can leave the scene too little
+			Set<String> named = namedFonts(layoutsOf(Darc.files(root)));
+			for (FontChange f : free) {
+				if (droppable(f.drawnFor(), named)) {
+					Darc.remove(root, byName.get(f.drawnFor()));
+				}
 			}
 			Archive.save(root, out);
 			wrote.add(out);
