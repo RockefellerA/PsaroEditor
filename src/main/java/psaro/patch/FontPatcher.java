@@ -124,10 +124,12 @@ public final class FontPatcher {
 	/**
 	 * Every font the English touches and every font a previous patch wrote; every changed layout
 	 * and every layout a previous patch changed; every replaced image and every one a previous
-	 * patch replaced.
+	 * patch replaced. {@code texts} is the text layouts hold themselves, by layout and pane, in
+	 * every archive carrying the layout; {@code fallbacks}, by archive, layout and pane, the
+	 * English of each keyed pane that holds text of its own, written there too ({@link #plan}).
 	 */
 	public record Plan(List<FontChange> fonts, List<LayoutChange> layouts, List<ImageChange> images,
-			Map<String, Map<String, String>> texts) {
+			Map<String, Map<String, String>> texts, Map<Path, Map<String, Map<String, String>>> fallbacks) {
 
 		/** A plan with no images. */
 		public Plan(List<FontChange> fonts, List<LayoutChange> layouts) {
@@ -136,7 +138,7 @@ public final class FontPatcher {
 
 		/** A plan writing no text into layouts. */
 		public Plan(List<FontChange> fonts, List<LayoutChange> layouts, List<ImageChange> images) {
-			this(fonts, layouts, images, Map.of());
+			this(fonts, layouts, images, Map.of(), Map.of());
 		}
 
 		public boolean hasWork() {
@@ -589,10 +591,20 @@ public final class FontPatcher {
 	public Plan plan(List<Text> texts) {
 		// the text layouts hold themselves, by layout and pane, for the patch to write into them
 		Map<String, Map<String, String>> held = new TreeMap<>();
+		// a keyed pane holding text of its own (a button's はい) shows it when the scene that opens
+		// its dialog has no table with the key; so it holds the English too, archive by archive
+		Map<Path, Map<String, Map<String, String>>> fallbacks = new TreeMap<>();
 		for (Text t : texts) {
 			if (t.table().builtIn()) {
 				for (Usage u : index.usages(t.table(), t.key())) {
 					held.computeIfAbsent(u.layout(), k -> new TreeMap<>()).put(u.pane().name(), t.text());
+				}
+			} else if (t.table().kind() == RomfsIndex.Kind.TABLE) {
+				for (Usage u : index.usages(t.table(), t.key())) {
+					if (holdsText(u.pane().text())) {
+						fallbacks.computeIfAbsent(u.archive(), k -> new TreeMap<>())
+								.computeIfAbsent(u.layout(), k -> new TreeMap<>()).putIfAbsent(u.pane().name(), t.text());
+					}
 				}
 			}
 		}
@@ -656,7 +668,32 @@ public final class FontPatcher {
 				}
 			}
 		}
-		return new Plan(List.copyOf(fonts), layoutChanges(held), imageChanges(), held);
+		return new Plan(List.copyOf(fonts), layoutChanges(held, fallbacks), imageChanges(), held, fallbacks);
+	}
+
+	/**
+	 * Whether a pane holds text of its own, which the game shows when no table fills it, rather
+	 * than the placeholder ({@code *}) a pane only ever filled from a table holds.
+	 */
+	static boolean holdsText(TextInfo text) {
+		String held = text.placeholder();
+		return held != null && !held.isBlank() && !held.strip().equals("*");
+	}
+
+	/**
+	 * The text {@code layout} in {@code archive} holds itself: what every copy of it holds
+	 * ({@code held}) over the English of its keyed panes in this archive ({@code fallbacks}).
+	 */
+	private static Map<String, String> heldIn(Path archive, String layout, Map<String, Map<String, String>> held,
+			Map<Path, Map<String, Map<String, String>>> fallbacks) {
+		Map<String, String> own = fallbacks.getOrDefault(archive, Map.of()).getOrDefault(layout, Map.of());
+		Map<String, String> shared = held.getOrDefault(layout, Map.of());
+		if (own.isEmpty()) {
+			return shared;
+		}
+		Map<String, String> out = new TreeMap<>(own);
+		out.putAll(shared);
+		return out;
 	}
 
 	/** Every image with a replacement, in each archive holding it, and every image a previous patch replaced. */
@@ -898,38 +935,44 @@ public final class FontPatcher {
 	}
 
 	/**
-	 * Every layout with a change or text of its own in {@code held} ({@link #plan}), and every
-	 * layout a previous patch wrote changed.
+	 * Every layout with a change or text of its own in {@code held} or {@code fallbacks}
+	 * ({@link #plan}), and every layout a previous patch wrote changed.
 	 */
-	private List<LayoutChange> layoutChanges(Map<String, Map<String, String>> held) {
+	private List<LayoutChange> layoutChanges(Map<String, Map<String, String>> held,
+			Map<Path, Map<String, Map<String, String>>> fallbacks) {
 		List<LayoutChange> out = new ArrayList<>();
 		Set<String> seen = new HashSet<>();
 		Set<String> changed = new TreeSet<>(overrides.layouts());
 		changed.addAll(held.keySet());
 		for (String layout : changed) {
 			for (Path archive : index.archivesWithLayout(layout)) {
-				layoutChange(archive, layout, held, seen, out);
+				layoutChange(archive, layout, held, fallbacks, seen, out);
 			}
 		}
+		fallbacks.forEach((archive, layouts) -> {
+			for (String layout : layouts.keySet()) {
+				layoutChange(archive, layout, held, fallbacks, seen, out);
+			}
+		});
 		// every layout of an archive with a font drawn from a typeface for every pane may name it
 		for (String gameFont : settings.fontsDrawnFrom().keySet()) {
 			for (Path archive : index.archivesWithFont(gameFont)) {
 				for (String layout : originalLayouts(archive).keySet()) {
-					layoutChange(archive, layout, held, seen, out);
+					layoutChange(archive, layout, held, fallbacks, seen, out);
 				}
 			}
 		}
 		for (Path archive : writtenArchives()) {
 			Path original = index.root().resolve(output.relativize(archive).toString());
 			for (String layout : written(archive).layouts().keySet()) {
-				layoutChange(original, layout, held, seen, out);
+				layoutChange(original, layout, held, fallbacks, seen, out);
 			}
 		}
 		return List.copyOf(out);
 	}
 
-	private void layoutChange(Path archive, String layout, Map<String, Map<String, String>> held, Set<String> seen,
-			List<LayoutChange> out) {
+	private void layoutChange(Path archive, String layout, Map<String, Map<String, String>> held,
+			Map<Path, Map<String, Map<String, String>>> fallbacks, Set<String> seen, List<LayoutChange> out) {
 		if (!seen.add(archive + "!" + layout)) {
 			return;
 		}
@@ -939,7 +982,7 @@ public final class FontPatcher {
 		}
 		Map<String, TextOverride> panes = overrides.forLayout(layout);
 		Map<String, String> names = freeNames(archive);
-		byte[] expected = expected(layout, original, panes, names, held.getOrDefault(layout, Map.of()));
+		byte[] expected = expected(layout, original, panes, names, heldIn(archive, layout, held, fallbacks));
 		Map<String, String> renamed = new TreeMap<>(names);
 		renamed.keySet().retainAll(Bclyt.read(original).fonts());
 		boolean changed = !Arrays.equals(expected, original);
@@ -955,17 +998,25 @@ public final class FontPatcher {
 	 * Layout {@code original} with {@code panes}' changes, naming fonts by {@code names} (each game
 	 * font set to a typeface, for every pane), then pointing each pane with a draw-with of its own
 	 * at the font for it, added to the font list when need be, and holding {@code texts}, pane to
-	 * the text it holds itself.
+	 * the text it holds itself. Every pane moved or sized ({@link LayoutOverrides#placesForLayout})
+	 * sits and measures as changed.
 	 */
 	private byte[] expected(String layout, byte[] original, Map<String, TextOverride> panes, Map<String, String> names,
 			Map<String, String> texts) {
 		byte[] out = panes.isEmpty() ? original : Bclyt.withText(original, panes);
+		out = Bclyt.withPanes(out, overrides.placesForLayout(layout));
 		out = names.isEmpty() ? out : Bclyt.withFontNames(out, names);
 		Map<String, String> own = new TreeMap<>();
 		for (PaneFont pf : paneFonts(layout, original, panes)) {
 			own.put(pf.pane(), pf.fontFile());
 		}
 		return Bclyt.withPaneText(Bclyt.withPaneFonts(out, own), texts);
+	}
+
+	/** {@code layout} in {@code archive} as the romfs has it, every pane with its place and size; null when it has none. */
+	public Bclyt.Layout layout(Path archive, String layout) {
+		byte[] d = originalLayouts(archive).get(layout);
+		return d == null ? null : Bclyt.read(d);
 	}
 
 	/** {@code archive}'s layouts by path, read once; empty when it cannot be read. */
@@ -1162,7 +1213,7 @@ public final class FontPatcher {
 				}
 				if (path.endsWith(".bclyt")) {
 					file.getValue().data = expected(path, file.getValue().data, overrides.forLayout(path), names,
-							plan.texts().getOrDefault(path, Map.of()));
+							heldIn(archive, path, plan.texts(), plan.fallbacks()));
 				}
 				if (replaced.contains(path)) {
 					byte[] image = images.replacement(file.getValue().data);

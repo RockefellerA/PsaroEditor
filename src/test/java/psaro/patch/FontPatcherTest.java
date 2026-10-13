@@ -319,6 +319,25 @@ class FontPatcherTest {
 		assertFalse(p.plan(yes).hasWork());
 	}
 
+	/** A pane moved and sized is written so; put back, the archive, holding nothing else, goes. */
+	@Test
+	void aMovedPaneIsWrittenAndPutBack() throws IOException {
+		patcher.overrides().setPlace("blyt/menu.bclyt", "Txt_Yes", new Bclyt.PaneOverride(-6f, 3f, null, null));
+		Plan plan = patcher.plan(List.of());
+		assertEquals(1, plan.layoutsToWrite());
+		patcher.write(plan, step -> { });
+		Bclyt.Pane written = Bclyt.read(Darc.files(Archive.load(patcher.outputPath(menu()))).get("blyt/menu.bclyt").data)
+				.panes().get(0);
+		assertEquals(-6f, written.x());
+		assertEquals(3f, written.y());
+		assertEquals(120f, written.width());
+		assertFalse(patcher.plan(List.of()).hasWork());
+
+		patcher.overrides().setPlace("blyt/menu.bclyt", "Txt_Yes", Bclyt.PaneOverride.NONE);
+		patcher.write(patcher.plan(List.of()), step -> { });
+		assertFalse(Files.exists(patcher.outputPath(menu())));
+	}
+
 	@Test
 	void anArchiveWithGlyphsAndALayoutChangeGetsBoth() throws IOException {
 		patcher.overrides().set("blyt/menu.bclyt", List.of("Txt_Yes"), new TextOverride(40f, null, null, null, null, null));
@@ -556,6 +575,35 @@ class FontPatcherTest {
 				.textPanes().get(0).text();
 		assertEquals("Yes", written.placeholder());
 		assertFalse(patcher.plan(List.of(new Text(held, "blyt/tutorial_btn_yes.bclyt:Txt_Btn", "Yes"))).hasWork());
+	}
+
+	/**
+	 * A keyed button holding はい itself, as a dialog's do: the game shows that when the scene opening
+	 * the dialog has no table with the key, so the patch writes the key's English into the layout
+	 * too. A pane holding only the placeholder, always filled from its table, is left as it was.
+	 */
+	@Test
+	void aKeyedPanesOwnTextIsWrittenWithItsKeysEnglish() throws IOException {
+		SampleRomfs.table(romfs, "dialog", Map.of("ficr_2000", "はい"));
+		SampleRomfs.archive(romfs, "common/dialog/dialog.arc.lz", "blyt/common_btn_win_yes.bclyt", List.of(FONT),
+				Map.of(FONT, SampleRomfs.font("はい", 10)), SampleRomfs.pane("Txt_Btn", "ficr_2000", "はい"));
+		index = RomfsIndex.scan(romfs);
+		patcher = new FontPatcher(index, settings, LayoutOverrides.open(romfs));
+		List<Text> english = List.of(new Text(index.table("dialog"), "ficr_2000", "Yes"),
+				new Text(index.table("menu"), "menu_0001", "Yes"));
+		Plan plan = patcher.plan(english);
+		Path dialog = romfs.resolve("common/dialog/dialog.arc.lz");
+		assertTrue(plan.layouts().stream().anyMatch(l -> l.archive().equals(dialog) && l.changed()));
+		assertTrue(plan.layouts().stream().noneMatch(l -> l.archive().equals(menu())), "the menu's pane holds only *");
+
+		patcher.write(plan, step -> { });
+		Bclyt.TextInfo written = Bclyt.read(Darc.files(Archive.load(patcher.outputPath(dialog))).get("blyt/common_btn_win_yes.bclyt").data)
+				.textPanes().get(0).text();
+		assertEquals("Yes", written.placeholder());
+		Bclyt.TextInfo menuPane = Bclyt.read(Darc.files(Archive.load(patcher.outputPath(menu()))).get("blyt/menu.bclyt").data)
+				.textPanes().get(0).text();
+		assertEquals("*", menuPane.placeholder());
+		assertFalse(patcher.plan(english).hasWork());
 	}
 
 	/** A font set to a typeface for every pane, but one pane keeping the game font: it points back at it. */

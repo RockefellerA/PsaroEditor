@@ -32,6 +32,7 @@ import javax.swing.table.AbstractTableModel;
 
 import com.formdev.flatlaf.FlatClientProperties;
 
+import psaro.format.Bclyt.PaneOverride;
 import psaro.format.Bclyt.TextOverride;
 import psaro.patch.FontPatcher;
 import psaro.patch.FontPatcher.FontChange;
@@ -350,7 +351,10 @@ public final class FontPatchDialog extends JDialog {
 					case 2 -> java.util.stream.Stream.concat(
 							l.fonts().entrySet().stream()
 									.map(e -> e.getKey().replace(".bcfnt", "") + " → " + e.getValue().replace(".bcfnt", "")),
-							l.panes().entrySet().stream().map(e -> e.getKey() + ": " + describe(e.getValue())))
+							java.util.stream.Stream.concat(
+									l.panes().entrySet().stream().map(e -> e.getKey() + ": " + describe(e.getValue())),
+									patcher.overrides().placesForLayout(l.layout()).entrySet().stream()
+											.map(e -> e.getKey() + ": " + describePlace(e.getValue()))))
 							.collect(Collectors.joining("; "));
 					case 3 -> !l.hasWork() ? "up to date" : l.changed() ? "write" : "put back as it was";
 					default -> "";
@@ -450,6 +454,17 @@ public final class FontPatchDialog extends JDialog {
 		}
 		if (t.drawWith() != null) {
 			parts.add("drawn with " + psaro.patch.Typeface.of(t.drawWith()).label());
+		}
+		return String.join(", ", parts);
+	}
+
+	private static String describePlace(PaneOverride p) {
+		List<String> parts = new ArrayList<>();
+		if (p.x() != null || p.y() != null) {
+			parts.add("at " + number(p.x()) + "," + number(p.y()));
+		}
+		if (p.width() != null || p.height() != null) {
+			parts.add("size " + number(p.width()) + "×" + number(p.height()));
 		}
 		return String.join(", ", parts);
 	}

@@ -234,6 +234,19 @@ public final class SampleRomfs {
 		return key == null ? section : concat(section, section("usd1", textId(key)));
 	}
 
+	/**
+	 * A picture pane {@code name} (pic1) at {@code x}, {@code y} from its parent, {@code w} by
+	 * {@code h}, at scale 1: the fields every pane shares, then no vertex colours, material or
+	 * texture coordinates worth reading.
+	 */
+	public static byte[] picture(String name, float x, float y, float w, float h) {
+		ByteBuffer pic = le(0x60 - 8);
+		pic.position(0x0C - 8).put(name.getBytes(StandardCharsets.US_ASCII));
+		pic.position(0x24 - 8).putFloat(x).putFloat(y);
+		pic.position(0x3C - 8).putFloat(1f).putFloat(1f).putFloat(w).putFloat(h);
+		return section("pic1", pic.array());
+	}
+
 	/** A null pane {@code name} (pan1) with {@code children} hung under it (pas1 .. pae1). */
 	public static byte[] group(String name, byte[]... children) {
 		ByteBuffer pan = le(0x4C - 8);

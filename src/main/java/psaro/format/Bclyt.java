@@ -11,6 +11,9 @@ import java.util.regex.Pattern;
 /**
  * BCLYT layouts: the font list and every pane, with the details of text panes.
  *
+ * <p>Every pane (pan1, pic1, txt1, wnd1, bnd1, prt1) begins alike: 0x0C name (16 bytes), 0x24
+ * translation xyz, 0x30 rotation xyz, 0x3C scale xy, 0x44 size w h ({@link #withPanes}).
+ *
  * <p>txt1 layout, offsets from the section start: 0x0C name (16 bytes), 0x24 translation xyz,
  * 0x30 rotation xyz, 0x3C scale xy, 0x44 box size w h, 0x4C text buffer bytes u16, string
  * bytes u16, material u16, font index u16 (into fnl1), 0x54 origin u8, line alignment u8,
@@ -28,9 +31,22 @@ public final class Bclyt {
 
 	/**
 	 * Any pane. Text-pane fields are null / zero for other kinds. {@code parent} is the pane it
-	 * hangs under (null at the root), {@code x} and {@code y} where it sits from there.
+	 * hangs under (null at the root), {@code x} and {@code y} where it sits from there, its centre
+	 * by default; {@code width} and {@code height} its size (a text pane's box).
 	 */
-	public record Pane(String kind, String name, List<String> keys, TextInfo text, String parent, float x, float y) {
+	public record Pane(String kind, String name, List<String> keys, TextInfo text, String parent, float x, float y,
+			float width, float height) {
+
+		/** A pane whose size does not matter here. */
+		public Pane(String kind, String name, List<String> keys, TextInfo text, String parent, float x, float y) {
+			this(kind, name, keys, text, parent, x, y, 0, 0);
+		}
+
+		/** A picture: an image, or a window drawn from images, which {@link PaneOverride} can move and size. */
+		public boolean isPicture() {
+			return kind.equals("pic1") || kind.equals("wnd1");
+		}
+
 		public boolean isText() {
 			return text != null;
 		}
@@ -113,6 +129,27 @@ public final class Bclyt {
 		}
 	}
 
+	/**
+	 * New values for where a pane sits and how big it is; a null field keeps the layout's own.
+	 * {@code x} and {@code y} are its translation from its parent (y runs up), {@code width} and
+	 * {@code height} its size: a picture's stretches its image to fit, a text pane's is its box.
+	 */
+	public record PaneOverride(Float x, Float y, Float width, Float height) {
+
+		public static final PaneOverride NONE = new PaneOverride(null, null, null, null);
+
+		public boolean isEmpty() {
+			return equals(NONE);
+		}
+
+		/** {@code pane} where this override puts it, at the size it gives it. */
+		public Pane apply(Pane pane) {
+			return new Pane(pane.kind(), pane.name(), pane.keys(), pane.text(), pane.parent(),
+					TextOverride.or(x, pane.x()), TextOverride.or(y, pane.y()), TextOverride.or(width, pane.width()),
+					TextOverride.or(height, pane.height()));
+		}
+	}
+
 	private Bclyt() {
 	}
 
@@ -160,7 +197,7 @@ public final class Bclyt {
 								rgba(d, o + 0x5C), rgba(d, o + 0x60));
 					}
 					panes.add(new Pane(tag, name, new ArrayList<>(), info, parents.peek(), Bytes.f32(d, o + 0x24),
-							Bytes.f32(d, o + 0x28)));
+							Bytes.f32(d, o + 0x28), Bytes.f32(d, o + 0x44), Bytes.f32(d, o + 0x48)));
 					last = name;
 				}
 				case "usd1" -> {
@@ -238,6 +275,39 @@ public final class Bclyt {
 					if (font >= 0) {
 						b.putShort(o + 0x52, (short) font);
 					}
+				}
+			}
+			o += size;
+		}
+		return out;
+	}
+
+	/**
+	 * A copy of layout {@code d} with each pane named in {@code overrides}, of any kind, moved and
+	 * sized as it says: its translation x and y (0x24, 0x28) and its size (0x44, 0x48). Only those
+	 * floats change; every other byte stays as it was.
+	 */
+	public static byte[] withPanes(byte[] d, Map<String, PaneOverride> overrides) {
+		if (overrides.isEmpty()) {
+			return d;
+		}
+		byte[] out = d.clone();
+		ByteBuffer b = ByteBuffer.wrap(out).order(ByteOrder.LITTLE_ENDIAN);
+		int o = Bytes.u16(d, 6);
+		while (o < d.length - 8) {
+			int size = Bytes.u32(d, o + 4);
+			if (size == 0) {
+				break;
+			}
+			String tag = new String(d, o, 4, StandardCharsets.US_ASCII);
+			if (List.of("pan1", "pic1", "txt1", "wnd1", "bnd1", "prt1").contains(tag)) {
+				String name = Bytes.ascii(d, o + 12);
+				PaneOverride p = overrides.get(name.length() > 16 ? name.substring(0, 16) : name);
+				if (p != null) {
+					put(b, o + 0x24, p.x());
+					put(b, o + 0x28, p.y());
+					put(b, o + 0x44, p.width());
+					put(b, o + 0x48, p.height());
 				}
 			}
 			o += size;

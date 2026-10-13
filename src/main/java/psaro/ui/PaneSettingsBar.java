@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.prefs.Preferences;
 import javax.swing.BorderFactory;
 import javax.swing.DefaultListCellRenderer;
 import javax.swing.JButton;
@@ -20,6 +21,7 @@ import javax.swing.JLabel;
 import javax.swing.JList;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
+import javax.swing.JSeparator;
 import javax.swing.JSpinner;
 import javax.swing.JTextField;
 import javax.swing.SpinnerNumberModel;
@@ -27,6 +29,8 @@ import javax.swing.Timer;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
 import com.formdev.flatlaf.FlatClientProperties;
+import psaro.format.Bclyt;
+import psaro.format.Bclyt.PaneOverride;
 import psaro.format.Bclyt.TextInfo;
 import psaro.format.Bclyt.TextOverride;
 import psaro.patch.FontPatcher;
@@ -35,14 +39,17 @@ import psaro.romfs.RomfsIndex.Usage;
 
 /**
  * The previewed pane's font, box and type settings, changeable in place, and those of the font it
- * draws with, in three rows:
+ * draws with, in three areas, each under a header that folds it away and opens it again, the app
+ * remembering which are open ({@link #FONT_AREA} and the others), with a line between them:
  * <ol>
- * <li>which of the layout's fonts the pane points at, and what this pane alone draws with;
- * <li>what every pane in that font draws with (the game font, given what it lacks from the game's
+ * <li>Font: which of the layout's fonts the pane points at, and what this pane alone draws with;
+ * what every pane in that font draws with (the game font, given what it lacks from the game's
  * others; or a font drawn from a bundled {@link Typeface} in its look, which Patch adds in its
  * place), and which letters get an extra pixel of space after them, the same letters the Patch
  * dialog lists (a letter from another font can crowd the next one, its outline included);
- * <li>the pane's box, font size and spacing.
+ * <li>Text pane: the pane's box, font size, spacing and where it sits;
+ * <li>Picture pane: a picture of the same layout (a label's frame, a plate), nearest first, with
+ * where it sits and how big it is: a picture stretches its image to its size.
  * </ol>
  * A pane's change is made to the layout, so it applies to that pane, and its drop-shadow twin, the
  * panes layered with it and the other rows of a list it is one row of ({@link Fit#together}), in
@@ -94,11 +101,34 @@ final class PaneSettingsBar extends JPanel {
 	private String fontName;
 	/** Set while the controls are filled in, so that is not taken as a change. */
 	private boolean loading;
+	/** Where the pane sits from its parent; its twins move with it. */
+	private final JSpinner posX = spinner(-2000, 2000, 1);
+	private final JSpinner posY = spinner(-2000, 2000, 1);
+	/** The layout's pictures, nearest the pane first. */
+	private final JComboBox<Bclyt.Pane> picture = new JComboBox<>();
+	private final JSpinner picX = spinner(-2000, 2000, 1);
+	private final JSpinner picY = spinner(-2000, 2000, 1);
+	private final JSpinner picW = spinner(0, 2000, 1);
+	private final JSpinner picH = spinner(0, 2000, 1);
+	private final JButton pictureReset = new JButton("Reset");
+
+	/** The three areas' keys in {@link #prefs}, each true while the area is shown. */
+	static final String FONT_AREA = "paneSettings.font.shown";
+	static final String TEXT_AREA = "paneSettings.textPane.shown";
+	static final String PICTURE_AREA = "paneSettings.picturePane.shown";
+	/** Where whether each area is shown is remembered for the next run. */
+	private final Preferences prefs;
 
 	/** {@code onChange} runs after a change is saved, to measure and draw again. */
 	PaneSettingsBar(FontPatcher fonts, Runnable onChange) {
+		this(fonts, onChange, Preferences.userNodeForPackage(PaneSettingsBar.class));
+	}
+
+	/** As {@link #PaneSettingsBar(FontPatcher, Runnable)}, remembering which areas are shown in {@code prefs}. */
+	PaneSettingsBar(FontPatcher fonts, Runnable onChange, Preferences prefs) {
 		this.fonts = fonts;
 		this.onChange = onChange;
+		this.prefs = prefs;
 		setLayout(new Rows());
 		setBorder(BorderFactory.createEmptyBorder(0, 6, 2, 6));
 
@@ -184,15 +214,62 @@ final class PaneSettingsBar extends JPanel {
 		box.add(group(label("Box:"), boxW, new JLabel("×"), boxH));
 		box.add(group(label("Font size:"), sizeX, new JLabel("×"), sizeY));
 		box.add(group(label("Spacing: letters"), charSpace, label("lines"), lineSpace));
+		box.add(group(label("Position:"), posX, new JLabel(","), posY));
 		box.add(group(reset, scope));
 		scope.putClientProperty(FlatClientProperties.STYLE_CLASS, "small");
 		scope.putClientProperty(FlatClientProperties.STYLE, "foreground: $Label.disabledForeground");
-		add(pane);
-		add(every);
-		add(box);
+		JPanel place = row();
+		place.add(group(label("Picture:"), picture));
+		place.add(group(label("at"), picX, new JLabel(","), picY));
+		place.add(group(label("size"), picW, new JLabel("×"), picH));
+		place.add(group(pictureReset));
+		section(FONT_AREA, "Font", pane, every);
+		add(separator());
+		section(TEXT_AREA, "Text pane", box);
+		add(separator());
+		section(PICTURE_AREA, "Picture pane", place);
 
-		reset.setToolTipText("Back to the layout's own settings for this pane");
-		reset.addActionListener(e -> save(TextOverride.NONE));
+		reset.setToolTipText("Back to the layout's own settings and position for this pane");
+		reset.addActionListener(e -> {
+			savePosition(true);
+			save(TextOverride.NONE);
+		});
+		String posTip = "Where the pane sits from its parent (x right, y up); its shadow and layers move with it";
+		posX.setToolTipText(posTip);
+		posY.setToolTipText(posTip);
+		for (JSpinner s : List.of(posX, posY)) {
+			s.addChangeListener(e -> {
+				if (!loading && usage != null) {
+					savePosition(false);
+				}
+			});
+		}
+		picture.setToolTipText("<html>A picture of the same layout, nearest this pane first: a label's frame, a plate. "
+				+ "Its image stretches to the size given here.</html>");
+		picture.setRenderer(new DefaultListCellRenderer() {
+			@Override
+			public Component getListCellRendererComponent(JList<?> list, Object value, int index, boolean selected,
+					boolean focus) {
+				String text = value instanceof Bclyt.Pane p
+						? p.name() + "  (" + format(current(p).width()) + "×" + format(current(p).height()) + ")"
+						: "";
+				return super.getListCellRendererComponent(list, text, index, selected, focus);
+			}
+		});
+		picture.addActionListener(e -> {
+			if (!loading) {
+				refreshPicture();
+			}
+		});
+		for (JSpinner s : List.of(picX, picY, picW, picH)) {
+			s.addChangeListener(e -> {
+				if (!loading && usage != null && picture.getSelectedItem() != null) {
+					savePicture(false);
+				}
+			});
+		}
+		pictureReset.setToolTipText("Back to the layout's own place and size for this picture");
+		pictureReset.addActionListener(e -> savePicture(true));
 		for (Field f : fields) {
 			f.spinner().addChangeListener(e -> {
 				if (!loading && usage != null) {
@@ -222,7 +299,28 @@ final class PaneSettingsBar extends JPanel {
 		scope.setText(archives <= 1 ? "Applies to " + layout : "Applies to " + layout + " in " + archives + " archives");
 		setToolTipText("Changes " + String.join(" and ", panes) + " of " + u.layout()
 				+ " in every archive that has it. Patch writes the changed layout.");
+		fillPictures(u);
 		refresh();
+	}
+
+	/**
+	 * The layout's pictures in the picker, those under the pane's own parent first (where its x and
+	 * y mean the same), nearest it first; the nearest chosen.
+	 */
+	private void fillPictures(Usage u) {
+		Bclyt.Layout layout = fonts.layout(u.archive(), u.layout());
+		List<Bclyt.Pane> pics = new ArrayList<>();
+		if (layout != null) {
+			layout.panes().stream().filter(Bclyt.Pane::isPicture).forEach(pics::add);
+		}
+		Bclyt.Pane text = u.pane();
+		pics.sort(java.util.Comparator.comparing((Bclyt.Pane p) -> Objects.equals(p.parent(), text.parent()) ? 0 : 1)
+				.thenComparingDouble(p -> Math.hypot(p.x() - text.x(), p.y() - text.y())));
+		loading = true;
+		picture.removeAllItems();
+		pics.forEach(picture::addItem);
+		loading = false;
+		refreshPicture();
 	}
 
 	void clear() {
@@ -243,8 +341,16 @@ final class PaneSettingsBar extends JPanel {
 		drawWith.removeAllItems();
 		drawWith.setEnabled(false);
 		style(drawWith, false);
+		for (JSpinner s : List.of(posX, posY, picX, picY, picW, picH)) {
+			s.setEnabled(false);
+			s.setValue(0.0);
+			style(s, false);
+		}
+		picture.removeAllItems();
+		picture.setEnabled(false);
 		loading = false;
 		reset.setEnabled(false);
+		pictureReset.setEnabled(false);
 		scope.setText(" ");
 		showFont(null);
 	}
@@ -293,9 +399,104 @@ final class PaneSettingsBar extends JPanel {
 		// a font no archive carries (the system font) cannot be drawn anew
 		drawWith.setEnabled(Fit.font(fonts.index(), usage) != null);
 		style(drawWith, ownChoice != null);
+		Bclyt.Pane placed = current(usage.pane());
+		posX.setEnabled(true);
+		posY.setEnabled(true);
+		posX.setValue((double) placed.x());
+		posY.setValue((double) placed.y());
+		style(posX, differs(placed.x(), usage.pane().x()));
+		style(posY, differs(placed.y(), usage.pane().y()));
 		loading = false;
-		reset.setEnabled(!fonts.overrides().get(usage.layout(), usage.pane().name()).isEmpty());
+		boolean moved = !fonts.overrides().place(usage.layout(), usage.pane().name()).isEmpty();
+		reset.setEnabled(moved || !fonts.overrides().get(usage.layout(), usage.pane().name()).isEmpty());
 		showFont(now.font());
+	}
+
+	/** {@code p} where the layout changes put it, at the size they give it. */
+	private Bclyt.Pane current(Bclyt.Pane p) {
+		return usage == null ? p : fonts.overrides().place(usage.layout(), p.name()).apply(p);
+	}
+
+	/** Fills the picture's place and size as changed, marking what differs from the layout's own. */
+	private void refreshPicture() {
+		Bclyt.Pane own = (Bclyt.Pane) picture.getSelectedItem();
+		boolean any = own != null && usage != null;
+		picture.setEnabled(picture.getItemCount() > 0);
+		loading = true;
+		for (JSpinner s : List.of(picX, picY, picW, picH)) {
+			s.setEnabled(any);
+		}
+		if (any) {
+			Bclyt.Pane now = current(own);
+			picX.setValue((double) now.x());
+			picY.setValue((double) now.y());
+			picW.setValue((double) now.width());
+			picH.setValue((double) now.height());
+			style(picX, differs(now.x(), own.x()));
+			style(picY, differs(now.y(), own.y()));
+			style(picW, differs(now.width(), own.width()));
+			style(picH, differs(now.height(), own.height()));
+		}
+		loading = false;
+		pictureReset.setEnabled(any && !fonts.overrides().place(usage.layout(), own.name()).isEmpty());
+		picture.repaint();
+	}
+
+	/**
+	 * Moves the pane where the position spinners say, and its twins by as much, keeping each where
+	 * the layout has it in what does not move; back where the layout has them when {@code back}.
+	 */
+	private void savePosition(boolean back) {
+		Bclyt.Pane own = usage.pane();
+		float dx = back ? 0 : ((Number) posX.getValue()).floatValue() - own.x();
+		float dy = back ? 0 : ((Number) posY.getValue()).floatValue() - own.y();
+		java.util.Map<String, PaneOverride> moves = new java.util.LinkedHashMap<>();
+		moves.put(own.name(), moved(own, dx, dy));
+		for (Usage twin : twins) {
+			moves.put(twin.pane().name(), moved(twin.pane(), dx, dy));
+		}
+		try {
+			fonts.overrides().setPlaces(usage.layout(), moves);
+		} catch (IOException e) {
+			JOptionPane.showMessageDialog(this, "Could not save the layout change:\n" + e.getMessage(), "Layout",
+					JOptionPane.ERROR_MESSAGE);
+		}
+		if (!back) {
+			refresh();
+			onChange.run();
+		}
+	}
+
+	/** {@code p} moved {@code dx}, {@code dy} from where the layout has it, its size as changed. */
+	private PaneOverride moved(Bclyt.Pane p, float dx, float dy) {
+		PaneOverride now = fonts.overrides().place(usage.layout(), p.name());
+		return new PaneOverride(differs(dx, 0) ? p.x() + dx : null, differs(dy, 0) ? p.y() + dy : null, now.width(),
+				now.height());
+	}
+
+	/** Places and sizes the chosen picture as the spinners say; as the layout has it when {@code back}. */
+	private void savePicture(boolean back) {
+		Bclyt.Pane own = (Bclyt.Pane) picture.getSelectedItem();
+		if (own == null) {
+			return;
+		}
+		PaneOverride p = back ? PaneOverride.NONE
+				: new PaneOverride(changed(picX, own.x()), changed(picY, own.y()), changed(picW, own.width()),
+						changed(picH, own.height()));
+		try {
+			fonts.overrides().setPlace(usage.layout(), own.name(), p);
+		} catch (IOException e) {
+			JOptionPane.showMessageDialog(this, "Could not save the layout change:\n" + e.getMessage(), "Layout",
+					JOptionPane.ERROR_MESSAGE);
+		}
+		refreshPicture();
+		onChange.run();
+	}
+
+	/** The spinner's value when it differs from the layout's own, else null. */
+	private static Float changed(JSpinner s, float original) {
+		float value = ((Number) s.getValue()).floatValue();
+		return differs(value, original) ? value : null;
 	}
 
 	/** Edits {@code name}'s settings in the second row; none when null. */
@@ -423,6 +624,11 @@ final class PaneSettingsBar extends JPanel {
 		c.putClientProperty(FlatClientProperties.STYLE, changed ? "font: bold" : null);
 	}
 
+	/** A spinner's value in bold when it differs from the layout's own, as the box and type fields. */
+	private static void style(JSpinner s, boolean changed) {
+		style(((JSpinner.DefaultEditor) s.getEditor()).getTextField(), changed);
+	}
+
 	private static String shortName(String font) {
 		return font == null ? "" : font.replace(".bcfnt", "");
 	}
@@ -447,6 +653,47 @@ final class PaneSettingsBar extends JPanel {
 		return new JPanel(new WrapLayout(8, 2));
 	}
 
+	/**
+	 * An area of the bar: a header naming it, which shows and hides {@code rows} when clicked, then
+	 * the rows. Whether it is shown is kept under {@code key} for the next run.
+	 */
+	private void section(String key, String title, JComponent... rows) {
+		JButton header = new JButton();
+		header.putClientProperty(FlatClientProperties.BUTTON_TYPE, FlatClientProperties.BUTTON_TYPE_BORDERLESS);
+		header.putClientProperty(FlatClientProperties.STYLE, "font: bold; margin: 1,2,1,2");
+		header.setHorizontalAlignment(javax.swing.SwingConstants.LEFT);
+		header.setFocusable(false);
+		header.setName(key);
+		JPanel line = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+		line.add(header);
+		add(line);
+		for (JComponent r : rows) {
+			add(r);
+		}
+		Runnable show = () -> {
+			boolean shown = prefs.getBoolean(key, true);
+			header.setText((shown ? "▾ " : "▸ ") + title);
+			header.setToolTipText((shown ? "Hide" : "Show") + " the " + title.toLowerCase(Locale.ROOT) + " settings");
+			for (JComponent r : rows) {
+				r.setVisible(shown);
+			}
+			revalidate();
+			repaint();
+		};
+		header.addActionListener(e -> {
+			prefs.putBoolean(key, !prefs.getBoolean(key, true));
+			show.run();
+		});
+		show.run();
+	}
+
+	/** A line between two areas of the bar. */
+	private static JComponent separator() {
+		JSeparator line = new JSeparator();
+		line.setBorder(BorderFactory.createEmptyBorder(3, 0, 3, 0));
+		return line;
+	}
+
 	/** A label with its controls, kept on one line. */
 	private static JPanel group(JComponent... parts) {
 		JPanel p = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
@@ -459,7 +706,8 @@ final class PaneSettingsBar extends JPanel {
 
 	/**
 	 * The rows stacked at the bar's full width, each as tall as it wraps to at that width: each row
-	 * is given the width before it is asked its height, as its own layout cannot see the bar's.
+	 * is given the width before it is asked its height, as its own layout cannot see the bar's. A
+	 * hidden row (an area folded away) takes no room.
 	 */
 	private static final class Rows implements LayoutManager {
 
@@ -477,7 +725,7 @@ final class PaneSettingsBar extends JPanel {
 			int width = parent.getWidth() - in.left - in.right;
 			int w = 0;
 			int h = 0;
-			for (Component row : parent.getComponents()) {
+			for (Component row : shown(parent)) {
 				if (width > 0) {
 					row.setSize(width, row.getHeight());
 				}
@@ -492,7 +740,7 @@ final class PaneSettingsBar extends JPanel {
 		public Dimension minimumLayoutSize(Container parent) {
 			Insets in = parent.getInsets();
 			int w = 0;
-			for (Component row : parent.getComponents()) {
+			for (Component row : shown(parent)) {
 				w = Math.max(w, row.getMinimumSize().width);
 			}
 			return new Dimension(w + in.left + in.right, preferredLayoutSize(parent).height);
@@ -503,12 +751,17 @@ final class PaneSettingsBar extends JPanel {
 			Insets in = parent.getInsets();
 			int width = parent.getWidth() - in.left - in.right;
 			int y = in.top;
-			for (Component row : parent.getComponents()) {
+			for (Component row : shown(parent)) {
 				row.setSize(width, row.getHeight());
 				int h = row.getPreferredSize().height;
 				row.setBounds(in.left, y, width, h);
 				y += h;
 			}
+		}
+
+		/** The rows not folded away. */
+		private static List<Component> shown(Container parent) {
+			return java.util.Arrays.stream(parent.getComponents()).filter(Component::isVisible).toList();
 		}
 	}
 }

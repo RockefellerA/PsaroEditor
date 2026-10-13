@@ -26,6 +26,7 @@ import javax.swing.SwingUtilities;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import psaro.format.Bclyt.PaneOverride;
 import psaro.format.Bclyt.TextOverride;
 import psaro.patch.FontPatcher;
 import psaro.patch.LayoutOverrides;
@@ -65,7 +66,7 @@ class PaneSettingsBarTest {
 
 		bar.show(usages.get(0), usages);
 		List<JSpinner> spinners = all(bar, JSpinner.class, new ArrayList<>());
-		assertEquals(6, spinners.size());
+		assertEquals(12, spinners.size(), "box and type, the pane's position, a picture's place and size");
 		assertEquals(120.0, spinners.get(0).getValue());
 		assertEquals(16.0, spinners.get(2).getValue());
 		assertEquals(0, changes[0], "showing a pane is not a change");
@@ -82,6 +83,101 @@ class PaneSettingsBarTest {
 				.orElseThrow().doClick();
 		assertTrue(fonts.overrides().layouts().isEmpty());
 		assertEquals(120.0, spinners.get(0).getValue());
+	}
+
+	/**
+	 * A label in a frame, as the file card's Achievements: the frame nearest it is offered first,
+	 * widened and moved there, the label moved with its shadow, and each Reset puts its own back.
+	 */
+	@Test
+	void aPaneMovesWithItsTwinAndTheNearestPictureIsSized() throws IOException {
+		Path romfs = dir.resolve("game");
+		SampleRomfs.table(romfs, "menu", Map.of("menu_0001", "はい"));
+		SampleRomfs.archive(romfs, "scene/menu/menu.arc.lz", "blyt/menu.bclyt", List.of("a.bcfnt"), Map.of(),
+				SampleRomfs.group("NL_Card", SampleRomfs.picture("Pic_Far", -150, 60, 96, 27),
+						SampleRomfs.picture("Pic_Fram", 56, -105, 66, 19), SampleRomfs.pane("Txt_Resu", "menu_0001", 31, -105),
+						SampleRomfs.pane("Txt_Resu_Shad", "menu_0001", 32, -106)));
+		RomfsIndex index = RomfsIndex.scan(romfs);
+		FontPatcher fonts = new FontPatcher(index, PatchSettings.open(romfs), LayoutOverrides.open(romfs));
+		int[] changes = {0};
+		PaneSettingsBar bar = new PaneSettingsBar(fonts, () -> changes[0]++);
+		List<Usage> usages = index.usages(index.table("menu"), "menu_0001");
+		Usage label = usages.stream().filter(u -> u.pane().name().equals("Txt_Resu")).findFirst().orElseThrow();
+		bar.show(label, usages);
+		List<JSpinner> spinners = all(bar, JSpinner.class, new ArrayList<>());
+		JSpinner posX = spinners.get(6);
+		JSpinner picX = spinners.get(8);
+		JSpinner picW = spinners.get(10);
+		assertEquals(31.0, posX.getValue());
+		JComboBox<?> pictures = all(bar, JComboBox.class, new ArrayList<>()).stream()
+				.filter(c -> c.getItemCount() > 0 && c.getItemAt(0) instanceof psaro.format.Bclyt.Pane).findFirst().orElseThrow();
+		assertEquals("Pic_Fram", ((psaro.format.Bclyt.Pane) pictures.getSelectedItem()).name(), "the nearest first");
+		assertEquals(66.0, picW.getValue());
+		assertEquals(0, changes[0]);
+
+		posX.setValue(27.0);
+		assertEquals(new PaneOverride(27f, null, null, null), fonts.overrides().place("blyt/menu.bclyt", "Txt_Resu"));
+		assertEquals(new PaneOverride(28f, null, null, null), fonts.overrides().place("blyt/menu.bclyt", "Txt_Resu_Shad"),
+				"the shadow moves as far");
+		picW.setValue(78.0);
+		picX.setValue(52.0);
+		assertEquals(new PaneOverride(52f, null, 78f, null), fonts.overrides().place("blyt/menu.bclyt", "Pic_Fram"));
+		assertEquals(3, changes[0]);
+
+		List<JButton> resets = all(bar, JButton.class, new ArrayList<>()).stream().filter(b -> b.getText().equals("Reset")).toList();
+		resets.get(1).doClick();
+		assertTrue(fonts.overrides().place("blyt/menu.bclyt", "Pic_Fram").isEmpty());
+		assertEquals(66.0, picW.getValue());
+		resets.get(0).doClick();
+		assertTrue(fonts.overrides().layouts().isEmpty(), "the label and its shadow back where they were");
+		assertEquals(31.0, posX.getValue());
+	}
+
+	/** Each area's header folds it away and opens it again, and the next bar opens as it was left. */
+	@Test
+	void anAreaFoldedAwayStaysSoNextTime() throws Exception {
+		Path romfs = dir.resolve("game");
+		SampleRomfs.table(romfs, "menu", Map.of("menu_0001", "はい"));
+		SampleRomfs.archive(romfs, "scene/menu/menu.arc.lz", "blyt/menu.bclyt", List.of("a.bcfnt"), Map.of(),
+				SampleRomfs.pane("Txt_Yes", "menu_0001"));
+		RomfsIndex index = RomfsIndex.scan(romfs);
+		FontPatcher fonts = new FontPatcher(index, PatchSettings.open(romfs), LayoutOverrides.open(romfs));
+		java.util.prefs.Preferences prefs = java.util.prefs.Preferences.userRoot().node("psaro-test/" + java.util.UUID.randomUUID());
+		try {
+			PaneSettingsBar bar = new PaneSettingsBar(fonts, () -> { }, prefs);
+			JButton text = header(bar, PaneSettingsBar.TEXT_AREA);
+			assertTrue(text.getText().endsWith("Text pane"));
+			JSpinner boxWidth = all(bar, JSpinner.class, new ArrayList<>()).get(0);
+			assertTrue(visible(boxWidth), "open at first");
+
+			text.doClick();
+			assertFalse(visible(boxWidth));
+			assertFalse(prefs.getBoolean(PaneSettingsBar.TEXT_AREA, true));
+			assertTrue(prefs.getBoolean(PaneSettingsBar.FONT_AREA, true), "the others are left as they were");
+
+			PaneSettingsBar next = new PaneSettingsBar(fonts, () -> { }, prefs);
+			JSpinner nextWidth = all(next, JSpinner.class, new ArrayList<>()).get(0);
+			assertFalse(visible(nextWidth), "folded away next time too");
+			header(next, PaneSettingsBar.TEXT_AREA).doClick();
+			assertTrue(visible(nextWidth));
+			assertTrue(prefs.getBoolean(PaneSettingsBar.TEXT_AREA, false));
+		} finally {
+			prefs.removeNode();
+		}
+	}
+
+	private static JButton header(PaneSettingsBar bar, String key) {
+		return all(bar, JButton.class, new ArrayList<>()).stream().filter(b -> key.equals(b.getName())).findFirst().orElseThrow();
+	}
+
+	/** Whether {@code c} and every container it is in up to the bar are shown. */
+	private static boolean visible(Component c) {
+		for (Component k = c; k != null && !(k instanceof PaneSettingsBar); k = k.getParent()) {
+			if (!k.isVisible()) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	@Test
@@ -251,7 +347,10 @@ class PaneSettingsBarTest {
 		Container[] rows = Arrays.stream(bar.getComponents()).map(Container.class::cast).toArray(Container[]::new);
 		int widest = Arrays.stream(rows).flatMap(r -> Arrays.stream(r.getComponents()))
 				.mapToInt(c -> c.getPreferredSize().width).max().orElseThrow();
-		int width = widest + 2 * ((WrapLayout) rows[0].getLayout()).getHgap() + bar.getInsets().left + bar.getInsets().right;
+		// the gap of the rows that wrap, past the area headers above them
+		int hgap = Arrays.stream(rows).filter(r -> r.getLayout() instanceof WrapLayout)
+				.map(r -> (WrapLayout) r.getLayout()).findFirst().orElseThrow().getHgap();
+		int width = widest + 2 * hgap + bar.getInsets().left + bar.getInsets().right;
 		assertTrue(width < bar.getPreferredSize().width, "too narrow for one line");
 		holder.setSize(width, 600);
 		// validate() lays out only what is on screen; lay the tree out as it would be

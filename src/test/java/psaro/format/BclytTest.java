@@ -42,6 +42,42 @@ class BclytTest {
 		assertEquals(true, differing <= 16, differing + " bytes changed");
 	}
 
+	/**
+	 * A frame widened and moved left, and the label in it moved with it: only those panes' place
+	 * and size change, any kind of pane alike, every other byte as it was.
+	 */
+	@Test
+	void panesOfAnyKindAreMovedAndSized() {
+		byte[] layout = SampleRomfs.layout(List.of("a.bcfnt"), SampleRomfs.group("NL_Card",
+				SampleRomfs.picture("Pic_Fram_Resu", 56, -105, 66, 19), SampleRomfs.pane("Txt_Resu", "fise_0040", 31, -105),
+				SampleRomfs.pane("Txt_Time", "fise_0030", 31, -86)));
+		Bclyt.Pane frame = pane(layout, "Pic_Fram_Resu");
+		assertEquals(66f, frame.width());
+		assertEquals(19f, frame.height());
+		assertTrue(frame.isPicture());
+		assertEquals("NL_Card", frame.parent());
+
+		Bclyt.PaneOverride wider = new Bclyt.PaneOverride(52f, null, 78f, null);
+		byte[] changed = Bclyt.withPanes(layout, Map.of("Pic_Fram_Resu", wider, "Txt_Resu", new Bclyt.PaneOverride(27f, null, null, null)));
+		assertEquals(layout.length, changed.length);
+		assertEquals(wider.apply(frame), pane(changed, "Pic_Fram_Resu"));
+		assertEquals(78f, pane(changed, "Pic_Fram_Resu").width());
+		assertEquals(-105f, pane(changed, "Pic_Fram_Resu").y());
+		assertEquals(27f, pane(changed, "Txt_Resu").x());
+		assertEquals(120f, pane(changed, "Txt_Resu").width(), "a text pane's box is left alone");
+		assertEquals(pane(layout, "Txt_Time"), pane(changed, "Txt_Time"));
+		int differing = 0;
+		for (int i = 0; i < layout.length; i++) {
+			differing += layout[i] != changed[i] ? 1 : 0;
+		}
+		assertTrue(differing <= 12, differing + " bytes changed");
+		assertArrayEquals(layout, Bclyt.withPanes(layout, Map.of()));
+	}
+
+	private static Bclyt.Pane pane(byte[] layout, String name) {
+		return Bclyt.read(layout).panes().stream().filter(p -> p.name().equals(name)).findFirst().orElseThrow();
+	}
+
 	@Test
 	void aPaneSwitchesToAnotherFontTheLayoutLists() {
 		byte[] layout = SampleRomfs.layout(List.of("a.bcfnt", "b.bcfnt"), SampleRomfs.pane("Txt_Yes", "menu_0001"),
