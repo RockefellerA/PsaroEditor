@@ -471,6 +471,57 @@ class FontPatcherTest {
 		assertEquals(Typeface.GAME, p.drawnWith(under), "a choice of its own comes first");
 	}
 
+	/**
+	 * A font that is one text's lower layer in one archive and a title's own font in another: its
+	 * stand-in is made from the top font's letters only where it is a lower layer, and is drawn
+	 * from the typeface elsewhere; a copy written the other way is written again.
+	 */
+	@Test
+	void aLowerLayersFontIsDrawnFromTheTypefaceWhereItIsNotALowerLayer() throws IOException {
+		Path other = dir.resolve("alone");
+		String outline = "SulaPro_B_04a_20.bcfnt";
+		String letters = "SulaPro_B_01a_20.bcfnt";
+		SampleRomfs.table(other, "menu", Map.of("menu_0001", "はい", "menu_0002", "いえ"));
+		byte[] top = SampleRomfs.pane("Txt_Bd", "menu_0001");
+		top[0x52] = 1;
+		SampleRomfs.archive(other, "scene/menu/menu.arc.lz", "blyt/menu.bclyt", List.of(outline, letters),
+				Map.of(outline, SampleRomfs.font("はいえお漢", 10), letters, SampleRomfs.font("はいえお漢", 10)),
+				SampleRomfs.pane("Txt_Bk", "menu_0001"), top);
+		SampleRomfs.archive(other, "scene/title/title.arc.lz", "blyt/title.bclyt", List.of(outline),
+				Map.of(outline, SampleRomfs.font("はいえお漢", 10)), SampleRomfs.pane("Txt_Titl", "menu_0002"));
+		RomfsIndex idx = RomfsIndex.scan(other);
+		PatchSettings s = PatchSettings.open(other);
+		s.setLettersFrom(outline, Typeface.M_PLUS_ROUNDED);
+		s.setLettersFrom(letters, Typeface.M_PLUS_ROUNDED);
+		FontPatcher p = new FontPatcher(idx, s, LayoutOverrides.open(other));
+		Path menu = other.resolve("scene/menu/menu.arc.lz");
+		Path title = other.resolve("scene/title/title.arc.lz");
+		FreeFont under = p.freeFont(menu, outline, Typeface.M_PLUS_ROUNDED);
+		FreeFont alone = p.freeFont(title, outline, Typeface.M_PLUS_ROUNDED);
+		assertTrue(under.layered(), "made from the letters on top where it is under them");
+		assertFalse(alone.layered(), "drawn from the typeface where it is a title's own font");
+		Usage titl = idx.usages(idx.table("menu"), "menu_0002").get(0);
+		assertTrue(p.freeFont(titl) == alone, "the title pane's preview draws with the drawn one");
+
+		List<Text> english = List.of(new Text(idx.table("menu"), "menu_0001", "Yes"), new Text(idx.table("menu"), "menu_0002", "No"));
+		p.write(p.plan(english), step -> { });
+		String drawn = FreeFont.name(outline, Typeface.M_PLUS_ROUNDED);
+		Bcfnt written = Bcfnt.parse(Darc.files(Archive.load(p.outputPath(title))).get("font/" + drawn).data);
+		Bcfnt expected = alone.build(written.cmap.keySet());
+		for (int c : List.of((int) 'N', (int) 'o')) {
+			assertArrayEquals(expected.glyph(c).pixels, written.glyph(c).pixels, "the typeface's own " + (char) c);
+		}
+		assertFalse(p.plan(english).hasWork());
+
+		// as an earlier patch wrote it, the lower layer's letters in the title's copy: written again
+		Darc.Node root = Archive.load(p.outputPath(title));
+		Darc.Node file = Darc.files(root).get("font/" + drawn);
+		file.data = under.build(written.cmap.keySet()).toBytes();
+		Archive.save(root, p.outputPath(title));
+		Plan again = p.plan(english);
+		assertTrue(again.fonts().stream().anyMatch(f -> f.archive().equals(title) && f.font().equals(drawn) && f.stale()));
+	}
+
 	/** A string no layout names, linked to the pane the game shows it in: that pane's font is lent its English. */
 	@Test
 	void aLinkedPaneFontIsLentTheEnglishOfAStringDrawnFromCode() throws IOException {

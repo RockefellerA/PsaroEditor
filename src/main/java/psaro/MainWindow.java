@@ -608,6 +608,11 @@ public final class MainWindow {
 
 	private void close() {
 		if (confirmUnsaved()) {
+			// a window of its own, not owned by the frame, so it would outlive it (and keep the app running)
+			if (imagesWindow != null) {
+				imagesWindow.dispose();
+				imagesWindow = null;
+			}
 			frame.dispose();
 		}
 	}

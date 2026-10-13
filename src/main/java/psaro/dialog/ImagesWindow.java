@@ -23,10 +23,10 @@ import java.util.Map;
 import java.util.stream.Collectors;
 import javax.imageio.ImageIO;
 import javax.swing.BorderFactory;
+import javax.swing.ButtonGroup;
 import javax.swing.DefaultListCellRenderer;
 import javax.swing.DefaultListModel;
 import javax.swing.JButton;
-import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
 import javax.swing.JComponent;
 import javax.swing.JFrame;
@@ -40,6 +40,8 @@ import javax.swing.JSplitPane;
 import javax.swing.JTabbedPane;
 import javax.swing.JTextArea;
 import javax.swing.JTextField;
+import javax.swing.JToggleButton;
+import javax.swing.JToolBar;
 import javax.swing.KeyStroke;
 import javax.swing.ListSelectionModel;
 import javax.swing.UIManager;
@@ -95,7 +97,10 @@ public final class ImagesWindow extends JFrame {
 	private final DefaultListModel<Group> shown = new DefaultListModel<>();
 	private final JList<Group> list = new JList<>(shown);
 	private final JTextField filter = new JTextField(16);
-	private final JCheckBox editedOnly = new JCheckBox("Edited only");
+	/** Which images the list shows by whether they are replaced: one of three, all of them to begin with. */
+	private final JToggleButton showAll = new JToggleButton("All", true);
+	private final JToggleButton showEdited = new JToggleButton("Edited");
+	private final JToggleButton showUnedited = new JToggleButton("Unedited");
 	/** Which kind of image the list shows: a tab per kind, over the one list. */
 	private final JTabbedPane kinds = new JTabbedPane();
 	/** The image last picked under each tab, to pick again on coming back to it. */
@@ -147,10 +152,27 @@ public final class ImagesWindow extends JFrame {
 				refilter();
 			}
 		});
-		editedOnly.addActionListener(e -> refilter());
-		JPanel filters = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 4));
-		filters.add(filter);
-		filters.add(editedOnly);
+		// a three-way switch: a group lets one be pressed at a time, a tool bar draws them as one control
+		ButtonGroup shows = new ButtonGroup();
+		JToolBar show = new JToolBar();
+		show.setFloatable(false);
+		for (JToggleButton b : List.of(showAll, showEdited, showUnedited)) {
+			shows.add(b);
+			show.add(b);
+			b.addActionListener(e -> refilter());
+		}
+		showAll.setToolTipText("Every image");
+		showEdited.setToolTipText("Only the images you have replaced");
+		showUnedited.setToolTipText("Only the images still the game's");
+		// the field across the pane, the switch on a row of its own below it: on one flowing row, what
+		// overflowed the narrow pane wrapped onto a line the panel had no height for, and vanished
+		JPanel ticks = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+		ticks.add(new JLabel("Show:"));
+		ticks.add(show);
+		JPanel filters = new JPanel(new BorderLayout(0, 2));
+		filters.setBorder(BorderFactory.createEmptyBorder(4, 6, 4, 6));
+		filters.add(filter, BorderLayout.NORTH);
+		filters.add(ticks, BorderLayout.SOUTH);
 
 		list.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
 		list.setCellRenderer(new Renderer());
@@ -245,7 +267,8 @@ public final class ImagesWindow extends JFrame {
 			// the archive's folder too: a model's file is named no better than NW4C.bcmdl.lz, its folder scene/record
 			boolean matches = needle.isEmpty() || g.copies().stream().anyMatch(i -> i.path().toLowerCase(Locale.ROOT).contains(needle)
 					|| index.root().relativize(i.archive()).toString().replace('\\', '/').toLowerCase(Locale.ROOT).contains(needle));
-			if (matches && (!editedOnly.isSelected() || edits.get(g.hash()) != null)) {
+			boolean edited = edits.get(g.hash()) != null;
+			if (matches && (showAll.isSelected() || showEdited.isSelected() == edited)) {
 				int k = g.model() ? 1 : 0;
 				counts[k]++;
 				if (k == kind) {

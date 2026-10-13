@@ -208,6 +208,10 @@ public final class FontPatcher {
 	private final Map<Path, Map<String, byte[]>> originalLayouts = new HashMap<>();
 	/** Fonts a layout names from another archive ({@link #sharedFonts}); null until first asked for. */
 	private Set<String> sharedFonts;
+	/** Archive + "!" + font for each font a layout there draws under another ({@link #lowerLayerIn}); null until first asked for. */
+	private Set<String> lowerLayers;
+	/** How many letters of a written stand-in are compared pixel for pixel with how they are drawn now. */
+	private static final int INK_SAMPLE = 6;
 
 	public FontPatcher(RomfsIndex index, PatchSettings settings, LayoutOverrides overrides, ImageEdits images) {
 		this.index = index;
@@ -334,20 +338,43 @@ public final class FontPatcher {
 
 	/** The font {@code usage}'s pane draws with when that is a bundled typeface; else null. */
 	public FreeFont freeFont(Usage usage) {
-		return freeFont(fontName(usage), drawnWith(usage));
+		return freeFont(usage.archive(), fontName(usage), drawnWith(usage));
 	}
 
 	/**
-	 * The font drawn from {@code face} for game font {@code gameFont}, when {@code face} is a
-	 * bundled typeface and some archive carries the game font; else null. Measured on the copy
-	 * with the most glyphs. For a font a layout draws under another in one text's layers
-	 * ({@link #underLayer}), its letters are made from that one's stand-in's, so the layers line up.
+	 * The font drawn from {@code face} for game font {@code gameFont} in {@code archive}: made
+	 * from its top font's letters only where a layout there draws it under another in one text's
+	 * layers, and drawn from the typeface itself everywhere else. A font that is a lower layer in
+	 * one scene is often a title's own font in another, and a lower layer's letters are made for
+	 * lining up, not for being read alone.
+	 */
+	public synchronized FreeFont freeFont(Path archive, String gameFont, Typeface face) {
+		return freeFont(gameFont, face, lowerLayerIn(archive, gameFont));
+	}
+
+	/**
+	 * The font drawn from {@code face} for game font {@code gameFont} where it is a lower layer,
+	 * when {@code face} is a bundled typeface and some archive carries the game font; else null.
+	 * See {@link #freeFont(Path, String, Typeface)}.
 	 */
 	public synchronized FreeFont freeFont(String gameFont, Typeface face) {
+		return freeFont(gameFont, face, true);
+	}
+
+	/**
+	 * The font drawn from {@code face} for game font {@code gameFont}, measured on the copy with the
+	 * most glyphs. With {@code underneath}, for a font a layout draws under another in one text's
+	 * layers ({@link #underLayer}), its letters are made from that one's stand-in's, so the layers
+	 * line up; otherwise, or when it is under none, they are the typeface's own.
+	 */
+	private synchronized FreeFont freeFont(String gameFont, Typeface face, boolean underneath) {
 		if (!face.bundled()) {
 			return null;
 		}
-		String id = gameFont + "!" + face.id();
+		String topName = index.layeredUnder(gameFont);
+		UnderLayer how = topName == null ? null : underLayer(gameFont, topName);
+		// a font under none has one stand-in; one under another has its own drawn one too
+		String id = gameFont + "!" + face.id() + (how != null && !underneath ? "!own" : "");
 		Optional<FreeFont> known = freeFonts.get(id);
 		if (known != null) {
 			return known.orElse(null);
@@ -355,14 +382,26 @@ public final class FontPatcher {
 		Bcfnt reference = fullestCopy(gameFont);
 		FreeFont built = null;
 		if (reference != null) {
-			String topName = index.layeredUnder(gameFont);
-			UnderLayer how = topName == null ? null : underLayer(gameFont, topName);
-			FreeFont top = how == null ? null : freeFont(topName, face);
+			FreeFont top = how == null || !underneath ? null : freeFont(topName, face, true);
 			built = top != null ? new FreeFont(gameFont, reference, top, how)
 					: new FreeFont(gameFont, face, reference, settings.extraSpace(gameFont));
 		}
 		freeFonts.put(id, Optional.ofNullable(built));
 		return built;
+	}
+
+	/** Whether a layout in {@code archive} draws {@code font} under another pane, as one text's layers. */
+	private synchronized boolean lowerLayerIn(Path archive, String font) {
+		if (lowerLayers == null) {
+			Set<String> out = new HashSet<>();
+			for (Usage u : index.textPanes()) {
+				if (index.paneOnTop(u.layout(), u.pane().name()) != null) {
+					out.add(u.archive() + "!" + u.pane().text().font());
+				}
+			}
+			lowerLayers = Set.copyOf(out);
+		}
+		return lowerLayers.contains(archive + "!" + font);
 	}
 
 	/**
@@ -589,7 +628,7 @@ public final class FontPatcher {
 		// a font drawn from a typeface beside every copy of a game font set to it, and in every
 		// archive with a pane that draws with one of its own
 		for (FreeUse use : freeUses()) {
-			FreeFont free = freeFont(use.gameFont(), use.face());
+			FreeFont free = freeFont(use.archive(), use.gameFont(), use.face());
 			String id = use.archive() + "!" + FreeFont.name(use.gameFont(), use.face());
 			if (free == null || seen.contains(id)) {
 				continue;
@@ -789,8 +828,14 @@ public final class FontPatcher {
 		Map<Typeface, Donor> donors = new HashMap<>();
 		Map<Integer, Donor> from = new TreeMap<>();
 		String weight = Typeface.weightFor(free.gameFont());
+		int inked = 0;
 		for (int c : lent) {
 			if (have.contains(c) && !sameGlyph(out.glyph(c), free.glyph(c))) {
+				stale = true;
+			}
+			// and a few letters' pixels, which change when they are drawn another way (a lower layer's
+			// letters, or the typeface's own) without changing their widths
+			if (!stale && c > 0x20 && have.contains(c) && inked++ < INK_SAMPLE && !sameInk(out, free.preview(), c)) {
 				stale = true;
 			}
 			Typeface t = free.drawnBy(c);
@@ -1012,6 +1057,29 @@ public final class FontPatcher {
 		return a.left == b.left && a.glyphWidth == b.glyphWidth && a.charWidth == b.charWidth;
 	}
 
+	/**
+	 * Whether {@code written}'s letter {@code c} has the pixels {@code drawn}'s has, row for row on
+	 * their baselines: a written stand-in's cells are cut to the rows its letters use.
+	 */
+	private static boolean sameInk(Bcfnt written, Bcfnt drawn, int c) {
+		Bcfnt.Glyph w = written.glyph(c);
+		Bcfnt.Glyph d = drawn.glyph(c);
+		if (w == null || d == null || written.cellW != drawn.cellW || written.format != drawn.format) {
+			return false;
+		}
+		int shift = drawn.baseline - written.baseline;
+		for (int y = 0; y < written.cellH; y++) {
+			int dy = y + shift;
+			for (int x = 0; x < written.cellW; x++) {
+				int there = dy >= 0 && dy < drawn.cellH ? d.pixels[dy * drawn.cellW + x] : 0;
+				if (w.pixels[y * written.cellW + x] != there) {
+					return false;
+				}
+			}
+		}
+		return true;
+	}
+
 	/** Where {@code archive}'s patched copy goes. */
 	public Path outputPath(Path archive) {
 		return output.resolve(index.root().relativize(archive).toString());
@@ -1106,7 +1174,7 @@ public final class FontPatcher {
 			}
 			// the drawn fonts beside the game's, which are not changed
 			for (FontChange f : free) {
-				FreeFont ff = freeFont(f.drawnFor(), FreeFont.typefaceOf(f.font()));
+				FreeFont ff = freeFont(archive, f.drawnFor(), FreeFont.typefaceOf(f.font()));
 				Darc.Node game = byName.get(f.drawnFor());
 				if (ff == null || game == null) {
 					throw new IOException("cannot add " + f.font() + " beside " + f.drawnFor() + " in " + archive);

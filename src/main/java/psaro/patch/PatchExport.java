@@ -115,6 +115,8 @@ public final class PatchExport {
 				"     so it holds romfs/ beside any other mods.",
 				"",
 				"To remove the patch, delete the romfs folder you copied.",
+				"",
+				"This patch was made with PsaroEditor: https://github.com/RockefellerA/PsaroEditor",
 				"");
 	}
 }

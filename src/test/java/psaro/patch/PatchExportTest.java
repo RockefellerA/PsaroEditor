@@ -61,8 +61,9 @@ class PatchExportTest {
 		assertEquals(java.util.Set.of("README.txt", root + "scene/menu/menu.arc.lz", root + "text/menu_Japanese.tdt",
 				root + "message/main_menu_jp.mdt"), entries.keySet());
 		assertArrayEquals(new byte[] {1, 2, 3}, entries.get(root + "scene/menu/menu.arc.lz"));
-		assertTrue(new String(entries.get("README.txt"), java.nio.charset.StandardCharsets.UTF_8)
-				.contains("/luma/titles/0004000000140000/romfs/"));
+		String readme = new String(entries.get("README.txt"), java.nio.charset.StandardCharsets.UTF_8);
+		assertTrue(readme.contains("/luma/titles/0004000000140000/romfs/"));
+		assertTrue(readme.contains("https://github.com/RockefellerA/PsaroEditor"), "credits the editor");
 		assertFalse(Files.exists(zip.resolveSibling("game patch.zip.tmp")), "written beside it, then moved");
 	}
 
