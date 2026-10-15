@@ -75,6 +75,23 @@ class TextExportTest {
 		assertEquals(Map.of("dqc0102a:1", "ローラ姫"), psaro.format.Csv.read(Files.readAllBytes(out)));
 	}
 
+	/** Record tables and scripts are not written back yet: their English stays in the project. */
+	@Test
+	void recordTablesAndScriptsAreNotWritten() throws IOException {
+		Files.createDirectories(romfs.resolve("paramData"));
+		Files.write(romfs.resolve("paramData/Rod.dat"), psaro.romfs.SampleRomfs.records(List.of(
+				psaro.romfs.SampleRomfs.record(0x80, 0, "rod00_00", Map.of(0x24, psaro.romfs.SampleRomfs.utf16("はじまりのつえ"))))));
+		Files.write(romfs.resolve("scene.dat"), psaro.romfs.SampleRomfs.script("scene",
+				List.<String[]>of(new String[] {"<Talk>", "はい"}), ""));
+		index = RomfsIndex.scan(romfs);
+		translations = Translations.open(index);
+		translations.set(index.table("paramData/Rod"), "rod00_00:0x24", "Starter Staff");
+		translations.set(index.table("scene"), "000", "Yes");
+		assertTrue(TextExport.export(index, translations).isEmpty());
+		assertFalse(Files.exists(dir.resolve("game.psaro/romfs/paramData")));
+		assertFalse(Files.exists(dir.resolve("game.psaro/romfs/scene.dat")));
+	}
+
 	@Test
 	void writesTheTableWithItsEnglishAndTheRestInJapanese() throws IOException {
 		translations.set(menu, "menu_0001", "Yes");

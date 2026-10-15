@@ -706,7 +706,7 @@ public final class FontPatcher {
 				imageChange(image, seen, out);
 			}
 		}
-		for (Path archive : outputFiles(".arc.lz", ".bcmdl", ".bcmdl.lz")) {
+		for (Path archive : outputFiles(".arc.lz", ".arc", ".bcmdl", ".bcmdl.lz")) {
 			Path original = index.root().resolve(output.relativize(archive).toString());
 			for (String path : written(archive).images().keySet()) {
 				Image image = image(original, path);
@@ -1243,7 +1243,7 @@ public final class FontPatcher {
 			Archive.save(root, out);
 			wrote.add(out);
 		}
-		copyToMods(outputFiles(".arc.lz", ".bcmdl", ".bcmdl.lz", ".tdt", ".mdt", ".csv"), progress);
+		copyToMods(outputFiles(".arc.lz", ".arc", ".bcmdl", ".bcmdl.lz", ".tdt", ".mdt", ".csv"), progress);
 		return wrote;
 	}
 
@@ -1296,7 +1296,7 @@ public final class FontPatcher {
 
 	/** Every archive a previous patch wrote. */
 	private List<Path> writtenArchives() {
-		return outputFiles(".arc.lz");
+		return outputFiles(".arc.lz", ".arc");
 	}
 
 	/** Every file in the output folder whose name ends with one of {@code suffixes}. */

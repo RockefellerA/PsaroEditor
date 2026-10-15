@@ -234,8 +234,50 @@ class RomfsIndexTest {
 	@Test
 	void folderWithoutStringTablesIsNotARomfs() throws IOException {
 		assertFalse(RomfsIndex.looksLikeRomfs(romfs));
+		Files.write(romfs.resolve("notes.dat"), new byte[] {1, 2, 3, 4});
+		assertFalse(RomfsIndex.looksLikeRomfs(romfs), "a .dat that is no record file");
 		table("menu", Map.of("menu_0001", "はい"));
 		assertTrue(RomfsIndex.looksLikeRomfs(romfs));
+	}
+
+	/**
+	 * A game with no string tables keeps its text in record files and scripts, and its layouts in
+	 * uncompressed {@code .arc} archives: each is found wherever it is, a table named by its path,
+	 * and the text the layouts hold is a string too. A script folder's list of scenes is no table.
+	 */
+	@Test
+	void recordFilesScriptsAndUncompressedArchivesAreReadWithoutStringTables() throws IOException {
+		Files.createDirectories(romfs.resolve("paramData"));
+		Files.write(romfs.resolve("paramData/Rod.dat"), SampleRomfs.records(List.of(
+				SampleRomfs.record(0x80, 0, "rod00_00", Map.of(0x24, SampleRomfs.utf16("はじまりのつえ"))),
+				SampleRomfs.record(0x80, 1, "rod00_01", Map.of(0x24, SampleRomfs.utf16("ほしのつえ"))))));
+		Files.createDirectories(romfs.resolve("scriptData/prot1"));
+		Files.write(romfs.resolve("scriptData/prot1/prot1_out_pink1.dat"), SampleRomfs.script("prot1_out_pink1",
+				List.<String[]>of(new String[] {"<Talk>", "<chara02 w3 ef6>マフィンおばさーん！<p>"}), "ありがとう。<p>"));
+		byte[] name = new byte[0x40];
+		System.arraycopy("prot1_out_pink1".getBytes(java.nio.charset.StandardCharsets.US_ASCII), 0, name, 0, 15);
+		Files.write(romfs.resolve("scriptData/prot1/index.dat"), SampleRomfs.records(List.of(name)));
+		archive("lyt/item00_up.arc", "blyt/item00_up.bclyt", List.of("3DSChocoFont.bcfnt"),
+				SampleRomfs.pane("caution01", null, "きょうかできるものがないよ！"));
+		assertTrue(RomfsIndex.looksLikeRomfs(romfs));
+
+		RomfsIndex index = RomfsIndex.scan(romfs);
+		assertEquals(List.of(RomfsIndex.BUILT_IN, "paramData/Rod", "scriptData/prot1/prot1_out_pink1"),
+				index.tables().stream().map(StringTable::name).toList());
+		StringTable rod = index.table("paramData/Rod");
+		assertEquals(RomfsIndex.Kind.RECORDS, rod.kind());
+		assertTrue(rod.data());
+		assertEquals(Map.of("rod00_00:0x24", "はじまりのつえ", "rod00_01:0x24", "ほしのつえ"), rod.strings());
+		StringTable scene = index.table("scriptData/prot1/prot1_out_pink1");
+		assertEquals(RomfsIndex.Kind.SCRIPT, scene.kind());
+		assertTrue(scene.message());
+		assertEquals(Map.of("000", "<chara02 w3 ef6>マフィンおばさーん！<p>"), scene.strings());
+		assertNull(index.sharedWith(scene, "000"));
+		assertEquals(Map.of("blyt/item00_up.bclyt:caution01", "きょうかできるものがないよ！"),
+				index.table(RomfsIndex.BUILT_IN).strings());
+		assertEquals(1, index.layoutCount());
+		byte[] raw = Files.readAllBytes(romfs.resolve("lyt/item00_up.arc"));
+		assertEquals("darc", new String(raw, 0, 4, java.nio.charset.StandardCharsets.US_ASCII), "an .arc is kept uncompressed");
 	}
 
 	/** Against a real romfs when one is supplied, as RomfsRoundTripTest does. */

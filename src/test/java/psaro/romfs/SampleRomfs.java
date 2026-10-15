@@ -84,6 +84,56 @@ public final class SampleRomfs {
 		return ("﻿" + String.join("\r\n", lines) + "\r\n").getBytes(StandardCharsets.UTF_16LE);
 	}
 
+	/** A record file ({@link psaro.format.Records}) holding {@code records}, in order. */
+	public static byte[] records(List<byte[]> records) {
+		int at = 16 + 8 * records.size();
+		ByteBuffer head = le(at);
+		head.put("DARC".getBytes(StandardCharsets.US_ASCII)).putInt(records.size()).putInt(0).putInt(0);
+		for (byte[] r : records) {
+			head.putInt(at).putInt(r.length);
+			at += r.length;
+		}
+		return concat(head.array(), concat(records.toArray(byte[][]::new)));
+	}
+
+	/** A record of {@code size} bytes: its index, its id, then each of {@code fields} at its offset. */
+	public static byte[] record(int size, int index, String id, Map<Integer, byte[]> fields) {
+		ByteBuffer r = le(size).putInt(index).put(id.getBytes(StandardCharsets.US_ASCII));
+		fields.forEach((offset, bytes) -> r.put(offset, bytes));
+		return r.array();
+	}
+
+	/** {@code text} as UTF-16LE, NUL-terminated. */
+	public static byte[] utf16(String text) {
+		return (text + "\0").getBytes(StandardCharsets.UTF_16LE);
+	}
+
+	/** {@code text} as Shift-JIS, NUL-terminated. */
+	public static byte[] shiftJis(String text) {
+		return (text + "\0").getBytes(java.nio.charset.Charset.forName("windows-31j"));
+	}
+
+	/**
+	 * An event script ({@link psaro.format.Script}): one scene, {@code name}, of 128 entries as the
+	 * game's are: {@code entries} (each a command and its text), {@code <end>}, then entries
+	 * holding {@code leftover} as text, as the memory the game's tool left there does.
+	 */
+	public static byte[] script(String name, List<String[]> entries, String leftover) {
+		int entry = 0x144;
+		ByteBuffer r = le(0x60 + 128 * entry).put(name.getBytes(StandardCharsets.US_ASCII));
+		r.position(0x40);
+		for (int i = 0; i < 8; i++) {
+			r.putInt(i < 2 ? i : -1);
+		}
+		for (int i = 0; i < 128; i++) {
+			int o = 0x60 + i * entry;
+			String[] e = i < entries.size() ? entries.get(i) : i == entries.size() ? new String[] {"<end>", ""}
+					: new String[] {"<Talk>", leftover};
+			r.put(o, e[0].getBytes(StandardCharsets.US_ASCII)).putInt(o + 0x40, i % 2).put(o + 0x44, shiftJis(e[1]));
+		}
+		return records(List.of(r.array()));
+	}
+
 	/**
 	 * An archive at {@code path} with one layout at {@code layoutPath} listing {@code fonts} and
 	 * holding {@code panes}, and {@code fontFiles} under {@code font/}.

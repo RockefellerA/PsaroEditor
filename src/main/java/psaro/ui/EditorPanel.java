@@ -93,7 +93,7 @@ public final class EditorPanel extends JPanel {
 
 	/**
 	 * The string tables under a {@link Header} per kind: the .tdt tables, the .mdt message files,
-	 * the .csv data tables, the layouts' own text.
+	 * the .csv data tables, the .dat record tables and scripts, the layouts' own text.
 	 */
 	private final JList<Object> tables;
 	private final StringsModel strings = new StringsModel();
@@ -800,6 +800,13 @@ public final class EditorPanel extends JPanel {
 				+ "such as character and card names, which the game draws from code. Keyed by row and column; "
 				+ "link a string's panes under Panes… in the preview. A comma shows full-width (，), "
 				+ "as a cell cannot hold one."),
+		RECORDS(RomfsIndex.Kind.RECORDS, ".dat records", "Record tables (*.dat): the text fields of the game's records, "
+				+ "such as item, enemy and quest names and descriptions and system messages, which the game draws from "
+				+ "code. Keyed by record and the field's offset; link a string's panes under Panes… in the preview. "
+				+ "Not yet written into the patch."),
+		SCRIPT(RomfsIndex.Kind.SCRIPT, ".dat scripts", "Event scripts (*.dat): the lines of the game's dialogue scenes, "
+				+ "numbered by entry, with the tags the game acts on (&lt;chara02 w3 ef6&gt; who speaks and how, &lt;p&gt; "
+				+ "wait for a press). Not yet written into the patch."),
 		BCLYT(RomfsIndex.Kind.BUILT_IN, ".bclyt", "Text the layouts hold themselves, which the game shows in "
 				+ "panes no table fills: no key, a key no table has, or an archive with no table of its own. "
 				+ "Keyed by layout and pane; Patch writes the English into the layouts.");
@@ -895,8 +902,8 @@ public final class EditorPanel extends JPanel {
 			}
 			StringTable t = (StringTable) value;
 			super.getListCellRendererComponent(list, t.name(), i, selected, focus);
-			String name = t.message() ? t.name().substring(RomfsIndex.MESSAGE_PREFIX.length())
-					: t.data() ? t.name().substring(RomfsIndex.DATA_PREFIX.length()) : t.name();
+			String name = t.kind() == RomfsIndex.Kind.MESSAGE ? t.name().substring(RomfsIndex.MESSAGE_PREFIX.length())
+					: t.kind() == RomfsIndex.Kind.DATA ? t.name().substring(RomfsIndex.DATA_PREFIX.length()) : t.name();
 			int done = translations.translatedCount(t);
 			boolean complete = done >= t.strings().size();
 			setText(name + "   " + done + " / " + t.strings().size());

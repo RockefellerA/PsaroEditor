@@ -361,20 +361,24 @@ public final class MainWindow {
 	}
 
 	/**
-	 * Reads {@code dir} if it looks like an extracted romfs: a {@code text} folder of
-	 * {@code *.tdt} string tables. Touches nothing in the window, so it can run in the
-	 * background.
+	 * Reads {@code dir} if it looks like an extracted romfs ({@link RomfsIndex#looksLikeRomfs})
+	 * and holds text to translate. Touches nothing in the window, so it can run in the background.
 	 */
 	private static Opened read(Path dir) throws OpenFailure {
 		RomfsIndex scanned;
+		String lookedFor = "PsaroEditor looks inside an extracted romfs for string tables (text/*.tdt), message files "
+				+ "(message/*_jp.mdt), data tables (table/*.csv), record files and scripts (*.dat) and layout archives "
+				+ "(*.arc, *.arc.lz).";
 		try {
 			if (!RomfsIndex.looksLikeRomfs(dir)) {
-				throw new OpenFailure("No string tables were found in " + dir + ".\n"
-						+ "PsaroEditor looks for text/*.tdt inside an extracted romfs.", false);
+				throw new OpenFailure("No string tables were found in " + dir + ".\n" + lookedFor, false);
 			}
 			scanned = RomfsIndex.scan(dir);
 		} catch (IOException | UncheckedIOException | IllegalArgumentException e) {
 			throw new OpenFailure("Could not read " + dir + ":\n" + e.getMessage(), false);
+		}
+		if (scanned.tables().isEmpty()) {
+			throw new OpenFailure("No Japanese text was found in " + dir + ".\n" + lookedFor, false);
 		}
 		try {
 			return new Opened(dir, scanned, Translations.open(scanned), CodeColors.open(dir), UnusedTables.open(dir),
@@ -432,7 +436,7 @@ public final class MainWindow {
 			for (String key : t.strings().keySet()) {
 				String text = translations.get(t, key);
 				if (text != null) {
-					out.add(new Text(t, key, t.data() ? Csv.shown(text) : text));
+					out.add(new Text(t, key, t.kind() == RomfsIndex.Kind.DATA ? Csv.shown(text) : text));
 				}
 			}
 		}

@@ -1,6 +1,8 @@
 package psaro.romfs;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.UncheckedIOException;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -31,6 +33,8 @@ import psaro.format.Cgfx;
 import psaro.format.Csv;
 import psaro.format.Darc;
 import psaro.format.Msgd;
+import psaro.format.Records;
+import psaro.format.Script;
 import psaro.format.Tdt;
 
 /**
@@ -53,6 +57,12 @@ import psaro.format.Tdt;
  * <p>Archives are found anywhere under the root except inside another romfs: a folder named
  * {@code romfs} or one with string tables of its own. A working folder often keeps rebuilt or
  * test copies of the romfs beside the original, and their layouts and fonts are not the game's.
+ * An archive is a {@code .arc.lz}, or a {@code .arc} some games keep uncompressed.
+ *
+ * <p>Other games keep their text elsewhere, and whatever this knows is read wherever it is under
+ * the root: {@code .dat} record files ({@link Records}), as tables of their text fields, and
+ * {@code .dat} event scripts ({@link Script}), as tables of their lines. Each is named by its path
+ * from the root ({@code paramData/Acc}, {@code scriptData/prot1/prot1_out_pink1}).
  */
 public final class RomfsIndex {
 
@@ -61,7 +71,8 @@ public final class RomfsIndex {
 	 * file, {@code message/<name>_jp.mdt}, named {@code message/<name>}, keyed by each string's
 	 * number ({@code 062}): strings the game draws from code, so no layout names them. Or a data
 	 * table, {@code table/<name>.csv}, named {@code table/<name>}, keyed by row and column
-	 * ({@code dqc0101a:1}): its Japanese cells, names the game also draws from code.
+	 * ({@code dqc0101a:1}): its Japanese cells, names the game also draws from code. Or a record
+	 * table or a script ({@link Kind#RECORDS}, {@link Kind#SCRIPT}), named by its path.
 	 */
 	public record StringTable(String name, Path path, Map<String, String> strings, Kind kind) {
 
@@ -74,14 +85,14 @@ public final class RomfsIndex {
 			return file.endsWith(MESSAGE_SUFFIX) ? Kind.MESSAGE : file.endsWith(DATA_SUFFIX) ? Kind.DATA : Kind.TABLE;
 		}
 
-		/** True for a message file ({@link psaro.format.Msgd}). */
+		/** True for numbered strings the game draws from code: a message file ({@link Msgd}) or a script. */
 		public boolean message() {
-			return kind == Kind.MESSAGE;
+			return kind == Kind.MESSAGE || kind == Kind.SCRIPT;
 		}
 
-		/** True for a data table ({@link psaro.format.Csv}). */
+		/** True for strings keyed by row and column: a data table ({@link Csv}) or a record table. */
 		public boolean data() {
-			return kind == Kind.DATA;
+			return kind == Kind.DATA || kind == Kind.RECORDS;
 		}
 
 		/** True for the text layouts hold themselves ({@link #BUILT_IN}). */
@@ -98,6 +109,13 @@ public final class RomfsIndex {
 		MESSAGE,
 		/** {@code table/<name>.csv}, the Japanese cells of the game's records, drawn from code. */
 		DATA,
+		/**
+		 * A {@code .dat} record file's text fields ({@link Records}), keyed by record and offset
+		 * ({@code access00_00:0x24}): item, enemy and quest names, descriptions, system messages.
+		 */
+		RECORDS,
+		/** A {@code .dat} event script's lines ({@link Script}), keyed by entry number ({@code 004}). */
+		SCRIPT,
 		/**
 		 * The text text panes hold in their layouts, for panes the game shows it in: those with no
 		 * key, a key no table has, or in an archive with no table of its own. Keyed by
@@ -160,7 +178,11 @@ public final class RomfsIndex {
 	private static final String DATA_SUFFIX = ".csv";
 	/** The name a data table takes before its own: {@code table/CharaTable}. */
 	public static final String DATA_PREFIX = "table/";
-	private static final String ARCHIVE_SUFFIX = ".arc.lz";
+	/** An archive's name ends with one of these: compressed, or as some games keep them, not. */
+	private static final List<String> ARCHIVE_SUFFIXES = List.of(".arc.lz", ".arc");
+	private static final String RECORD_SUFFIX = ".dat";
+	/** How deep under a folder {@link #looksLikeRomfs} looks for files it can read. */
+	private static final int LOOK_DEPTH = 3;
 	/**
 	 * {@code SulaPro_B_04a_22_C.bcfnt}: family, weight (some fonts have none), style (the look
 	 * baked into the pixels: {@code 04a} is white with a black outline), size, then any variant.
@@ -219,9 +241,42 @@ public final class RomfsIndex {
 		this.tops = tops;
 	}
 
-	/** Whether {@code dir} has the string tables an index is built from. */
+	/**
+	 * Whether {@code dir} has something an index is built from: string tables, or near the top
+	 * (a few folders down at most) message files, data tables, archives or record files. The
+	 * rest of the folder is not looked at, so a folder that is not a romfs is turned down quickly.
+	 */
 	public static boolean looksLikeRomfs(Path dir) throws IOException {
-		return !tableFiles(dir).isEmpty();
+		if (!tableFiles(dir).isEmpty()) {
+			return true;
+		}
+		if (!Files.isDirectory(dir)) {
+			return false;
+		}
+		try (Stream<Path> files = Files.walk(dir, LOOK_DEPTH)) {
+			return files.anyMatch(RomfsIndex::readable);
+		} catch (UncheckedIOException unreadable) {
+			return false;
+		}
+	}
+
+	/** A file {@link #scan} reads: a message file, a data table, an archive or a record file. */
+	private static boolean readable(Path p) {
+		String name = p.getFileName() == null ? "" : p.getFileName().toString();
+		Path parent = p.getParent() == null ? null : p.getParent().getFileName();
+		String folder = parent == null ? "" : parent.toString();
+		return folder.equals("message") && name.endsWith(MESSAGE_SUFFIX) || folder.equals("table") && name.endsWith(DATA_SUFFIX)
+				|| archive(name) || name.endsWith(RECORD_SUFFIX) && Files.isRegularFile(p) && recordFile(p);
+	}
+
+	/** Whether {@code file} starts as a record file does, read no further than that. */
+	private static boolean recordFile(Path file) {
+		try (InputStream in = Files.newInputStream(file)) {
+			byte[] magic = in.readNBytes(4);
+			return magic.length == 4 && magic[0] == 'D' && magic[1] == 'A' && magic[2] == 'R' && magic[3] == 'C';
+		} catch (IOException unreadable) {
+			return false;
+		}
 	}
 
 	/** Reads every string table and every layout under {@code root}. */
@@ -265,6 +320,25 @@ public final class RomfsIndex {
 			}
 		}
 
+		// every archive, model and record file, in one walk of the tree
+		Found found = walk(root);
+		// record tables and scripts, named by their path; one with no Japanese is left out
+		for (Path p : found.records()) {
+			String name = recordName(root, p);
+			Map<String, String> strings;
+			Kind kind;
+			try {
+				byte[] d = Files.readAllBytes(p);
+				kind = Script.is(d) ? Kind.SCRIPT : Kind.RECORDS;
+				strings = kind == Kind.SCRIPT ? Script.read(d) : Records.strings(d);
+			} catch (IllegalArgumentException | IndexOutOfBoundsException notRecords) {
+				continue;
+			}
+			if (!strings.isEmpty() && !tables.containsKey(name)) {
+				tables.put(name, new StringTable(name, p, Collections.unmodifiableMap(strings), kind));
+			}
+		}
+
 		Map<String, List<Usage>> usages = new HashMap<>();
 		List<Usage> unresolved = new ArrayList<>();
 		List<Usage> textPanes = new ArrayList<>();
@@ -277,8 +351,8 @@ public final class RomfsIndex {
 		Map<String, String> bodies = new HashMap<>();
 		Map<String, Bclyt.Pane> tops = new HashMap<>();
 		int layouts = 0;
-		for (Path archive : archives(root)) {
-			StringTable own = tables.get(strip(archive, ARCHIVE_SUFFIX));
+		for (Path archive : found.archives()) {
+			StringTable own = tables.get(archiveName(archive));
 			Darc.Node darc;
 			try {
 				darc = Archive.load(archive);
@@ -341,7 +415,7 @@ public final class RomfsIndex {
 			tables.put(BUILT_IN, new StringTable(BUILT_IN, root, Collections.unmodifiableMap(held), Kind.BUILT_IN));
 		}
 		// models' textures, which hold text too (the record book's page headers), as images of their own
-		for (Path model : files(root, Cgfx::isModel)) {
+		for (Path model : found.models()) {
 			try {
 				byte[] d = Cgfx.read(model);
 				for (Cgfx.Tex t : Cgfx.textures(d)) {
@@ -737,14 +811,18 @@ public final class RomfsIndex {
 		}
 	}
 
-	/** Every archive under {@code root}, leaving out any other romfs nested inside it. */
-	private static List<Path> archives(Path root) throws IOException {
-		return files(root, name -> name.endsWith(ARCHIVE_SUFFIX));
+	/** The archives, models and record files under a root, each sorted. */
+	private record Found(List<Path> archives, List<Path> models, List<Path> records) {
 	}
 
-	/** Every file under {@code root} whose name {@code wanted} takes, leaving out any other romfs nested inside it. */
-	private static List<Path> files(Path root, java.util.function.Predicate<String> wanted) throws IOException {
-		List<Path> found = new ArrayList<>();
+	/**
+	 * Every archive, model and record file under {@code root}, leaving out any other romfs nested
+	 * inside it; a {@code .dat} only when it starts as a record file does.
+	 */
+	private static Found walk(Path root) throws IOException {
+		List<Path> archives = new ArrayList<>();
+		List<Path> models = new ArrayList<>();
+		List<Path> records = new ArrayList<>();
 		Files.walkFileTree(root, new SimpleFileVisitor<>() {
 			@Override
 			public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException {
@@ -753,18 +831,48 @@ public final class RomfsIndex {
 
 			@Override
 			public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
-				if (wanted.test(file.getFileName().toString())) {
-					found.add(file);
+				String name = file.getFileName().toString();
+				if (archive(name)) {
+					archives.add(file);
+				} else if (Cgfx.isModel(name)) {
+					models.add(file);
+				} else if (name.endsWith(RECORD_SUFFIX) && recordFile(file)) {
+					records.add(file);
 				}
 				return FileVisitResult.CONTINUE;
 			}
 		});
-		Collections.sort(found);
-		return found;
+		Collections.sort(archives);
+		Collections.sort(models);
+		Collections.sort(records);
+		return new Found(archives, models, records);
 	}
 
+	/** Whether a file of this name is an archive. */
+	private static boolean archive(String name) {
+		return ARCHIVE_SUFFIXES.stream().anyMatch(name::endsWith);
+	}
+
+	/** An archive's name without its suffix ({@code config} of {@code config.arc.lz}), as its table is named. */
+	private static String archiveName(Path archive) {
+		String name = archive.getFileName().toString();
+		for (String suffix : ARCHIVE_SUFFIXES) {
+			if (name.endsWith(suffix)) {
+				return name.substring(0, name.length() - suffix.length());
+			}
+		}
+		return name;
+	}
+
+	/** A record file's table name: its path from the root, without {@code .dat}, with forward slashes. */
+	private static String recordName(Path root, Path file) {
+		String path = root.relativize(file).toString().replace('\\', '/');
+		return path.substring(0, path.length() - RECORD_SUFFIX.length());
+	}
+
+	/** A folder named {@code romfs}, or one with string tables of its own: a copy, not the game's. */
 	private static boolean isNestedRomfs(Path dir) throws IOException {
-		return dir.getFileName().toString().toLowerCase(Locale.ROOT).equals("romfs") || looksLikeRomfs(dir);
+		return dir.getFileName().toString().toLowerCase(Locale.ROOT).equals("romfs") || !tableFiles(dir).isEmpty();
 	}
 
 	private static String strip(Path p, String suffix) {

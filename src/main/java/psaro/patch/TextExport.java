@@ -44,6 +44,10 @@ public final class TextExport {
 				// written into the layouts by the patch, having no file of its own
 				continue;
 			}
+			if (table.kind() == RomfsIndex.Kind.RECORDS || table.kind() == RomfsIndex.Kind.SCRIPT) {
+				// not written back yet: its English is kept in .psaro/english until it can be
+				continue;
+			}
 			Path out = output.resolve(index.root().relativize(table.path()).toString());
 			Map<String, String> strings = new LinkedHashMap<>(table.strings());
 			boolean english = false;
