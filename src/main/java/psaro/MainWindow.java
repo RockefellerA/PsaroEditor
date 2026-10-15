@@ -229,8 +229,6 @@ public final class MainWindow {
 		bar.add(file);
 		bar.add(tools);
 		bar.add(Box.createHorizontalStrut(6));
-		bar.add(search);
-		bar.add(Box.createHorizontalStrut(6));
 		bar.add(new HelpMenu(frame));
 		return bar;
 	}
@@ -402,7 +400,7 @@ public final class MainWindow {
 			imagesWindow = null;
 		}
 		plan = null;
-		editor = new EditorPanel(patcher, translations, colors, unused, o.links(), actions, this::refresh);
+		editor = new EditorPanel(patcher, translations, colors, unused, o.links(), actions, search, this::refresh);
 		setBody(editor);
 		search.setSource(new StringSearch(index, translations), translations, editor::showString);
 		refresh();
