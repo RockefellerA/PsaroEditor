@@ -74,6 +74,9 @@ public final class EditorPanel extends JPanel {
 	/** A complete table's name: light blue on the dark theme, a deeper blue that reads on white. */
 	private static final Color COMPLETE_DARK = new Color(0x7F, 0xC4, 0xFF);
 	private static final Color COMPLETE_LIGHT = new Color(0x1E, 0x78, 0xC8);
+	/** A string with a note: the note icon in the same blues. */
+	private static final Color NOTE_DARK = COMPLETE_DARK;
+	private static final Color NOTE_LIGHT = COMPLETE_LIGHT;
 
 	private final RomfsIndex index;
 	private final Translations translations;
@@ -200,13 +203,25 @@ public final class EditorPanel extends JPanel {
 		stringTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
 		stringTable.setFillsViewportHeight(true);
 		stringTable.getTableHeader().setReorderingAllowed(false);
-		int[] widths = {90, 320, 320, 70, 90};
+		int[] widths = {90, 320, 320, 70, 90, 44};
 		for (int i = 0; i < widths.length; i++) {
 			stringTable.getColumnModel().getColumn(i).setPreferredWidth(widths[i]);
 		}
 		DefaultTableCellRenderer status = new StatusRenderer();
 		stringTable.getColumnModel().getColumn(StringsModel.FITS).setCellRenderer(status);
 		stringTable.getColumnModel().getColumn(StringsModel.GLYPHS).setCellRenderer(status);
+		stringTable.getColumnModel().getColumn(StringsModel.NOTE).setCellRenderer(new NoteRenderer());
+		stringTable.getColumnModel().getColumn(StringsModel.NOTE).setMaxWidth(60);
+		stringTable.addMouseListener(new MouseAdapter() {
+			@Override
+			public void mouseClicked(MouseEvent e) {
+				int view = stringTable.rowAtPoint(e.getPoint());
+				if (SwingUtilities.isLeftMouseButton(e) && view >= 0
+						&& stringTable.columnAtPoint(e.getPoint()) == StringsModel.NOTE) {
+					editNote(strings.keyAt(stringTable.convertRowIndexToModel(view)));
+				}
+			}
+		});
 		stringTable.getSelectionModel().addListSelectionListener(e -> {
 			if (!e.getValueIsAdjusting()) {
 				int view = stringTable.getSelectedRow();
@@ -352,6 +367,33 @@ public final class EditorPanel extends JPanel {
 				machine.setCaretPosition(0);
 			}
 		}.execute();
+	}
+
+	/** Asks for the note on string {@code k}: Save keeps it (blank removes it), Cancel leaves it. */
+	private void editNote(String k) {
+		String old = translations.note(table, k);
+		JTextArea area = new JTextArea(old == null ? "" : old, 8, 40);
+		area.setLineWrap(true);
+		area.setWrapStyleWord(true);
+		area.setCaretPosition(area.getDocument().getLength());
+		JScrollPane scroll = new JScrollPane(area);
+		JOptionPane pane = new JOptionPane(scroll, JOptionPane.PLAIN_MESSAGE, JOptionPane.DEFAULT_OPTION, null,
+				new Object[] {"Save", "Cancel"}, "Save");
+		javax.swing.JDialog dialog = pane.createDialog(this, "Note for " + k);
+		dialog.setResizable(true);
+		dialog.addWindowFocusListener(new java.awt.event.WindowAdapter() {
+			@Override
+			public void windowGainedFocus(java.awt.event.WindowEvent e) {
+				area.requestFocusInWindow();
+			}
+		});
+		dialog.setVisible(true);
+		if (!"Save".equals(pane.getValue())) {
+			return;
+		}
+		translations.setNote(table, k, area.getText().strip());
+		strings.changed(k);
+		onChange.run();
 	}
 
 	private void openTable(StringTable t) {
@@ -588,8 +630,8 @@ public final class EditorPanel extends JPanel {
 	/** The chosen table's strings, with how each fares in its panes. */
 	private final class StringsModel extends AbstractTableModel {
 
-		static final int KEY = 0, JAPANESE = 1, ENGLISH = 2, FITS = 3, GLYPHS = 4;
-		private static final String[] NAMES = {"Key", "Japanese", "English", "Fits", "Glyphs"};
+		static final int KEY = 0, JAPANESE = 1, ENGLISH = 2, FITS = 3, GLYPHS = 4, NOTE = 5;
+		private static final String[] NAMES = {"Key", "Japanese", "English", "Fits", "Glyphs", "Note"};
 
 		private List<String> keys = List.of();
 		private final Map<String, Fit> fits = new HashMap<>();
@@ -648,6 +690,7 @@ public final class EditorPanel extends JPanel {
 				case ENGLISH -> en == null ? "" : (translations.keepsJapanese(table, k) ? "[JP] " : "") + ControlCodes.summary(en);
 				case FITS -> en == null ? "" : fitsText(fit(k, en));
 				case GLYPHS -> en == null ? "" : glyphsText(fit(k, en));
+				case NOTE -> translations.note(table, k) == null ? "" : translations.note(table, k);
 				default -> "";
 			};
 		}
@@ -694,6 +737,48 @@ public final class EditorPanel extends JPanel {
 					: s.endsWith(" missing") ? "No font in the romfs has these characters, so Patch cannot add them."
 					: null);
 			return this;
+		}
+	}
+
+	/** The Note column: a note icon in blue when the string has a note (its text on hover), else empty. */
+	private static final class NoteRenderer extends DefaultTableCellRenderer {
+		@Override
+		public Component getTableCellRendererComponent(JTable t, Object value, boolean selected, boolean focus,
+				int row, int column) {
+			super.getTableCellRendererComponent(t, "", selected, focus, row, column);
+			String note = String.valueOf(value);
+			setHorizontalAlignment(CENTER);
+			setIcon(note.isEmpty() ? null : NoteIcon.INSTANCE);
+			setToolTipText(note.isEmpty() ? "Click to add a note" : "<html>" + note.replace("&", "&amp;")
+					.replace("<", "&lt;").replace("\n", "<br>") + "</html>");
+			return this;
+		}
+	}
+
+	/** A small sheet of paper with ruled lines, in the note blue for the theme. */
+	private enum NoteIcon implements Icon {
+		INSTANCE;
+
+		@Override
+		public void paintIcon(Component c, Graphics g, int x, int y) {
+			Graphics2D g2 = (Graphics2D) g.create();
+			g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+			g2.setColor(FlatLaf.isLafDark() ? NOTE_DARK : NOTE_LIGHT);
+			g2.setStroke(new BasicStroke(1.4f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+			g2.drawRoundRect(x + 1, y + 1, 10, 12, 3, 3);
+			g2.drawLine(x + 3, y + 5, x + 9, y + 5);
+			g2.drawLine(x + 3, y + 8, x + 9, y + 8);
+			g2.dispose();
+		}
+
+		@Override
+		public int getIconWidth() {
+			return 14;
+		}
+
+		@Override
+		public int getIconHeight() {
+			return 16;
 		}
 	}
 

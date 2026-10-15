@@ -29,7 +29,8 @@ import psaro.romfs.RomfsIndex.StringTable;
  * string that needs no translation (a name, a number, "？？？") is marked to keep its Japanese,
  * stored as {@code true} rather than a copy of the text, which is how it differs from a string not
  * translated yet. Keys a file has but its table lacks are kept as they are. Nothing is written
- * until {@link #save}, and a table left with no translations has its file removed. These files
+ * until {@link #save}, and a table left with no translations has its file removed. The user's
+ * notes to themselves are saved the same way, one file per table in {@code notes/}. These files
  * are the record of the work; the game's own tables are built from them
  * ({@link psaro.patch.TextExport}).
  */
@@ -37,6 +38,7 @@ public final class Translations {
 
 	private static final String FOLDER_SUFFIX = ".psaro";
 	private static final String ENGLISH = "english";
+	private static final String NOTES = "notes";
 
 	private final RomfsIndex index;
 	private final Path folder;
@@ -45,6 +47,9 @@ public final class Translations {
 	/** Table name to the keys that keep their Japanese. A key is in this or in {@link #english}, not both. */
 	private final Map<String, Set<String>> keepJapanese = new HashMap<>();
 	private final Set<String> dirty = new TreeSet<>();
+	/** Table name to key to the user's own note on that string; kept beside the English, never part of it. */
+	private final Map<String, Map<String, String>> notes = new HashMap<>();
+	private final Set<String> dirtyNotes = new TreeSet<>();
 
 	/** One table's file: its English and the keys marked to keep their Japanese. */
 	private record Saved(Map<String, String> english, Set<String> keepJapanese) {
@@ -75,6 +80,10 @@ public final class Translations {
 				Saved saved = read(file);
 				t.english.put(table.name(), saved.english());
 				t.keepJapanese.put(table.name(), saved.keepJapanese());
+			}
+			Path notes = t.notesFile(table);
+			if (Files.isRegularFile(notes)) {
+				t.notes.put(table.name(), readNotes(notes));
 			}
 		}
 		return t;
@@ -148,13 +157,35 @@ public final class Translations {
 		return tables.stream().mapToInt(this::translatedCount).sum();
 	}
 
+	/** The note left on {@code key}, or null if it has none. */
+	public String note(StringTable table, String key) {
+		return notes.getOrDefault(table.name(), Map.of()).get(key);
+	}
+
+	/** Sets the note on {@code key}; null or blank removes it. */
+	public void setNote(StringTable table, String key, String text) {
+		String value = text == null || text.isBlank() ? null : text;
+		Map<String, String> map = notes.computeIfAbsent(table.name(), n -> new HashMap<>());
+		if (Objects.equals(map.get(key), value)) {
+			return;
+		}
+		if (value == null) {
+			map.remove(key);
+		} else {
+			map.put(key, value);
+		}
+		dirtyNotes.add(table.name());
+	}
+
 	public boolean isDirty() {
-		return !dirty.isEmpty();
+		return !dirty.isEmpty() || !dirtyNotes.isEmpty();
 	}
 
 	/** Names of the tables changed since the last save. */
 	public Set<String> dirtyTables() {
-		return Collections.unmodifiableSet(dirty);
+		Set<String> all = new TreeSet<>(dirty);
+		all.addAll(dirtyNotes);
+		return Collections.unmodifiableSet(all);
 	}
 
 	/** Writes every changed table. */
@@ -172,6 +203,38 @@ public final class Translations {
 			}
 			dirty.remove(name);
 		}
+		for (String name : Set.copyOf(dirtyNotes)) {
+			StringTable table = index.table(name);
+			Map<String, String> map = notes.getOrDefault(name, Map.of());
+			Path file = notesFile(table);
+			if (map.isEmpty()) {
+				Files.deleteIfExists(file);
+			} else {
+				Files.createDirectories(file.getParent());
+				write(file, json(table, map, Set.of()));
+			}
+			dirtyNotes.remove(name);
+		}
+	}
+
+	private Path notesFile(StringTable table) {
+		return folder.resolve(NOTES).resolve(table.name() + ".json");
+	}
+
+	private static Map<String, String> readNotes(Path file) throws IOException {
+		JSONObject json;
+		try {
+			json = new JSONObject(Files.readString(file, StandardCharsets.UTF_8));
+		} catch (JSONException e) {
+			throw new IOException(file + " is not valid JSON: " + e.getMessage(), e);
+		}
+		Map<String, String> out = new HashMap<>();
+		for (String key : json.keySet()) {
+			if (json.get(key) instanceof String s && !s.isBlank()) {
+				out.put(key, s);
+			}
+		}
+		return out;
 	}
 
 	private Path file(StringTable table) {
