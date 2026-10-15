@@ -16,7 +16,8 @@ import psaro.project.Translations;
  * How the font patch builds, in {@code <romfs>.psaro/fonts.json}: per font, the letters that get
  * an extra pixel of advance when they are added to it and the typeface they are drawn from
  * ({@link Typeface}), and whether to copy the patched archives into a mods folder. Written on
- * every change.
+ * every change. A typeface is kept by its id, so one not imported here ({@link Typefaces}) keeps
+ * its setting, drawing with the game font until it is.
  *
  * <p>Older settings gave every font the same letters (one string, "ty" when unset). That value is
  * kept as {@link #legacyExtraSpace} until {@link FontPatcher} hands it to the fonts it was used
@@ -30,8 +31,10 @@ public final class PatchSettings {
 	private final Path file;
 	/** Font file name to its letters; a font not here gets none. */
 	private final Map<String, String> extraSpace = new TreeMap<>();
-	/** Font file name to the typeface its added letters come from; a font not here borrows from the game's. */
-	private final Map<String, Typeface> lettersFrom = new TreeMap<>();
+	/** Font file name to the id of the typeface its added letters come from; a font not here borrows from the game's. */
+	private final Map<String, String> lettersFrom = new TreeMap<>();
+	/** The typefaces there are to draw from. */
+	private final Typefaces typefaces;
 	/** The one value all fonts shared before, until it is handed out; null once it has been. */
 	private String legacy = OLD_DEFAULT;
 	private boolean copyToMods;
@@ -39,13 +42,14 @@ public final class PatchSettings {
 	/** The game's title id, as the exported patch's folders name it, or null if none was given. */
 	private String titleId;
 
-	private PatchSettings(Path file) {
+	private PatchSettings(Path file, Typefaces typefaces) {
 		this.file = file;
+		this.typefaces = typefaces;
 	}
 
-	/** Loads what was saved for {@code romfs}; nothing saved yet gives the defaults. */
+	/** Loads what was saved for {@code romfs}, and the typefaces imported into it; nothing saved yet gives the defaults. */
 	public static PatchSettings open(Path romfs) throws IOException {
-		PatchSettings s = new PatchSettings(Translations.folderFor(romfs).resolve("fonts.json"));
+		PatchSettings s = new PatchSettings(Translations.folderFor(romfs).resolve("fonts.json"), Typefaces.open(romfs));
 		if (Files.isRegularFile(s.file)) {
 			try {
 				JSONObject json = new JSONObject(Files.readString(s.file, StandardCharsets.UTF_8));
@@ -59,9 +63,9 @@ public final class PatchSettings {
 				JSONObject from = json.optJSONObject("lettersFrom");
 				if (from != null) {
 					from.keySet().forEach(font -> {
-						Typeface t = Typeface.of(from.getString(font));
-						if (t.bundled()) {
-							s.lettersFrom.put(font, t);
+						String id = from.getString(font);
+						if (!id.equals(Typeface.GAME.id())) {
+							s.lettersFrom.put(font, id);
 						}
 					});
 				}
@@ -82,20 +86,45 @@ public final class PatchSettings {
 		return extraSpace.getOrDefault(font, "");
 	}
 
-	/** Where the letters added to {@code font} come from: the game's fonts unless set. */
-	public synchronized Typeface lettersFrom(String font) {
-		return lettersFrom.getOrDefault(font, Typeface.GAME);
+	/** The typefaces there are to draw from: the bundled one and those imported into the project. */
+	public Typefaces typefaces() {
+		return typefaces;
 	}
 
-	/** Every font set to a bundled typeface, with it. */
+	/**
+	 * Where the letters added to {@code font} come from: the game's fonts unless set, or set to a
+	 * typeface not imported here.
+	 */
+	public synchronized Typeface lettersFrom(String font) {
+		return typefaces.of(lettersFrom.get(font));
+	}
+
+	/** The id of the typeface {@code font} is set to, imported here or not; null for the game's fonts. */
+	public synchronized String lettersFromId(String font) {
+		return lettersFrom.get(font);
+	}
+
+	/** Every font set to a typeface there is here, with it. */
 	public synchronized Map<String, Typeface> fontsDrawnFrom() {
-		return Map.copyOf(lettersFrom);
+		Map<String, Typeface> out = new TreeMap<>();
+		lettersFrom.forEach((font, id) -> {
+			Typeface t = typefaces.of(id);
+			if (t.bundled()) {
+				out.put(font, t);
+			}
+		});
+		return Map.copyOf(out);
+	}
+
+	/** The id of every typeface a font is set to, imported here or not. */
+	public synchronized java.util.Set<String> typefaceIds() {
+		return java.util.Set.copyOf(lettersFrom.values());
 	}
 
 	/** Sets where the letters added to {@code font} come from. */
 	public synchronized void setLettersFrom(String font, Typeface typeface) throws IOException {
 		if (typeface.bundled()) {
-			lettersFrom.put(font, typeface);
+			lettersFrom.put(font, typeface.id());
 		} else {
 			lettersFrom.remove(font);
 		}
@@ -162,7 +191,7 @@ public final class PatchSettings {
 		json.put("extraSpace", legacy != null ? legacy : space);
 		if (!lettersFrom.isEmpty()) {
 			JSONObject from = new JSONObject();
-			lettersFrom.forEach((font, t) -> from.put(font, t.id()));
+			lettersFrom.forEach(from::put);
 			json.put("lettersFrom", from);
 		}
 		json.put("copyToMods", copyToMods);

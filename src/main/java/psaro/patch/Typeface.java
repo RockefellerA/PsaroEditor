@@ -5,36 +5,73 @@ import java.awt.FontFormatException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
-import java.util.List;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Locale;
 import java.util.Map;
+import java.util.NavigableMap;
+import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 import psaro.romfs.RomfsIndex;
 
 /**
  * What a game font's text is drawn with: the game font itself ({@link #GAME}, the default), lent
- * what it lacks from the game's other fonts; or a typeface bundled under {@code /fonts},
- * licensed under the SIL Open Font License 1.1 (its text sits beside each typeface's files),
- * from which the patch draws a whole new font in the game font's size and outline
- * ({@link FreeFont}) and puts it in the game font's place, the game font left as it is.
+ * what it lacks from the game's other fonts; or a typeface, from which the patch draws a whole new
+ * font in the game font's size and outline ({@link FreeFont}) and puts it in the game font's place,
+ * the game font left as it is.
+ *
+ * <p>One typeface ships with PsaroEditor, M PLUS Rounded 1c, under {@code /fonts} and licensed
+ * under the SIL Open Font License 1.1 (its text sits beside its files). Others are imported into a
+ * project ({@link Typefaces}): a family of one or more files, one per weight. A game font is drawn
+ * in the weight nearest its own ({@link #weightFor}).
  */
-public enum Typeface {
+public final class Typeface {
 
-	GAME("game", "Game font", null),
-	M_PLUS_ROUNDED("m-plus-rounded-1c", "M PLUS Rounded 1c", "MPLUSRounded1c"),
-	NOTO_SANS("noto-sans", "Noto Sans", "NotoSans");
+	public static final Typeface GAME = new Typeface("game", "Game font", null, null, Map.of());
+	public static final Typeface M_PLUS_ROUNDED = new Typeface("m-plus-rounded-1c", "M PLUS Rounded 1c", "MPLUSRounded1c",
+			null, Map.of(500, "MPLUSRounded1c-Medium.ttf", 700, "MPLUSRounded1c-Bold.ttf", 800,
+					"MPLUSRounded1c-ExtraBold.ttf", 900, "MPLUSRounded1c-Black.ttf"));
 
-	/** The bundled weights, lightest first, by the file name's suffix. */
-	private static final List<String> WEIGHTS = List.of("Medium", "Bold", "ExtraBold", "Black");
+	/** The weights a game font is drawn in ({@link #weightFor}), by name, and the weight class each is. */
+	private static final Map<String, Integer> WEIGHTS = Map.of("Medium", 500, "Bold", 700, "ExtraBold", 800, "Black", 900);
 
 	private final String id;
 	private final String label;
-	private final String file;
-	private final Map<String, Font> loaded = new ConcurrentHashMap<>();
+	private final String prefix;
+	/** The folder an imported typeface's files are in; null for the one bundled under {@code /fonts}. */
+	private final Path folder;
+	/** Each weight class's file. */
+	private final NavigableMap<Integer, String> files;
+	private final Map<Integer, Font> loaded = new ConcurrentHashMap<>();
 
-	Typeface(String id, String label, String file) {
+	private Typeface(String id, String label, String prefix, Path folder, Map<Integer, String> files) {
 		this.id = id;
 		this.label = label;
-		this.file = file;
+		this.prefix = prefix;
+		this.folder = folder;
+		this.files = new TreeMap<>(files);
+	}
+
+	/** A family imported into {@code folder}: its files there, by weight class. */
+	static Typeface imported(String family, Path folder, Map<Integer, String> files) {
+		return new Typeface(idFor(family), family, prefixFor(family), folder, files);
+	}
+
+	/** A typeface a setting names that is not imported here: shown by its id, drawing nothing. */
+	static Typeface missing(String id) {
+		return new Typeface(id, id + " (not imported)", null, null, Map.of());
+	}
+
+	/** How a family's typeface is saved: {@code rounded-mplus-1c} for {@code Rounded Mplus 1c}. */
+	static String idFor(String family) {
+		String id = family.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]+", "-").replaceAll("^-|-$", "");
+		return id.isEmpty() ? "font-" + Integer.toHexString(family.hashCode()) : id;
+	}
+
+	/** What a family's drawn fonts are named with: its letters and digits, {@code RoundedMplus1c}. */
+	static String prefixFor(String family) {
+		String prefix = family.replaceAll("[^A-Za-z0-9]", "");
+		return prefix.isEmpty() ? "Font" + Integer.toHexString(family.hashCode()) : prefix;
 	}
 
 	/** How the setting is saved. */
@@ -51,24 +88,24 @@ public enum Typeface {
 		return label;
 	}
 
-	/** The typeface saved as {@code id}; the game's fonts for none or an unknown one. */
-	public static Typeface of(String id) {
-		for (Typeface t : values()) {
-			if (t.id.equals(id)) {
-				return t;
-			}
-		}
-		return GAME;
+	/** True for a typeface to draw from, the bundled one or one imported; false for the game's own fonts. */
+	public boolean bundled() {
+		return !files.isEmpty();
 	}
 
-	/** True for a bundled typeface, false for the game's own fonts. */
-	public boolean bundled() {
-		return file != null;
+	/** True for the typeface PsaroEditor ships with. */
+	public boolean builtIn() {
+		return bundled() && folder == null;
+	}
+
+	/** The weight classes it has files for, lightest first, each with its file's name. */
+	public NavigableMap<Integer, String> weights() {
+		return java.util.Collections.unmodifiableNavigableMap(files);
 	}
 
 	/**
-	 * The bundled weight nearest {@code gameFont}'s ({@code B} of {@code SulaPro_B_04a_20}): R and
-	 * M take Medium, DB and B Bold, EB ExtraBold, H and U Black; a font naming none takes Bold.
+	 * The weight nearest {@code gameFont}'s ({@code B} of {@code SulaPro_B_04a_20}): R and M take
+	 * Medium, DB and B Bold, EB ExtraBold, H and U Black; a font naming none takes Bold.
 	 */
 	public static String weightFor(String gameFont) {
 		String w = RomfsIndex.weight(gameFont);
@@ -80,33 +117,56 @@ public enum Typeface {
 		};
 	}
 
-	/** The bundled files' name before the weight, as {@code MPLUSRounded1c}; null for the game's fonts. */
+	/** Its drawn fonts' names before the game font's weight, as {@code MPLUSRounded1c}; null for the game's fonts. */
 	public String prefix() {
-		return file;
+		return prefix;
 	}
 
-	/** The bundled file for {@code weight}, as {@code MPLUSRounded1c-Bold.ttf}. */
+	/** The file drawn from for {@code weight} ({@link #weightFor}), as {@code MPLUSRounded1c-Bold.ttf}. */
 	public String fileName(String weight) {
-		return file + "-" + weight + ".ttf";
+		return files.get(nearest(weight));
 	}
 
-	/** This typeface in {@code weight} at a size of 1, loaded once. */
+	/** This typeface in {@code weight} ({@link #weightFor}), or the nearest weight it has, at a size of 1, loaded once. */
 	public Font font(String weight) {
 		if (!bundled()) {
-			throw new IllegalStateException("the game's fonts are not a bundled typeface");
+			throw new IllegalStateException(label + " is not a typeface to draw from");
 		}
-		String w = WEIGHTS.contains(weight) ? weight : "Bold";
-		return loaded.computeIfAbsent(w, k -> {
-			try (InputStream in = Typeface.class.getResourceAsStream("/fonts/" + fileName(k))) {
+		return loaded.computeIfAbsent(nearest(weight), w -> {
+			String file = files.get(w);
+			try (InputStream in = folder == null ? Typeface.class.getResourceAsStream("/fonts/" + file)
+					: Files.newInputStream(folder.resolve(file))) {
 				if (in == null) {
-					throw new IllegalStateException("missing bundled font /fonts/" + fileName(k));
+					throw new IllegalStateException("missing bundled font /fonts/" + file);
 				}
 				return Font.createFont(Font.TRUETYPE_FONT, in);
 			} catch (IOException e) {
 				throw new UncheckedIOException(e);
 			} catch (FontFormatException e) {
-				throw new IllegalStateException("unreadable bundled font " + fileName(k), e);
+				throw new IllegalStateException("unreadable font " + file, e);
 			}
 		});
+	}
+
+	/** The weight class of the file nearest {@code weight}: the heavier of two as near. */
+	private int nearest(String weight) {
+		int want = WEIGHTS.getOrDefault(weight, 700);
+		Integer below = files.floorKey(want);
+		Integer above = files.ceilingKey(want);
+		if (below == null) {
+			return above;
+		}
+		return above == null || want - below < above - want ? below : above;
+	}
+
+	/** Typefaces are the same when they are saved the same. */
+	@Override
+	public boolean equals(Object o) {
+		return o instanceof Typeface t && t.id.equals(id);
+	}
+
+	@Override
+	public int hashCode() {
+		return id.hashCode();
 	}
 }

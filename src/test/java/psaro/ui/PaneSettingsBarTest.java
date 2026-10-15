@@ -275,6 +275,49 @@ class PaneSettingsBarTest {
 		assertTrue(fonts.overrides().layouts().isEmpty());
 	}
 
+	/**
+	 * A typeface imported into the project is a choice in both rows beside the game font and the
+	 * bundled one; a pane set to one not imported here shows it, and keeps it when changed otherwise.
+	 */
+	@Test
+	void importedTypefacesAreChoicesAndOneNotImportedIsKept() throws IOException {
+		Path romfs = dir.resolve("game");
+		SampleRomfs.table(romfs, "menu", Map.of("menu_0001", "はい"));
+		SampleRomfs.archive(romfs, "scene/menu/menu.arc.lz", "blyt/menu.bclyt", List.of("a.bcfnt"),
+				Map.of("a.bcfnt", SampleRomfs.font("はい", 10)), SampleRomfs.pane("Txt_Yes", "menu_0001"));
+		RomfsIndex index = RomfsIndex.scan(romfs);
+		FontPatcher fonts = new FontPatcher(index, PatchSettings.open(romfs), LayoutOverrides.open(romfs));
+		fonts.settings().typefaces().importFiles(List.of(psaro.patch.TestFonts.renamed(dir.resolve("download"), "Bold")));
+		fonts.overrides().set("blyt/menu.bclyt", List.of("Txt_Yes"), TextOverride.NONE.withDrawWith("noto-sans"));
+		PaneSettingsBar bar = new PaneSettingsBar(fonts, () -> { });
+		List<Usage> usages = index.usages(index.table("menu"), "menu_0001");
+		bar.show(usages.get(0), usages);
+		@SuppressWarnings("unchecked")
+		List<JComboBox<?>> combos = (List<JComboBox<?>>) (List<?>) all(bar, JComboBox.class, new ArrayList<>());
+		JComboBox<?> drawWith = combos.get(1);
+		JComboBox<?> everyPane = combos.get(2);
+
+		List<String> paneChoices = new ArrayList<>();
+		for (int i = 1; i < drawWith.getItemCount(); i++) {
+			paneChoices.add(String.valueOf(drawWith.getItemAt(i)));
+		}
+		assertEquals(List.of("Game font", "M PLUS Rounded 1c", psaro.patch.TestFonts.FAMILY, "noto-sans (not imported)"),
+				paneChoices);
+		assertEquals("noto-sans (not imported)", drawWith.getSelectedItem());
+		List<String> fontChoices = new ArrayList<>();
+		for (int i = 0; i < everyPane.getItemCount(); i++) {
+			fontChoices.add(String.valueOf(everyPane.getItemAt(i)));
+		}
+		assertEquals(List.of("Game font", "M PLUS Rounded 1c", psaro.patch.TestFonts.FAMILY), fontChoices);
+
+		List<JSpinner> spinners = all(bar, JSpinner.class, new ArrayList<>());
+		spinners.get(0).setValue(140.0);
+		assertEquals("noto-sans", fonts.overrides().get("blyt/menu.bclyt", "Txt_Yes").drawWith(), "kept when the box changes");
+
+		everyPane.setSelectedIndex(2);
+		assertEquals("rounded-mplus-9z", PatchSettings.open(romfs).lettersFromId("a.bcfnt"));
+	}
+
 	@Test
 	void theFontsSettingsAreSavedForTheFontAndFollowThePanesFont() throws IOException {
 		Path romfs = dir.resolve("game");

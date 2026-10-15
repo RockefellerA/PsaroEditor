@@ -123,25 +123,25 @@ class FontPatcherTest {
 
 	/**
 	 * A font set to a bundled typeface is not changed: beside every copy of it the patch adds a
-	 * font drawn from the typeface, holding that copy's characters and the English (kana drawn
-	 * from M PLUS Rounded 1c, which Noto Sans lacks), and the layouts name that font instead, so
-	 * the game font, named by none, is left out. The written glyphs are those measured, in cells
-	 * cut to the rows they draw in; going back to the game font takes it all out.
+	 * font drawn from the typeface, holding that copy's characters and the English, and the
+	 * layouts name that font instead, so the game font, named by none, is left out. The written
+	 * glyphs are those measured, in cells cut to the rows they draw in; going back to the game
+	 * font takes it all out.
 	 */
 	@Test
 	void aFontSetToABundledTypefaceIsDrawnAnewBesideTheGameFont() throws IOException {
-		String drawn = "NotoSans_B_04a_20.bcfnt";
-		assertEquals(drawn, FreeFont.name(FONT, Typeface.NOTO_SANS));
-		settings.setLettersFrom(FONT, Typeface.NOTO_SANS);
+		String drawn = "MPLUSRounded1c_B_04a_20.bcfnt";
+		assertEquals(drawn, FreeFont.name(FONT, Typeface.M_PLUS_ROUNDED));
+		settings.setLettersFrom(FONT, Typeface.M_PLUS_ROUNDED);
 		patcher.settingsChanged();
 		Plan plan = patcher.plan(english("Yes!"));
 		assertTrue(plan.fonts().stream().noneMatch(f -> f.font().equals(FONT)), "the game font is not changed");
 		FontChange free = plan.fonts().stream().filter(f -> f.archive().equals(menu())).findFirst().orElseThrow();
 		assertEquals(drawn, free.font());
 		assertEquals(FONT, free.drawnFor());
-		assertTrue(free.unavailable().isEmpty(), "Noto Sans has the '!' no game font has");
+		assertTrue(free.unavailable().isEmpty(), "the typeface has the '!' no game font has");
 		assertEquals(codes("Yes! はい"), free.lent());
-		assertEquals("Noto Sans", free.from().get((int) 'Y').name());
+		assertEquals("M PLUS Rounded 1c", free.from().get((int) 'Y').name());
 		assertEquals("M PLUS Rounded 1c", free.from().get((int) 'は').name());
 		// plaza carries the font too, so it gets one with what its copy holds
 		assertTrue(plan.fonts().stream().anyMatch(f -> f.font().equals(drawn) && !f.archive().equals(menu())));
@@ -483,9 +483,10 @@ class FontPatcherTest {
 		assertEquals(outline, layout.textPanes().get(0).text().font(), "pointed back at the game font");
 		assertEquals(letters, layout.textPanes().get(1).text().font());
 
-		s.setLettersFrom(letters, Typeface.NOTO_SANS);
+		s.setLettersFrom(outline, Typeface.GAME);
+		s.setLettersFrom(letters, Typeface.M_PLUS_ROUNDED);
 		p.settingsChanged();
-		assertEquals(Typeface.NOTO_SANS, p.drawnWith(under));
+		assertEquals(Typeface.M_PLUS_ROUNDED, p.drawnWith(under), "as the letters on top, not its own font's setting");
 		p.overrides().set("blyt/menu.bclyt", List.of("Txt_Bk"), TextOverride.NONE.withDrawWith(Typeface.GAME.id()));
 		assertEquals(Typeface.GAME, p.drawnWith(under), "a choice of its own comes first");
 	}
@@ -606,17 +607,49 @@ class FontPatcherTest {
 		assertFalse(patcher.plan(english).hasWork());
 	}
 
+	/**
+	 * A typeface imported into the project draws as the bundled one does, its fonts named for it;
+	 * once it is removed, the font set to it draws with the game font again, and the setting is
+	 * named as not imported.
+	 */
+	@Test
+	void anImportedTypefaceIsDrawnFromAndItsAbsenceIsNoticed() throws IOException {
+		settings.typefaces().importFiles(List.of(TestFonts.renamed(dir.resolve("download"), "Bold")));
+		patcher.typefacesChanged();
+		Typeface renamed = settings.typefaces().of("rounded-mplus-9z");
+		settings.setLettersFrom(FONT, renamed);
+		patcher.settingsChanged();
+		Usage u = index.usages(index.table("menu"), "menu_0001").get(0);
+		assertEquals(renamed, patcher.drawnWith(u));
+		Plan plan = patcher.plan(english("Yes!"));
+		FontChange free = plan.fonts().stream().filter(f -> f.archive().equals(menu())).findFirst().orElseThrow();
+		assertEquals("RoundedMplus9z_B_04a_20.bcfnt", free.font());
+		assertEquals(TestFonts.FAMILY, free.from().get((int) 'Y').name());
+		assertEquals(TestFonts.FAMILY, free.from().get((int) 'は').name(), "it has kana of its own");
+		patcher.write(plan, step -> { });
+		assertTrue(Darc.files(Archive.load(patcher.outputPath(menu()))).containsKey("font/RoundedMplus9z_B_04a_20.bcfnt"));
+		assertTrue(patcher.missingTypefaces().isEmpty());
+
+		settings.typefaces().remove(renamed);
+		patcher.typefacesChanged();
+		assertEquals(Typeface.GAME, patcher.drawnWith(u));
+		assertEquals(java.util.Set.of("rounded-mplus-9z"), patcher.missingTypefaces());
+		patcher.write(patcher.plan(english("Yes!")), step -> { });
+		Bclyt.Layout layout = Bclyt.read(Darc.files(Archive.load(patcher.outputPath(menu()))).get("blyt/menu.bclyt").data);
+		assertEquals(List.of(FONT), layout.fonts(), "pointed back at the game font");
+	}
+
 	/** A font set to a typeface for every pane, but one pane keeping the game font: it points back at it. */
 	@Test
 	void aPaneCanKeepTheGameFontWhenItsFontIsDrawnAnew() throws IOException {
-		settings.setLettersFrom(FONT, Typeface.NOTO_SANS);
+		settings.setLettersFrom(FONT, Typeface.M_PLUS_ROUNDED);
 		patcher.settingsChanged();
 		patcher.overrides().set("blyt/menu.bclyt", List.of("Txt_Yes"), TextOverride.NONE.withDrawWith(Typeface.GAME.id()));
 		Usage u = index.usages(index.table("menu"), "menu_0001").get(0);
 		assertEquals(Typeface.GAME, patcher.drawnWith(u));
 		patcher.write(patcher.plan(english("Yes")), step -> { });
 		Bclyt.Layout layout = Bclyt.read(Darc.files(Archive.load(patcher.outputPath(menu()))).get("blyt/menu.bclyt").data);
-		assertEquals(List.of(FreeFont.name(FONT, Typeface.NOTO_SANS), FONT), layout.fonts(), "renamed for every pane, the game font added back");
+		assertEquals(List.of(FreeFont.name(FONT, Typeface.M_PLUS_ROUNDED), FONT), layout.fonts(), "renamed for every pane, the game font added back");
 		assertEquals(FONT, layout.textPanes().get(0).text().font());
 		assertTrue(written().has('Y'), "lent its English as a game font");
 		assertFalse(patcher.plan(english("Yes")).hasWork());
@@ -625,13 +658,13 @@ class FontPatcherTest {
 	/** An archive written with the game font still beside its stand-in is written again without it. */
 	@Test
 	void aGameFontLeftBesideItsStandInIsTakenOutOnTheNextPatch() throws IOException {
-		settings.setLettersFrom(FONT, Typeface.NOTO_SANS);
+		settings.setLettersFrom(FONT, Typeface.M_PLUS_ROUNDED);
 		patcher.settingsChanged();
 		patcher.write(patcher.plan(english("Yes")), step -> { });
 		// as an earlier patch wrote it: the game font kept
 		Path out = patcher.outputPath(menu());
 		Darc.Node root = Archive.load(out);
-		Darc.Node free = Darc.files(root).get("font/" + FreeFont.name(FONT, Typeface.NOTO_SANS));
+		Darc.Node free = Darc.files(root).get("font/" + FreeFont.name(FONT, Typeface.M_PLUS_ROUNDED));
 		Darc.addBeside(root, free, FONT, Darc.files(Archive.load(menu())).get("font/" + FONT).data);
 		Archive.save(root, out);
 
@@ -656,12 +689,12 @@ class FontPatcherTest {
 				SampleRomfs.pane("Txt_No", "menu_0002"));
 		RomfsIndex idx = RomfsIndex.scan(other);
 		PatchSettings s = PatchSettings.open(other);
-		s.setLettersFrom(FONT, Typeface.NOTO_SANS);
+		s.setLettersFrom(FONT, Typeface.M_PLUS_ROUNDED);
 		FontPatcher p = new FontPatcher(idx, s, LayoutOverrides.open(other));
 		p.write(p.plan(List.of(new Text(idx.table("menu"), "menu_0001", "Yes"))), step -> { });
 		Path menu = other.resolve("scene/menu/menu.arc.lz");
 		Map<String, Darc.Node> files = Darc.files(Archive.load(p.outputPath(menu)));
-		assertTrue(files.containsKey("font/" + FreeFont.name(FONT, Typeface.NOTO_SANS)));
+		assertTrue(files.containsKey("font/" + FreeFont.name(FONT, Typeface.M_PLUS_ROUNDED)));
 		assertTrue(files.containsKey("font/" + FONT), "list.bclyt reads it from here");
 	}
 

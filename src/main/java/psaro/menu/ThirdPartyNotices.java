@@ -23,7 +23,7 @@ import javax.swing.KeyStroke;
 /**
  * The notices the libraries PsaroEditor ships with ask to go along with it: FlatLaf's Apache
  * License, whose text is in {@code /licenses}, copied from FlatLaf's own jar. (The bundled
- * typefaces carry their licences beside them, in {@code /fonts}.)
+ * typeface carries its licence beside it, in {@code /fonts}.)
  */
 public final class ThirdPartyNotices extends JDialog {
 

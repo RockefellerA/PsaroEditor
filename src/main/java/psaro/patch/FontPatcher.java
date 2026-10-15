@@ -316,6 +316,32 @@ public final class FontPatcher {
 	}
 
 	/**
+	 * Forgets every font drawn from a typeface and the previews, after typefaces are imported or
+	 * removed: a typeface's files, or whether it is there at all, may have changed.
+	 */
+	public synchronized void typefacesChanged() {
+		freeFonts.clear();
+		settingsChanged();
+	}
+
+	/**
+	 * The ids of the typefaces the settings name, for every pane of a font or for one pane, that
+	 * are not imported here: their panes draw with the game font until they are.
+	 */
+	public java.util.SortedSet<String> missingTypefaces() {
+		java.util.SortedSet<String> out = new TreeSet<>(settings.typefaceIds());
+		for (String layout : overrides.layouts()) {
+			overrides.forLayout(layout).values().forEach(t -> {
+				if (t.drawWith() != null) {
+					out.add(t.drawWith());
+				}
+			});
+		}
+		out.removeIf(settings.typefaces()::has);
+		return out;
+	}
+
+	/**
 	 * What {@code usage}'s pane draws with: its own choice ({@link TextOverride#drawWith}) when it
 	 * has one; else, for a lower layer of one text, what the pane on top draws with
 	 * ({@link RomfsIndex#paneOnTop}), so the layers stay one text; else what its font is set to
@@ -329,7 +355,7 @@ public final class FontPatcher {
 	private Typeface faceOf(String layout, Bclyt.Pane p, Map<String, TextOverride> panes) {
 		TextOverride t = panes.getOrDefault(p.name(), TextOverride.NONE);
 		if (t.drawWith() != null) {
-			return Typeface.of(t.drawWith());
+			return settings.typefaces().of(t.drawWith());
 		}
 		Bclyt.Pane top = index.paneOnTop(layout, p.name());
 		if (top != null) {
@@ -815,7 +841,7 @@ public final class FontPatcher {
 				continue;
 			}
 			Typeface face = faceOf(layout, p, panes);
-			if (t.drawWith() != null || face != settings.lettersFrom(gameFont)) {
+			if (t.drawWith() != null || !face.equals(settings.lettersFrom(gameFont))) {
 				out.add(new PaneFont(p.name(), gameFont, face));
 			}
 		}
@@ -1225,7 +1251,7 @@ public final class FontPatcher {
 			}
 			// the drawn fonts beside the game's, which are not changed
 			for (FontChange f : free) {
-				FreeFont ff = freeFont(archive, f.drawnFor(), FreeFont.typefaceOf(f.font()));
+				FreeFont ff = freeFont(archive, f.drawnFor(), settings.typefaces().ofFreeFont(f.font()));
 				Darc.Node game = byName.get(f.drawnFor());
 				if (ff == null || game == null) {
 					throw new IOException("cannot add " + f.font() + " beside " + f.drawnFor() + " in " + archive);

@@ -352,7 +352,7 @@ public final class FontPatchDialog extends JDialog {
 							l.fonts().entrySet().stream()
 									.map(e -> e.getKey().replace(".bcfnt", "") + " → " + e.getValue().replace(".bcfnt", "")),
 							java.util.stream.Stream.concat(
-									l.panes().entrySet().stream().map(e -> e.getKey() + ": " + describe(e.getValue())),
+									l.panes().entrySet().stream().map(e -> e.getKey() + ": " + describe(e.getValue(), patcher.settings().typefaces())),
 									patcher.overrides().placesForLayout(l.layout()).entrySet().stream()
 											.map(e -> e.getKey() + ": " + describePlace(e.getValue()))))
 							.collect(Collectors.joining("; "));
@@ -435,7 +435,7 @@ public final class FontPatchDialog extends JDialog {
 	}
 
 	/** A layout change as "SulaPro_B_04a_18, box 40×24, letters 1". */
-	private static String describe(TextOverride t) {
+	private static String describe(TextOverride t, psaro.patch.Typefaces typefaces) {
 		List<String> parts = new ArrayList<>();
 		if (t.font() != null) {
 			parts.add(t.font().replace(".bcfnt", ""));
@@ -453,7 +453,7 @@ public final class FontPatchDialog extends JDialog {
 			parts.add("lines " + number(t.lineSpace()));
 		}
 		if (t.drawWith() != null) {
-			parts.add("drawn with " + psaro.patch.Typeface.of(t.drawWith()).label());
+			parts.add("drawn with " + typefaces.named(t.drawWith()).label());
 		}
 		return String.join(", ", parts);
 	}

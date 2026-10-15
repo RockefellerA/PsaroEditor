@@ -46,6 +46,7 @@ import psaro.dialog.CrashDumpDialog;
 import psaro.dialog.FontPatchDialog;
 import psaro.dialog.ImagesWindow;
 import psaro.patch.ImageEdits;
+import psaro.dialog.FontsDialog;
 import psaro.dialog.PreferencesDialog;
 import psaro.format.Csv;
 import psaro.format.LumaDump;
@@ -96,6 +97,7 @@ public final class MainWindow {
 	private final JButton patchButton = new JButton("Patch");
 	/** Packs the patch folder into a zip to hand out; once a romfs is open. */
 	private final JMenuItem exportPatch = new JMenuItem("Export patch…");
+	private final JMenuItem fontsItem = new JMenuItem("Fonts…");
 	/** Set while a patch is being packed, one at a time. */
 	private boolean exporting;
 	private final JButton imagesButton = new JButton("Images…");
@@ -177,6 +179,11 @@ public final class MainWindow {
 		exportPatch.setToolTipText("Pack the patched files into a zip for players: Luma3DS's layout, with a readme");
 		exportPatch.addActionListener(e -> exportPatch());
 
+		fontsItem.setMnemonic(KeyEvent.VK_N);
+		fontsItem.setEnabled(false);
+		fontsItem.setToolTipText("The typefaces this project's text can be drawn with: import .ttf or .otf files");
+		fontsItem.addActionListener(e -> openFonts());
+
 		JMenuItem crashDump = new JMenuItem("Open Luma crash dump…");
 		crashDump.setMnemonic(KeyEvent.VK_L);
 		crashDump.setToolTipText("Read a crash_dump_*.dmp written by Luma3DS after a game crash");
@@ -196,6 +203,8 @@ public final class MainWindow {
 		file.add(open);
 		file.add(save);
 		file.add(exportPatch);
+		file.addSeparator();
+		file.add(fontsItem);
 		file.addSeparator();
 		file.add(preferences);
 		file.addSeparator();
@@ -410,6 +419,7 @@ public final class MainWindow {
 		refresh();
 		// English saved before the game text was written alongside it
 		exportText(false);
+		javax.swing.SwingUtilities.invokeLater(this::warnMissingTypefaces);
 	}
 
 	/**
@@ -485,6 +495,26 @@ public final class MainWindow {
 		patchButton.putClientProperty(FlatClientProperties.STYLE, work ? HIGHLIGHT : null);
 		patchButton.setToolTipText(plan == null ? "Add the characters the English uses to the game's fonts"
 				: FontPatchDialog.summary(plan));
+	}
+
+	/** File → Fonts: after an import or a removal, the fonts are measured and the patch checked again. */
+	private void openFonts() {
+		commitTyping();
+		new FontsDialog(frame, patcher.settings().typefaces(), patcher.missingTypefaces(), () -> {
+			patcher.typefacesChanged();
+			editor.fontsChanged();
+			startPlan();
+		}).setVisible(true);
+	}
+
+	/** Says which typefaces the project names that are not imported here, if any. */
+	private void warnMissingTypefaces() {
+		java.util.SortedSet<String> missing = patcher.missingTypefaces();
+		if (!missing.isEmpty()) {
+			JOptionPane.showMessageDialog(frame, "This project's font settings name typefaces that are not imported here:\n  "
+					+ String.join("\n  ", missing) + "\n\nTheir panes draw with the game font until they are imported "
+					+ "(File → Fonts). Their settings are kept.", "Fonts", JOptionPane.WARNING_MESSAGE);
+		}
 	}
 
 	private void openPatch() {
@@ -670,6 +700,7 @@ public final class MainWindow {
 		save.setEnabled(dirty);
 		saveButton.setEnabled(dirty);
 		exportPatch.setEnabled(patcher != null && !exporting);
+		fontsItem.setEnabled(patcher != null);
 		saveButton.putClientProperty(FlatClientProperties.STYLE, dirty ? HIGHLIGHT : null);
 		if (index != null) {
 			planTimer.restart();

@@ -35,6 +35,7 @@ import psaro.format.Bclyt.TextInfo;
 import psaro.format.Bclyt.TextOverride;
 import psaro.patch.FontPatcher;
 import psaro.patch.Typeface;
+import psaro.patch.Typefaces;
 import psaro.romfs.RomfsIndex.Usage;
 
 /**
@@ -72,21 +73,15 @@ final class PaneSettingsBar extends JPanel {
 	private final JComboBox<String> font = new JComboBox<>();
 	/**
 	 * What this pane alone draws with: first the font's own setting (null), then the game font
-	 * and each bundled typeface, by {@link #DRAW_IDS}.
+	 * and each typeface there is, by {@link #drawIds}.
 	 */
 	private final JComboBox<String> drawWith = new JComboBox<>();
-	private static final List<String> DRAW_IDS = new ArrayList<>();
-
-	static {
-		DRAW_IDS.add(null);
-		for (Typeface t : Typeface.values()) {
-			DRAW_IDS.add(t.id());
-		}
-	}
+	/** The id of each of {@link #drawWith}'s choices, the first null. */
+	private final List<String> drawIds = new ArrayList<>();
 	private final JButton reset = new JButton("Reset");
 	private final JLabel scope = new JLabel();
 	/** What every pane in the font draws with. */
-	private final JComboBox<Typeface> fontDrawsWith = new JComboBox<>(Typeface.values());
+	private final JComboBox<Typeface> fontDrawsWith = new JComboBox<>();
 	/** Names the font the second row is about. */
 	private final JLabel fontDrawsLabel = new JLabel();
 	/** The font's extra-space letters. */
@@ -172,7 +167,7 @@ final class PaneSettingsBar extends JPanel {
 				+ "fonts.<br>A bundled typeface (SIL Open Font License): Patch leaves the game's font as it is and adds a "
 				+ "new font drawn from the typeface, in this font's size and outline, beside it in every archive that "
 				+ "carries it, then points the layouts at the new one. It holds what the game's font holds plus the "
-				+ "English; Noto Sans has no Japanese, so that is drawn from M PLUS Rounded 1c.</html>";
+				+ "English.</html>";
 		fontDrawsLabel.setToolTipText(fontTip);
 		fontDrawsWith.setToolTipText(fontTip);
 		fontDrawsWith.addActionListener(e -> fontDrawsWithChosen());
@@ -360,7 +355,7 @@ final class PaneSettingsBar extends JPanel {
 		pause.stop();
 		loading = true;
 		letters.setText(fontName == null ? "" : fonts.settings().extraSpace(fontName));
-		fontDrawsWith.setSelectedItem(fontName == null ? Typeface.GAME : fonts.settings().lettersFrom(fontName));
+		showFontSetting(fontName);
 		loading = false;
 		if (usage != null) {
 			refresh();
@@ -391,11 +386,21 @@ final class PaneSettingsBar extends JPanel {
 		// the font's own setting first, named, then each choice for this pane alone
 		String ownChoice = fonts.overrides().get(usage.layout(), usage.pane().name()).drawWith();
 		drawWith.removeAllItems();
-		drawWith.addItem("Same as " + shortName(now.font()) + " (" + fonts.settings().lettersFrom(now.font()).label() + ")");
-		for (Typeface t : Typeface.values()) {
+		Typefaces typefaces = fonts.settings().typefaces();
+		drawIds.clear();
+		drawIds.add(null);
+		drawWith.addItem("Same as " + shortName(now.font()) + " ("
+				+ typefaces.named(fonts.settings().lettersFromId(now.font())).label() + ")");
+		for (Typeface t : typefaces.all()) {
+			drawIds.add(t.id());
 			drawWith.addItem(t.label());
 		}
-		drawWith.setSelectedIndex(Math.max(0, DRAW_IDS.indexOf(ownChoice)));
+		// a typeface not imported here stays chosen, so changing the pane otherwise keeps it
+		if (ownChoice != null && !typefaces.has(ownChoice)) {
+			drawIds.add(ownChoice);
+			drawWith.addItem(typefaces.named(ownChoice).label());
+		}
+		drawWith.setSelectedIndex(Math.max(0, drawIds.indexOf(ownChoice)));
 		// a font no archive carries (the system font) cannot be drawn anew
 		drawWith.setEnabled(Fit.font(fonts.index(), usage) != null);
 		style(drawWith, ownChoice != null);
@@ -506,7 +511,7 @@ final class PaneSettingsBar extends JPanel {
 			fontName = name;
 			loading = true;
 			letters.setText(name == null ? "" : fonts.settings().extraSpace(name));
-			fontDrawsWith.setSelectedItem(name == null ? Typeface.GAME : fonts.settings().lettersFrom(name));
+			showFontSetting(name);
 			loading = false;
 		}
 		letters.setEnabled(name != null);
@@ -527,7 +532,7 @@ final class PaneSettingsBar extends JPanel {
 		String chosen = (String) font.getSelectedItem();
 		int draw = drawWith.getSelectedIndex();
 		return new TextOverride(v[0], v[1], v[2], v[3], v[4], v[5],
-				chosen == null || chosen.equals(own.font()) ? null : chosen, draw <= 0 ? null : DRAW_IDS.get(draw));
+				chosen == null || chosen.equals(own.font()) ? null : chosen, draw <= 0 ? null : drawIds.get(draw));
 	}
 
 	/**
@@ -556,10 +561,28 @@ final class PaneSettingsBar extends JPanel {
 		onChange.run();
 	}
 
+	/**
+	 * Fills the font's choices with every typeface there is, and one not imported here when the
+	 * font is set to it, and selects what {@code name} is set to (the game font for none).
+	 */
+	private void showFontSetting(String name) {
+		Typefaces typefaces = fonts.settings().typefaces();
+		String id = name == null ? null : fonts.settings().lettersFromId(name);
+		List<Typeface> choices = new ArrayList<>(typefaces.all());
+		if (!typefaces.has(id)) {
+			choices.add(typefaces.named(id));
+		}
+		fontDrawsWith.removeAllItems();
+		choices.forEach(fontDrawsWith::addItem);
+		fontDrawsWith.setSelectedItem(typefaces.named(id));
+	}
+
 	/** Saves what every pane in the font draws with, then measures again. */
 	private void fontDrawsWithChosen() {
 		Typeface t = (Typeface) fontDrawsWith.getSelectedItem();
-		if (loading || fontName == null || t == null || t == fonts.settings().lettersFrom(fontName)) {
+		String now = fontName == null ? null : fonts.settings().lettersFromId(fontName);
+		// choosing what it is set to (one not imported here among them) changes nothing
+		if (loading || fontName == null || t == null || t.id().equals(now == null ? Typeface.GAME.id() : now)) {
 			return;
 		}
 		try {
@@ -568,7 +591,7 @@ final class PaneSettingsBar extends JPanel {
 			JOptionPane.showMessageDialog(this, "Could not save the font patch settings:\n" + e.getMessage(),
 					"Draw with", JOptionPane.ERROR_MESSAGE);
 			loading = true;
-			fontDrawsWith.setSelectedItem(fonts.settings().lettersFrom(fontName));
+			showFontSetting(fontName);
 			loading = false;
 			return;
 		}

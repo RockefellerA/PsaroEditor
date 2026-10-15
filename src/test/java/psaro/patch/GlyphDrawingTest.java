@@ -100,8 +100,8 @@ class GlyphDrawingTest {
 	@Test
 	void aLetterComesOutTheSameWhicheverOthersAreDrawnWithIt() {
 		Bcfnt target = outlined("あいうえお漢字");
-		Bcfnt alone = GlyphDrawing.draw(Typeface.NOTO_SANS, "SulaPro_B_04a_20.bcfnt", target, List.of((int) 'e'));
-		Bcfnt many = GlyphDrawing.draw(Typeface.NOTO_SANS, "SulaPro_B_04a_20.bcfnt", target, List.of((int) 'W', (int) 'e', (int) 'g'));
+		Bcfnt alone = GlyphDrawing.draw(Typeface.M_PLUS_ROUNDED, "SulaPro_B_04a_20.bcfnt", target, List.of((int) 'e'));
+		Bcfnt many = GlyphDrawing.draw(Typeface.M_PLUS_ROUNDED, "SulaPro_B_04a_20.bcfnt", target, List.of((int) 'W', (int) 'e', (int) 'g'));
 		assertEquals(alone.cellW, many.cellW);
 		assertEquals(alone.cellH, many.cellH);
 		assertArrayEquals(alone.glyph('e').pixels, many.glyph('e').pixels);
