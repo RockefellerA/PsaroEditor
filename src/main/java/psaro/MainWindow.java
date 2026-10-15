@@ -197,8 +197,6 @@ public final class MainWindow {
 		file.add(save);
 		file.add(exportPatch);
 		file.addSeparator();
-		file.add(crashDump);
-		file.addSeparator();
 		file.add(preferences);
 		file.addSeparator();
 		file.add(exit);
@@ -223,8 +221,13 @@ public final class MainWindow {
 				+ KeyEvent.getModifiersExText(find.getModifiers()) + "+F)");
 		frame.getRootPane().registerKeyboardAction(e -> search.focus(), find, JComponent.WHEN_IN_FOCUSED_WINDOW);
 
+		JMenu tools = new JMenu("Tools");
+		tools.setMnemonic(KeyEvent.VK_T);
+		tools.add(crashDump);
+
 		JMenuBar bar = new JMenuBar();
 		bar.add(file);
+		bar.add(tools);
 		bar.add(Box.createHorizontalStrut(6));
 		bar.add(search);
 		bar.add(Box.createHorizontalStrut(6));
