@@ -168,4 +168,23 @@ class TranslationsTest {
 		IOException e = assertThrows(IOException.class, () -> Translations.open(index));
 		assertTrue(e.getMessage().contains("config.json"), e.getMessage());
 	}
+
+	@Test
+	void notesSaveBesideTheEnglishAndReadBack() throws IOException {
+		Translations t = Translations.open(index);
+		t.setNote(config, "cftp_1000", "ask about \"name\"\nlater");
+		assertTrue(t.isDirty());
+		t.save();
+		assertFalse(t.isDirty());
+		assertFalse(Files.exists(file()));
+		assertTrue(Files.exists(dir.resolve("My Romfs.psaro/notes/config.json")));
+
+		Translations again = Translations.open(index);
+		assertEquals("ask about \"name\"\nlater", again.note(config, "cftp_1000"));
+		assertNull(again.note(config, "cftp_2000"));
+
+		again.setNote(config, "cftp_1000", "  ");
+		again.save();
+		assertFalse(Files.exists(dir.resolve("My Romfs.psaro/notes/config.json")));
+	}
 }
