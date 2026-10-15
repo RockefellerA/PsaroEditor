@@ -42,11 +42,13 @@ import javax.swing.SwingWorker;
 import javax.swing.Timer;
 import javax.swing.WindowConstants;
 import com.formdev.flatlaf.FlatClientProperties;
+import psaro.dialog.CrashDumpDialog;
 import psaro.dialog.FontPatchDialog;
 import psaro.dialog.ImagesWindow;
 import psaro.patch.ImageEdits;
 import psaro.dialog.PreferencesDialog;
 import psaro.format.Csv;
+import psaro.format.LumaDump;
 import psaro.menu.HelpMenu;
 import psaro.patch.FontPatcher;
 import psaro.patch.FontPatcher.Plan;
@@ -71,6 +73,7 @@ public final class MainWindow {
 
 	private static final String TITLE = "PsaroEditor";
 	private static final String PREF_ROMFS = "romfs";
+	private static final String PREF_DUMPS = "crashDumps";
 	/** Save's and Patch's look while they have something to do: filled with the theme's accent. */
 	private static final String HIGHLIGHT = "background: $Component.accentColor;"
 			+ " foreground: $List.selectionForeground;"
@@ -174,6 +177,11 @@ public final class MainWindow {
 		exportPatch.setToolTipText("Pack the patched files into a zip for players: Luma3DS's layout, with a readme");
 		exportPatch.addActionListener(e -> exportPatch());
 
+		JMenuItem crashDump = new JMenuItem("Open Luma crash dump…");
+		crashDump.setMnemonic(KeyEvent.VK_L);
+		crashDump.setToolTipText("Read a crash_dump_*.dmp written by Luma3DS after a game crash");
+		crashDump.addActionListener(e -> openCrashDump());
+
 		JMenuItem preferences = new JMenuItem("Preferences…");
 		preferences.setMnemonic(KeyEvent.VK_P);
 		preferences.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_COMMA, shortcut));
@@ -188,6 +196,8 @@ public final class MainWindow {
 		file.add(open);
 		file.add(save);
 		file.add(exportPatch);
+		file.addSeparator();
+		file.add(crashDump);
 		file.addSeparator();
 		file.add(preferences);
 		file.addSeparator();
@@ -220,6 +230,30 @@ public final class MainWindow {
 		bar.add(Box.createHorizontalStrut(6));
 		bar.add(new HelpMenu(frame));
 		return bar;
+	}
+
+	private void openCrashDump() {
+		JFileChooser chooser = new JFileChooser();
+		chooser.setDialogTitle("Open Luma crash dump");
+		chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("Luma3DS crash dumps (*.dmp)", "dmp"));
+		String last = prefs.get(PREF_DUMPS, null);
+		if (last != null && Files.isDirectory(Path.of(last))) {
+			chooser.setCurrentDirectory(Path.of(last).toFile());
+		}
+		if (chooser.showOpenDialog(frame) != JFileChooser.APPROVE_OPTION) {
+			return;
+		}
+		Path file = chooser.getSelectedFile().toPath();
+		try {
+			LumaDump dump = LumaDump.read(Files.readAllBytes(file));
+			if (file.getParent() != null) {
+				prefs.put(PREF_DUMPS, file.getParent().toString());
+			}
+			new CrashDumpDialog(frame, file.getFileName().toString(), dump).setVisible(true);
+		} catch (IOException | IllegalArgumentException ex) {
+			JOptionPane.showMessageDialog(frame, "Could not read " + file.getFileName() + ":\n" + ex.getMessage(),
+					"Open Luma crash dump", JOptionPane.ERROR_MESSAGE);
+		}
 	}
 
 	private void chooseRomfs() {
