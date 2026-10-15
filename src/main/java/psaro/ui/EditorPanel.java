@@ -88,6 +88,8 @@ public final class EditorPanel extends JPanel {
 	private final FontPatcher fonts;
 	/** The window's Save and Patch buttons, shown at the right of the bar above the strings. */
 	private final JComponent actions;
+	/** The search-all-strings box, shown above the list of tables. */
+	private final JComponent search;
 
 	/**
 	 * The string tables under a {@link Header} per kind: the .tdt tables, the .mdt message files,
@@ -121,7 +123,7 @@ public final class EditorPanel extends JPanel {
 	private boolean loading;
 
 	public EditorPanel(FontPatcher fonts, Translations translations, CodeColors colors, UnusedTables unused,
-			PaneLinks links, JComponent actions, Runnable onChange) {
+			PaneLinks links, JComponent actions, JComponent search, Runnable onChange) {
 		super(new BorderLayout());
 		this.index = fonts.index();
 		this.fonts = fonts;
@@ -130,6 +132,7 @@ public final class EditorPanel extends JPanel {
 		this.colors = colors;
 		this.unused = unused;
 		this.actions = actions;
+		this.search = search;
 		this.preview = new PreviewPanel(fonts, colors, links, this::codesChanged, this::layoutChanged);
 
 		DefaultListModel<Object> tableItems = new DefaultListModel<>();
@@ -184,7 +187,13 @@ public final class EditorPanel extends JPanel {
 		right.setDividerLocation(280);
 		JScrollPane tableScroll = new JScrollPane(tables);
 		JPanel left = new JPanel(new BorderLayout());
-		left.add(caption("String tables"), BorderLayout.NORTH);
+		JPanel head = new JPanel(new BorderLayout());
+		JPanel searchRow = new JPanel(new BorderLayout());
+		searchRow.setBorder(BorderFactory.createEmptyBorder(6, 6, 0, 6));
+		searchRow.add(search, BorderLayout.CENTER);
+		head.add(searchRow, BorderLayout.NORTH);
+		head.add(tablesLabel(), BorderLayout.SOUTH);
+		left.add(head, BorderLayout.NORTH);
 		left.add(tableScroll, BorderLayout.CENTER);
 		JSplitPane root = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, left, right);
 		root.setDividerLocation(240);
@@ -940,6 +949,14 @@ public final class EditorPanel extends JPanel {
 		public int getIconHeight() {
 			return SIZE;
 		}
+	}
+
+	/** The small label over the list of tables, in the muted style of the list's own section headings. */
+	private static JLabel tablesLabel() {
+		JLabel l = new JLabel("String tables");
+		l.setBorder(BorderFactory.createEmptyBorder(8, 8, 4, 6));
+		l.putClientProperty(FlatClientProperties.STYLE, "font: bold; foreground: $Label.disabledForeground");
+		return l;
 	}
 
 	private static JLabel caption(String text) {
