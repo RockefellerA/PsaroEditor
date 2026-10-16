@@ -297,6 +297,52 @@ public final class SampleRomfs {
 		return section("pic1", pic.array());
 	}
 
+	/** {@link #picture(String, float, float, float, float)} drawing material {@code material} of the layout's mat1. */
+	public static byte[] picture(String name, float w, float h, int material) {
+		byte[] pic = picture(name, 0, 0, w, h);
+		pic[0x5C] = (byte) material;
+		pic[0x5D] = (byte) (material >> 8);
+		return pic;
+	}
+
+	/** A window pane {@code name} (wnd1), {@code w} by {@code h}, its content drawing material {@code material}. */
+	public static byte[] window(String name, float w, float h, int material) {
+		ByteBuffer wnd = le(0x80 - 8);
+		wnd.position(0x0C - 8).put(name.getBytes(StandardCharsets.US_ASCII));
+		wnd.position(0x3C - 8).putFloat(1f).putFloat(1f).putFloat(w).putFloat(h);
+		wnd.position(0x60 - 8).putInt(0x68).putInt(0x7C);
+		wnd.position(0x68 - 8).putInt(-1).putInt(-1).putInt(-1).putInt(-1).putShort((short) material);
+		return section("wnd1", wnd.array());
+	}
+
+	/** A txl1 texture list naming {@code names}, in order. */
+	public static byte[] textures(String... names) {
+		ByteArrayOutputStream strings = new ByteArrayOutputStream();
+		ByteBuffer offsets = le(4 * names.length);
+		for (String n : names) {
+			offsets.putInt(4 * names.length + strings.size());
+			strings.writeBytes((n + "\0").getBytes(StandardCharsets.US_ASCII));
+		}
+		return section("txl1", concat(le(4).putInt(names.length).array(), offsets.array(), strings.toByteArray()));
+	}
+
+	/** A mat1 material list: per material the index of the one texture it maps, or -1 for none. */
+	public static byte[] materials(int... textures) {
+		int material = 0x38;
+		ByteBuffer mat = le(4 + 4 * textures.length + material * textures.length);
+		mat.putInt(textures.length);
+		for (int i = 0; i < textures.length; i++) {
+			mat.putInt(8 + 4 + 4 * textures.length + material * i);
+		}
+		for (int i = 0; i < textures.length; i++) {
+			int at = 4 + 4 * textures.length + material * i;
+			mat.put(at, ("Mat_" + i).getBytes(StandardCharsets.US_ASCII));
+			mat.putInt(at + 0x30, textures[i] < 0 ? 0 : 0x15);
+			mat.putShort(at + 0x34, (short) Math.max(0, textures[i]));
+		}
+		return section("mat1", mat.array());
+	}
+
 	/** A null pane {@code name} (pan1) with {@code children} hung under it (pas1 .. pae1). */
 	public static byte[] group(String name, byte[]... children) {
 		ByteBuffer pan = le(0x4C - 8);

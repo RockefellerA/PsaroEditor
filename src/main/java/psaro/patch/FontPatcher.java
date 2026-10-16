@@ -1,5 +1,6 @@
 package psaro.patch;
 
+import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
@@ -220,6 +221,12 @@ public final class FontPatcher {
 	private final Map<Path, Written> written = new HashMap<>();
 	/** Each romfs archive's layouts by path, as read; they never change. */
 	private final Map<Path, Map<String, byte[]>> originalLayouts = new HashMap<>();
+	/** By archive, its textures (BCLIM files) by file name, read once ({@link #pictureImage}). */
+	private final Map<Path, Map<String, byte[]>> textures = new HashMap<>();
+	/** Keyed by archive path + "!" + layout path: each picture's image file name ({@link Bclyt#pictureImages}), read once. */
+	private final Map<String, Map<String, String>> pictureNames = new HashMap<>();
+	/** Keyed by archive path + "!" + texture name: the game's image, decoded once; empty when unreadable. */
+	private final Map<String, Optional<BufferedImage>> pictures = new HashMap<>();
 	/** Fonts a layout names from another archive ({@link #sharedFonts}); null until first asked for. */
 	private Set<String> sharedFonts;
 	/** Archive + "!" + font for each font a layout there draws under another ({@link #lowerLayerIn}); null until first asked for. */
@@ -1056,6 +1063,70 @@ public final class FontPatcher {
 	public Bclyt.Layout layout(Path archive, String layout) {
 		byte[] d = originalLayouts(archive).get(layout);
 		return d == null ? null : Bclyt.read(d);
+	}
+
+	/**
+	 * The image picture {@code pane} of {@code layout} in {@code archive} draws ({@link Bclyt#pictureImages}),
+	 * as the patch leaves it: its replacement when one is set in the Images window. Null when it
+	 * draws none or the image cannot be read. The game's image is read once.
+	 */
+	public BufferedImage pictureImage(Path archive, String layout, String pane) {
+		String texture;
+		synchronized (pictureNames) {
+			texture = pictureNames.computeIfAbsent(archive + "!" + layout, k -> {
+				byte[] d = originalLayouts(archive).get(layout);
+				try {
+					return d == null ? Map.of() : Bclyt.pictureImages(d);
+				} catch (IllegalArgumentException | IndexOutOfBoundsException unreadable) {
+					return Map.of();
+				}
+			}).get(pane);
+		}
+		if (texture == null) {
+			return null;
+		}
+		byte[] bclim = textureFile(archive, texture);
+		if (bclim == null) {
+			return null;
+		}
+		try {
+			Path png = images == null ? null : images.png(Bclim.hash(bclim));
+			if (png != null && Files.isRegularFile(png)) {
+				BufferedImage replaced = javax.imageio.ImageIO.read(png.toFile());
+				if (replaced != null) {
+					return replaced;
+				}
+			}
+		} catch (IOException unreadable) {
+			// the game's own image, then
+		}
+		synchronized (pictures) {
+			return pictures.computeIfAbsent(archive + "!" + texture, k -> {
+				try {
+					return Optional.of(Bclim.read(bclim).image());
+				} catch (IllegalArgumentException | IndexOutOfBoundsException notAnImage) {
+					return Optional.empty();
+				}
+			}).orElse(null);
+		}
+	}
+
+	/** The file of texture {@code name} (its file name) in {@code archive}, or null when it has none. */
+	private synchronized byte[] textureFile(Path archive, String name) {
+		Map<String, byte[]> files = textures.computeIfAbsent(archive, a -> {
+			Map<String, byte[]> out = new HashMap<>();
+			try {
+				Darc.files(Archive.load(a)).forEach((path, node) -> {
+					if (path.endsWith(".bclim")) {
+						out.putIfAbsent(path.substring(path.lastIndexOf('/') + 1), node.data);
+					}
+				});
+			} catch (IOException | RuntimeException unreadable) {
+				// an archive that cannot be read has no textures
+			}
+			return out;
+		});
+		return files.get(name);
 	}
 
 	/** {@code archive}'s layouts by path, read once; empty when it cannot be read. */

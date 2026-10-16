@@ -214,6 +214,67 @@ public final class Bclyt {
 	}
 
 	/**
+	 * The image each picture of layout {@code d} draws ({@link Pane#isPicture}), by pane name: the
+	 * file name, in the texture list, of the first texture its material maps. A window gives its
+	 * content's. A picture whose material maps none is left out.
+	 *
+	 * <pre>
+	 * txl1:     u32 count, then per texture u32 where its NUL-terminated name is, from after the count
+	 * mat1:     u32 count, then per material u32 where it is, from the section's start
+	 * material: 20-byte name, colours, 0x30 u32 flags (the low two bits: how many textures it maps),
+	 *           0x34 per texture map u16 the texture's index in txl1, u8 u8 wrapping
+	 * pic1:     0x5C u16 material
+	 * wnd1:     0x60 u32 where its content is, from the section's start; the content's 0x10 u16 material
+	 * </pre>
+	 */
+	public static Map<String, String> pictureImages(byte[] d) {
+		if (!Bytes.magic(d, 0, "CLYT")) {
+			throw new IllegalArgumentException("not a CLYT layout");
+		}
+		List<String> textures = new ArrayList<>();
+		List<Integer> materials = new ArrayList<>();
+		Map<String, String> out = new java.util.LinkedHashMap<>();
+		int o = Bytes.u16(d, 6);
+		while (o < d.length - 8) {
+			int size = Bytes.u32(d, o + 4);
+			if (size == 0) {
+				break;
+			}
+			String tag = new String(d, o, 4, StandardCharsets.US_ASCII);
+			switch (tag) {
+				case "txl1" -> {
+					int n = Bytes.u32(d, o + 8);
+					for (int i = 0; i < n; i++) {
+						textures.add(Bytes.ascii(d, o + 12 + Bytes.u32(d, o + 12 + 4 * i)));
+					}
+				}
+				case "mat1" -> {
+					int n = Bytes.u32(d, o + 8);
+					for (int i = 0; i < n; i++) {
+						materials.add(o + Bytes.u32(d, o + 12 + 4 * i));
+					}
+				}
+				case "pic1", "wnd1" -> {
+					int material = tag.equals("pic1") ? Bytes.u16(d, o + 0x5C) : Bytes.u16(d, o + Bytes.u32(d, o + 0x60) + 0x10);
+					if (material < materials.size()) {
+						int m = materials.get(material);
+						int maps = Bytes.u32(d, m + 0x30) & 3;
+						int texture = maps > 0 ? Bytes.u16(d, m + 0x34) : -1;
+						if (texture >= 0 && texture < textures.size()) {
+							String name = Bytes.ascii(d, o + 12);
+							out.put(name.length() > 16 ? name.substring(0, 16) : name, textures.get(texture));
+						}
+					}
+				}
+				default -> {
+				}
+			}
+			o += size;
+		}
+		return out;
+	}
+
+	/**
 	 * The string keys in user data section {@code o}: the values of its {@code TextID} entries.
 	 * The section is a u16 count, then 12-byte entries of name offset u32 and data offset u32
 	 * (both from the entry), length u16, type u8 (0 string, 1 int, 2 float). Keys have three or

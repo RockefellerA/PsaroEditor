@@ -702,6 +702,37 @@ class FontPatcherTest {
 	 * A replaced image goes into every archive holding that very image, and only there; taking
 	 * the replacement back puts the game's image back.
 	 */
+	/**
+	 * A picture's image is read from its archive by the texture its material maps, and shown as
+	 * replaced once a replacement is set; a picture with no image, or a pane that is none, gives none.
+	 */
+	@Test
+	void aPicturesImageIsReadAsThePatchLeavesIt() throws IOException {
+		int[] red = new int[16 * 8];
+		java.util.Arrays.fill(red, 0xFFFF0000);
+		byte[] frame = SampleRomfs.bclim(16, 8, 9, red);
+		SampleRomfs.archive(romfs, "common/dialog/help.arc.lz", "blyt/dialog_help.bclyt", List.of(FONT), Map.of(),
+				SampleRomfs.textures("frame.bclim"), SampleRomfs.materials(0, -1), SampleRomfs.picture("Pic_Fram", 246, 60, 0),
+				SampleRomfs.picture("Pic_Plain", 10, 10, 1), SampleRomfs.pane("Txt_Main", "help_0001"));
+		SampleRomfs.images(romfs, "common/dialog/help.arc.lz", Map.of("frame.bclim", frame));
+		index = RomfsIndex.scan(romfs);
+		ImageEdits edits = ImageEdits.open(romfs);
+		patcher = new FontPatcher(index, settings, LayoutOverrides.open(romfs), edits);
+		Path help = romfs.resolve("common/dialog/help.arc.lz");
+
+		java.awt.image.BufferedImage image = patcher.pictureImage(help, "blyt/dialog_help.bclyt", "Pic_Fram");
+		assertEquals(16, image.getWidth());
+		assertEquals(0xFFFF0000, image.getRGB(3, 3));
+		assertEquals(null, patcher.pictureImage(help, "blyt/dialog_help.bclyt", "Pic_Plain"));
+		assertEquals(null, patcher.pictureImage(help, "blyt/dialog_help.bclyt", "Txt_Main"));
+		assertEquals(null, patcher.pictureImage(help, "blyt/missing.bclyt", "Pic_Fram"));
+
+		java.awt.image.BufferedImage english = new java.awt.image.BufferedImage(16, 8, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+		english.setRGB(3, 3, 0xFF00FF00);
+		edits.set(frame, "timg/frame.bclim", english);
+		assertEquals(0xFF00FF00, patcher.pictureImage(help, "blyt/dialog_help.bclyt", "Pic_Fram").getRGB(3, 3), "as replaced");
+	}
+
 	@Test
 	void aReplacedImageIsWrittenWhereverItIsAndPutBackWhenUndone() throws IOException {
 		int[] red = new int[16 * 8];

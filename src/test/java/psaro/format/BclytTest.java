@@ -152,6 +152,22 @@ class BclytTest {
 		assertArrayEquals(LAYOUT, Bclyt.withText(LAYOUT, Map.of("Txt_Gone", new TextOverride(1f, 1f, 1f, 1f, 1f, 1f))));
 	}
 
+	/**
+	 * Each picture's image is the first texture its material maps: a window's from its content;
+	 * a material mapping none, or a layout with no materials, gives none.
+	 */
+	@Test
+	void picturesDrawTheTextureTheirMaterialMaps() {
+		byte[] layout = SampleRomfs.layout(List.of("a.bcfnt"), SampleRomfs.textures("frame.bclim", "bar.bclim"),
+				SampleRomfs.materials(1, -1, 0), SampleRomfs.picture("Pic_Bar", 274, 26, 0),
+				SampleRomfs.picture("Pic_Plain", 10, 10, 1), SampleRomfs.window("Win_Help", 512, 234, 2),
+				SampleRomfs.pane("Txt_Main", "help_0001"));
+		assertEquals(Map.of("Pic_Bar", "bar.bclim", "Win_Help", "frame.bclim"), Bclyt.pictureImages(layout));
+		assertEquals(3, Bclyt.read(layout).panes().stream().filter(Bclyt.Pane::isPicture).count(), "every picture is still a pane");
+		byte[] noMaterials = SampleRomfs.layout(List.of("a.bcfnt"), SampleRomfs.picture("Pic_Bar", 0, 0, 274, 26));
+		assertTrue(Bclyt.pictureImages(noMaterials).isEmpty());
+	}
+
 	/** A pane's own text replaced: longer text grows its buffer and section; the panes around it keep theirs. */
 	@Test
 	void aPanesOwnTextIsReplacedAndItsBufferGrows() {

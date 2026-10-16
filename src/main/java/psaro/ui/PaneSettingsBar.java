@@ -106,6 +106,8 @@ final class PaneSettingsBar extends JPanel {
 	private final JSpinner picW = spinner(0, 2000, 1);
 	private final JSpinner picH = spinner(0, 2000, 1);
 	private final JButton pictureReset = new JButton("Reset");
+	/** The chosen picture's image at the size given it ({@link PictureIcon}). */
+	private final JLabel picturePreview = new JLabel();
 
 	/** The three areas' keys in {@link #prefs}, each true while the area is shown. */
 	static final String FONT_AREA = "paneSettings.font.shown";
@@ -214,7 +216,7 @@ final class PaneSettingsBar extends JPanel {
 		scope.putClientProperty(FlatClientProperties.STYLE_CLASS, "small");
 		scope.putClientProperty(FlatClientProperties.STYLE, "foreground: $Label.disabledForeground");
 		JPanel place = row();
-		place.add(group(label("Picture:"), picture));
+		place.add(group(label("Picture:"), picture, picturePreview));
 		place.add(group(label("at"), picX, new JLabel(","), picY));
 		place.add(group(label("size"), picW, new JLabel("×"), picH));
 		place.add(group(pictureReset));
@@ -248,9 +250,13 @@ final class PaneSettingsBar extends JPanel {
 				String text = value instanceof Bclyt.Pane p
 						? p.name() + "  (" + format(current(p).width()) + "×" + format(current(p).height()) + ")"
 						: "";
-				return super.getListCellRendererComponent(list, text, index, selected, focus);
+				super.getListCellRendererComponent(list, text, index, selected, focus);
+				setIcon(value instanceof Bclyt.Pane p ? pictureIcon(p, 28, 16) : null);
+				return this;
 			}
 		});
+		picturePreview.setToolTipText("<html>The picture's image at the size given it. The game may also tint, crop or "
+				+ "tile it, and a window draws a frame of several images; this shows the image alone.</html>");
 		picture.addActionListener(e -> {
 			if (!loading) {
 				refreshPicture();
@@ -343,6 +349,7 @@ final class PaneSettingsBar extends JPanel {
 		}
 		picture.removeAllItems();
 		picture.setEnabled(false);
+		picturePreview.setIcon(null);
 		loading = false;
 		reset.setEnabled(false);
 		pictureReset.setEnabled(false);
@@ -444,7 +451,24 @@ final class PaneSettingsBar extends JPanel {
 		}
 		loading = false;
 		pictureReset.setEnabled(any && !fonts.overrides().place(usage.layout(), own.name()).isEmpty());
+		picturePreview.setIcon(any ? pictureIcon(own, 72, 36) : null);
 		picture.repaint();
+	}
+
+	/**
+	 * Picture {@code p}'s image at the size the layout changes give it, fitted into
+	 * {@code maxWidth} × {@code maxHeight}; null when it draws none this can read.
+	 */
+	private PictureIcon pictureIcon(Bclyt.Pane p, int maxWidth, int maxHeight) {
+		if (usage == null) {
+			return null;
+		}
+		java.awt.image.BufferedImage image = fonts.pictureImage(usage.archive(), usage.layout(), p.name());
+		if (image == null) {
+			return null;
+		}
+		Bclyt.Pane now = current(p);
+		return new PictureIcon(image, now.width(), now.height(), maxWidth, maxHeight);
 	}
 
 	/**
