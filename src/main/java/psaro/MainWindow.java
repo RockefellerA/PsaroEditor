@@ -46,6 +46,7 @@ import psaro.dialog.CrashDumpDialog;
 import psaro.dialog.FontPatchDialog;
 import psaro.dialog.ImagesWindow;
 import psaro.patch.ImageEdits;
+import psaro.dialog.ExportPatchDialog;
 import psaro.dialog.FontsDialog;
 import psaro.dialog.PreferencesDialog;
 import psaro.format.Csv;
@@ -55,6 +56,7 @@ import psaro.patch.FontPatcher;
 import psaro.patch.FontPatcher.Plan;
 import psaro.patch.FontPatcher.Text;
 import psaro.patch.LayoutOverrides;
+import psaro.patch.ExportSettings;
 import psaro.patch.PatchExport;
 import psaro.patch.PatchSettings;
 import psaro.patch.TextExport;
@@ -176,7 +178,8 @@ public final class MainWindow {
 
 		exportPatch.setMnemonic(KeyEvent.VK_E);
 		exportPatch.setEnabled(false);
-		exportPatch.setToolTipText("Pack the patched files into a zip for players: Luma3DS's layout, with a readme");
+		exportPatch.setToolTipText("Pack the patched files into a zip for players: Luma3DS's layout, with this project's "
+				+ "readme and any files it adds");
 		exportPatch.addActionListener(e -> exportPatch());
 
 		fontsItem.setMnemonic(KeyEvent.VK_N);
@@ -574,8 +577,9 @@ public final class MainWindow {
 
 	/**
 	 * Packs the patch folder into a zip for players ({@link PatchExport}): the English saved and
-	 * its tables written first, a patch that is behind offered first, and the game's title id
-	 * asked for when neither the settings nor the mods folder know it.
+	 * its tables written first, a patch that is behind offered first, then the project's title id,
+	 * readme and added files shown to change ({@link ExportPatchDialog}), which are kept whether or
+	 * not it goes on to export.
 	 */
 	private void exportPatch() {
 		if (patcher == null || !save()) {
@@ -596,30 +600,32 @@ public final class MainWindow {
 			}
 		}
 		PatchSettings settings = patcher.settings();
-		String id = settings.titleId();
-		if (id == null && settings.modsFolder() != null) {
-			id = PatchExport.titleIdFrom(settings.modsFolder());
+		String known = settings.titleId();
+		if (known == null && settings.modsFolder() != null) {
+			known = PatchExport.titleIdFrom(settings.modsFolder());
 		}
-		if (id == null) {
-			id = (String) JOptionPane.showInputDialog(frame, "The game's title id: sixteen hex digits, as Citra shows "
-					+ "in its game list (Properties) or names its mods folder, e.g. 0004000000140000.", "Export patch",
-					JOptionPane.QUESTION_MESSAGE, null, null, "");
-			if (id == null) {
-				return;
-			}
-			id = id.strip();
-			if (!PatchExport.isTitleId(id)) {
-				error(id + " is not a title id: it has sixteen hex digits, 0-9 and A-F.");
-				return;
-			}
+		ExportSettings exportSettings;
+		try {
+			exportSettings = ExportSettings.open(index.root());
+		} catch (IOException e) {
+			error("Could not read the export settings:\n" + e.getMessage());
+			return;
 		}
-		if (!id.equals(settings.titleId())) {
+		ExportPatchDialog dialog = new ExportPatchDialog(frame, exportSettings, patcher.output(), known);
+		dialog.setVisible(true);
+		String id = dialog.titleId();
+		if (PatchExport.isTitleId(id) && !id.equals(settings.titleId())) {
 			try {
-				settings.setTitleId(id.toUpperCase(java.util.Locale.ROOT));
+				settings.setTitleId(id);
 			} catch (IOException e) {
 				// remembered next time only; the export goes ahead
 			}
 		}
+		if (!dialog.exportChosen()) {
+			return;
+		}
+		String readme = dialog.readme();
+		List<PatchExport.Extra> extras = dialog.extras();
 		JFileChooser chooser = new JFileChooser(Translations.folderFor(index.root()).getParent().toFile());
 		chooser.setDialogTitle("Export patch");
 		chooser.setSelectedFile(new java.io.File(index.root().getFileName() + " patch.zip"));
@@ -642,7 +648,7 @@ public final class MainWindow {
 		new SwingWorker<PatchExport.Result, Void>() {
 			@Override
 			protected PatchExport.Result doInBackground() throws IOException {
-				return PatchExport.write(patcher.output(), titleId, target, step -> { });
+				return PatchExport.write(patcher.output(), titleId, readme, extras, target, step -> { });
 			}
 
 			@Override
@@ -652,9 +658,11 @@ public final class MainWindow {
 				try {
 					PatchExport.Result r = get();
 					JOptionPane.showMessageDialog(frame, String.format(java.util.Locale.ROOT,
-							"Packed %,d files (%.1f MB) into %s,%nlaid out for Luma3DS under luma/titles/%s/romfs/, "
-									+ "with a readme on putting them in place.", r.files(), r.bytes() / 1048576.0, target,
-							titleId), "Export patch", JOptionPane.INFORMATION_MESSAGE);
+							"Packed %,d files%s (%.1f MB) into %s,%nlaid out for Luma3DS under luma/titles/%s/romfs/, "
+									+ "with the readme.", r.files(),
+							r.extras() == 0 ? "" : String.format(java.util.Locale.ROOT, " and %,d added %s", r.extras(),
+									r.extras() == 1 ? "file" : "files"),
+							r.bytes() / 1048576.0, target, titleId), "Export patch", JOptionPane.INFORMATION_MESSAGE);
 				} catch (java.util.concurrent.ExecutionException e) {
 					error("Could not export the patch:\n" + e.getCause().getMessage());
 				} catch (InterruptedException e) {
