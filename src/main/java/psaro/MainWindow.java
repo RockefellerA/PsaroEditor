@@ -48,6 +48,7 @@ import psaro.dialog.ImagesWindow;
 import psaro.patch.ImageEdits;
 import psaro.dialog.ExportPatchDialog;
 import psaro.dialog.FontsDialog;
+import psaro.dialog.ParentGameDialog;
 import psaro.dialog.PreferencesDialog;
 import psaro.format.Csv;
 import psaro.format.LumaDump;
@@ -61,8 +62,11 @@ import psaro.patch.PatchExport;
 import psaro.patch.PatchSettings;
 import psaro.patch.TextExport;
 import psaro.project.CodeColors;
+import psaro.project.ParentImport;
+import psaro.project.ParentLink;
 import psaro.project.PaneLinks;
 import psaro.project.StringSearch;
+import psaro.project.TitleIds;
 import psaro.project.Translations;
 import psaro.project.UnusedTables;
 import psaro.romfs.RomfsIndex;
@@ -100,8 +104,12 @@ public final class MainWindow {
 	/** Packs the patch folder into a zip to hand out; once a romfs is open. */
 	private final JMenuItem exportPatch = new JMenuItem("Export patch…");
 	private final JMenuItem fontsItem = new JMenuItem("Fonts…");
+	/** Links a DLC to its game's project, and imports from it; once a romfs is open. */
+	private final JMenuItem parentItem = new JMenuItem("Parent game…");
 	/** Set while a patch is being packed, one at a time. */
 	private boolean exporting;
+	/** Set while a parent game is being imported from. */
+	private boolean importing;
 	private final JButton imagesButton = new JButton("Images…");
 	/** The images window while it is open; one at a time, for the romfs that is open. */
 	private ImagesWindow imagesWindow;
@@ -119,6 +127,9 @@ public final class MainWindow {
 	/** Counts romfs openings, so a background one that another overtook is dropped. */
 	private int opening;
 	private FontPatcher patcher;
+	/** The open romfs's pane links and layout changes, kept for importing from a parent game. */
+	private PaneLinks links;
+	private LayoutOverrides layoutOverrides;
 	private EditorPanel editor;
 	/** What the font patch would do for the English as last checked, or null before the first check. */
 	private Plan plan;
@@ -187,6 +198,11 @@ public final class MainWindow {
 		fontsItem.setToolTipText("The typefaces this project's text can be drawn with: import .ttf or .otf files");
 		fontsItem.addActionListener(e -> openFonts());
 
+		parentItem.setMnemonic(KeyEvent.VK_G);
+		parentItem.setEnabled(false);
+		parentItem.setToolTipText("For DLC: link the game's project to import its fonts, panes and matching translations");
+		parentItem.addActionListener(e -> openParentGame());
+
 		JMenuItem crashDump = new JMenuItem("Open Luma crash dump…");
 		crashDump.setMnemonic(KeyEvent.VK_L);
 		crashDump.setToolTipText("Read a crash_dump_*.dmp written by Luma3DS after a game crash");
@@ -208,6 +224,7 @@ public final class MainWindow {
 		file.add(exportPatch);
 		file.addSeparator();
 		file.add(fontsItem);
+		file.add(parentItem);
 		file.addSeparator();
 		file.add(preferences);
 		file.addSeparator();
@@ -340,7 +357,12 @@ public final class MainWindow {
 
 	/** The window's content while a romfs opens: a spinner, and which one. */
 	private static JPanel loading(Path dir) {
-		JLabel what = new JLabel("Opening " + dir.getFileName() + "…", SwingConstants.CENTER);
+		return loading("Opening " + dir.getFileName() + "…", dir);
+	}
+
+	/** As {@link #loading(Path)}, saying {@code doing} of the romfs {@code dir}. */
+	private static JPanel loading(String doing, Path dir) {
+		JLabel what = new JLabel(doing, SwingConstants.CENTER);
 		JLabel where = new JLabel(dir.toString(), SwingConstants.CENTER);
 		where.putClientProperty(FlatClientProperties.STYLE_CLASS, "small");
 		where.putClientProperty(FlatClientProperties.STYLE, "foreground: $Label.disabledForeground");
@@ -410,6 +432,8 @@ public final class MainWindow {
 		prefs.put(PREF_ROMFS, dir.toString());
 		unused = o.unused();
 		patcher = new FontPatcher(index, o.patchSettings(), o.layoutOverrides(), o.imageEdits());
+		links = o.links();
+		layoutOverrides = o.layoutOverrides();
 		if (imagesWindow != null) {
 			// it lists the romfs that was open
 			imagesWindow.dispose();
@@ -423,6 +447,103 @@ public final class MainWindow {
 		// English saved before the game text was written alongside it
 		exportText(false);
 		javax.swing.SwingUtilities.invokeLater(this::warnMissingTypefaces);
+		javax.swing.SwingUtilities.invokeLater(() -> offerParent(o.dir()));
+	}
+
+	/** The title id of the open project: the one the export was given, or a folder in its path named for one. */
+	private String titleId() {
+		return TitleIds.of(index.root(), patcher.settings().titleId());
+	}
+
+	/**
+	 * When the romfs just opened is DLC (by its title id) and has no parent game yet, offers to
+	 * link one, unless the user said not to ask for this project.
+	 */
+	private void offerParent(Path dir) {
+		if (index == null || !index.root().equals(dir) || !TitleIds.isDlc(titleId())) {
+			return;
+		}
+		try {
+			ParentLink link = ParentLink.open(dir);
+			if (link.parent() != null || link.dismissed()) {
+				return;
+			}
+			Object[] options = {"Link game…", "Not now", "Don't ask again"};
+			int choice = JOptionPane.showOptionDialog(frame, "This looks like downloadable content (title id " + titleId()
+					+ ").\nLink it to the project for its game, to import that game's fonts, panes and matching "
+					+ "translations?\n(File → Parent game… does this later.)", "Parent game", JOptionPane.DEFAULT_OPTION,
+					JOptionPane.QUESTION_MESSAGE, null, options, options[0]);
+			if (choice == 0) {
+				openParentGame();
+			} else if (choice == 2) {
+				link.dismiss();
+			}
+		} catch (IOException e) {
+			error("Could not read the parent game link:\n" + e.getMessage());
+		}
+	}
+
+	/** File → Parent game: link or unlink the project this one borrows from, and import from it. */
+	private void openParentGame() {
+		if (index == null || importing) {
+			return;
+		}
+		commitTyping();
+		ParentLink link;
+		try {
+			link = ParentLink.open(index.root());
+		} catch (IOException e) {
+			error("Could not read the parent game link:\n" + e.getMessage());
+			return;
+		}
+		ParentGameDialog dialog = new ParentGameDialog(frame, link, titleId());
+		dialog.setVisible(true);
+		if (dialog.importChosen() && link.parentExists()) {
+			importFromParent(link.parent());
+		}
+	}
+
+	/**
+	 * Imports from the project whose romfs is {@code parent} in the background, behind a dialog,
+	 * then opens this romfs again so the editor shows what was taken.
+	 */
+	private void importFromParent(Path parent) {
+		if (!save()) {
+			return;
+		}
+		importing = true;
+		refresh();
+		Path dir = index.root();
+		RomfsIndex target = index;
+		javax.swing.JDialog wait = new javax.swing.JDialog(frame, "Importing", true);
+		wait.setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
+		wait.add(loading("Importing from " + parent.getFileName() + "…", parent));
+		wait.setSize(520, 220);
+		wait.setLocationRelativeTo(frame);
+		new SwingWorker<ParentImport.Result, Void>() {
+			@Override
+			protected ParentImport.Result doInBackground() throws IOException {
+				return ParentImport.run(target, translations, links, layoutOverrides, patcher.settings(), parent);
+			}
+
+			@Override
+			protected void done() {
+				wait.dispose();
+				importing = false;
+				try {
+					ParentImport.Result r = get();
+					String notes = r.notes().isEmpty() ? "" : "\n\n" + String.join("\n", r.notes());
+					JOptionPane.showMessageDialog(frame, r.summary() + notes, "Parent game", JOptionPane.INFORMATION_MESSAGE);
+				} catch (ExecutionException e) {
+					error("Could not import from " + parent + ":\n" + e.getCause().getMessage());
+				} catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+				}
+				// what was taken is on disk; opening again has the editor show it
+				reopen(dir);
+			}
+		}.execute();
+		wait.setVisible(true);
 	}
 
 	/**
@@ -709,6 +830,7 @@ public final class MainWindow {
 		saveButton.setEnabled(dirty);
 		exportPatch.setEnabled(patcher != null && !exporting);
 		fontsItem.setEnabled(patcher != null);
+		parentItem.setEnabled(patcher != null && !importing);
 		saveButton.putClientProperty(FlatClientProperties.STYLE, dirty ? HIGHLIGHT : null);
 		if (index != null) {
 			planTimer.restart();

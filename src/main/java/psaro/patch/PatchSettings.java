@@ -178,6 +178,36 @@ public final class PatchSettings {
 		save();
 	}
 
+	/**
+	 * Takes the settings {@code other} (a related project's, such as a game's DLC's parent) has for
+	 * the fonts {@code wanted} accepts, where this project has set nothing for that font: the letters
+	 * that get an extra pixel of advance, and the typeface the added letters come from when it is
+	 * imported here. Settings already made here are kept, and the copy-to-mods and title id
+	 * settings are never taken. Returns how many fonts were given something.
+	 */
+	public synchronized int adopt(PatchSettings other, java.util.function.Predicate<String> wanted) throws IOException {
+		java.util.Set<String> took = new java.util.TreeSet<>();
+		for (Map.Entry<String, String> e : other.extraSpace.entrySet()) {
+			if (wanted.test(e.getKey()) && !extraSpace.containsKey(e.getKey())) {
+				extraSpace.put(e.getKey(), e.getValue());
+				took.add(e.getKey());
+			}
+		}
+		for (Map.Entry<String, String> e : other.lettersFrom.entrySet()) {
+			if (wanted.test(e.getKey()) && !lettersFrom.containsKey(e.getKey()) && typefaces.of(e.getValue()).bundled()) {
+				lettersFrom.put(e.getKey(), e.getValue());
+				took.add(e.getKey());
+			}
+		}
+		if (took.isEmpty()) {
+			return 0;
+		}
+		// as setExtraSpace does, the per-font letters now stand for what the shared value once did
+		legacy = null;
+		save();
+		return took.size();
+	}
+
 	public synchronized void setCopyToMods(boolean copy, Path folder) throws IOException {
 		copyToMods = copy;
 		modsFolder = folder;
