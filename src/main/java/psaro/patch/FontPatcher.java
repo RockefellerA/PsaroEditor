@@ -31,6 +31,7 @@ import psaro.format.Bclyt.TextOverride;
 import psaro.format.Bcfnt;
 import psaro.format.Cgfx;
 import psaro.format.Darc;
+import psaro.format.Lz11;
 import psaro.project.Translations;
 import psaro.romfs.RomfsIndex;
 import psaro.romfs.RomfsIndex.Donor;
@@ -761,6 +762,25 @@ public final class FontPatcher {
 				}
 			}
 		}
+		// loose images, read only when there is an edit they could have or one a previous patch wrote
+		List<Path> writtenLoose = outputFiles(".bclim", ".bclim.lz");
+		if (!edited.isEmpty() || !writtenLoose.isEmpty()) {
+			try {
+				for (Image image : index.looseImages()) {
+					if (edited.contains(image.hash())) {
+						imageChange(image, seen, out);
+					}
+				}
+			} catch (IOException unreadable) {
+				// a romfs whose files cannot be listed has no loose images to patch
+			}
+			for (Path file : writtenLoose) {
+				Image image = index.looseImage(index.root().resolve(output.relativize(file).toString()));
+				if (image != null) {
+					imageChange(image, seen, out);
+				}
+			}
+		}
 		return List.copyOf(out);
 	}
 
@@ -1277,6 +1297,12 @@ public final class FontPatcher {
 			Set<String> replaced = new HashSet<>();
 			imageChanges.stream().filter(ImageChange::changed).forEach(i -> replaced.add(i.path()));
 			Path out = outputPath(archive);
+			if (RomfsIndex.isLooseImage(archive)) {
+				if (writeLoose(archive, out, !replaced.isEmpty(), imageChanges, progress)) {
+					wrote.add(out);
+				}
+				continue;
+			}
 			if (Cgfx.isModel(archive.getFileName().toString())) {
 				if (writeModel(archive, out, replaced, imageChanges, progress)) {
 					wrote.add(out);
@@ -1364,9 +1390,36 @@ public final class FontPatcher {
 			}
 		}
 		wrote.addAll(rebuilt);
-		copyToMods(outputFiles(".arc.lz", ".arc", ".bcmdl", ".bcmdl.lz", ".tdt", ".mdt", ".csv", ".dat"), progress);
+		copyToMods(outputFiles(".arc.lz", ".arc", ".bcmdl", ".bcmdl.lz", ".bclim", ".bclim.lz", ".tdt", ".mdt", ".csv", ".dat"),
+				progress);
 		copyToMods(rebuilt, progress);
 		return wrote;
+	}
+
+	/**
+	 * Writes loose image {@code file} to {@code out} replaced, compressed as the romfs's is, when
+	 * {@code replaced}; otherwise removes {@code out}. True when it wrote.
+	 */
+	private boolean writeLoose(Path file, Path out, boolean replaced, List<ImageChange> changes, Consumer<String> progress)
+			throws IOException {
+		if (!replaced) {
+			progress.accept("Removing " + index.root().relativize(file));
+			Files.deleteIfExists(out);
+			return false;
+		}
+		if (changes.stream().noneMatch(ImageChange::hasWork) && Files.isRegularFile(out)) {
+			return false;
+		}
+		progress.accept("Patching " + index.root().relativize(file));
+		byte[] stored = Files.readAllBytes(file);
+		boolean compressed = Lz11.isCompressed(stored);
+		byte[] image = images.replacement(compressed ? Lz11.decompress(stored) : stored);
+		if (image == null) {
+			throw new IOException("cannot read the replacement for " + index.root().relativize(file));
+		}
+		Files.createDirectories(out.getParent());
+		Files.write(out, compressed ? Lz11.compress(image) : image);
+		return true;
 	}
 
 	/**
@@ -1448,6 +1501,13 @@ public final class FontPatcher {
 			}
 			FileTime time = Files.getLastModifiedTime(out);
 			Written w = written.get(out);
+			if ((w == null || !w.time().equals(time)) && RomfsIndex.isLooseImage(out)) {
+				// a loose image is its one image, by its path from the romfs
+				byte[] d = Files.readAllBytes(out);
+				byte[] bclim = Lz11.isCompressed(d) ? Lz11.decompress(d) : d;
+				w = new Written(time, Map.of(), Map.of(), Map.of(output.relativize(out).toString().replace('\\', '/'), Bclim.hash(bclim)));
+				written.put(out, w);
+			}
 			if ((w == null || !w.time().equals(time)) && Cgfx.isModel(out.getFileName().toString())) {
 				// a model holds only images: its textures, by name
 				byte[] d = Cgfx.read(out);

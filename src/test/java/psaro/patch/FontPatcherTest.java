@@ -733,6 +733,45 @@ class FontPatcherTest {
 		assertEquals(0xFF00FF00, patcher.pictureImage(help, "blyt/dialog_help.bclyt", "Pic_Fram").getRGB(3, 3), "as replaced");
 	}
 
+	/**
+	 * A replaced loose image is written to its own path in the patch folder, compressed as the
+	 * romfs's is, beside the archive that has the same image; undone, the file goes again.
+	 */
+	@Test
+	void aReplacedLooseImageIsWrittenToItsPathAndRemovedWhenUndone() throws IOException {
+		int[] red = new int[16 * 8];
+		java.util.Arrays.fill(red, 0xFFFF0000);
+		byte[] help = SampleRomfs.bclim(16, 8, 9, red);
+		Path file = romfs.resolve("common/dialog/texture/help_e_6405.bclim.lz");
+		Files.createDirectories(file.getParent());
+		Files.write(file, psaro.format.Lz11.compress(help));
+		SampleRomfs.images(romfs, "scene/menu/menu.arc.lz", Map.of("help_e_6405.bclim", help));
+		index = RomfsIndex.scan(romfs);
+		ImageEdits edits = ImageEdits.open(romfs);
+		patcher = new FontPatcher(index, settings, LayoutOverrides.open(romfs), edits);
+		assertFalse(patcher.plan(List.of()).hasWork());
+
+		java.awt.image.BufferedImage english = new java.awt.image.BufferedImage(16, 8, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+		english.setRGB(2, 2, 0xFFFFFFFF);
+		edits.set(help, "common/dialog/texture/help_e_6405.bclim.lz", english);
+		Plan plan = patcher.plan(List.of());
+		assertEquals(2, plan.imagesToWrite(), "the loose file and the archive with the same image");
+
+		patcher.write(plan, step -> { });
+		Path out = patcher.outputPath(file);
+		assertTrue(psaro.format.Lz11.isCompressed(Files.readAllBytes(out)), "compressed as the romfs's");
+		java.awt.image.BufferedImage written = psaro.format.Bclim.read(psaro.format.Lz11.decompress(Files.readAllBytes(out))).image();
+		assertEquals(0xFFFFFFFF, written.getRGB(2, 2));
+		assertFalse(patcher.plan(List.of()).hasWork(), "up to date");
+
+		edits.remove(ImageEdits.hash(help));
+		Plan undo = patcher.plan(List.of());
+		assertTrue(undo.hasWork());
+		patcher.write(undo, step -> { });
+		assertFalse(Files.exists(out), "the loose file goes when its image is the game's again");
+		assertFalse(patcher.plan(List.of()).hasWork());
+	}
+
 	@Test
 	void aReplacedImageIsWrittenWhereverItIsAndPutBackWhenUndone() throws IOException {
 		int[] red = new int[16 * 8];

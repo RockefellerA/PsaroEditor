@@ -34,6 +34,7 @@ import psaro.format.Cpk;
 import psaro.format.Csv;
 import psaro.format.Darc;
 import psaro.format.FieldTable;
+import psaro.format.Lz11;
 import psaro.format.MapScript;
 import psaro.format.Msgd;
 import psaro.format.Records;
@@ -159,7 +160,8 @@ public final class RomfsIndex {
 
 		/** Its file name without the folder and extension: {@code main_menu_up_titl_config}. */
 		public String name() {
-			return path.substring(path.lastIndexOf('/') + 1).replace(".bclim", "");
+			String file = path.substring(path.lastIndexOf('/') + 1);
+			return (file.endsWith(".lz") ? file.substring(0, file.length() - 3) : file).replace(".bclim", "");
 		}
 	}
 
@@ -235,6 +237,8 @@ public final class RomfsIndex {
 	private final List<Usage> textPanes;
 	/** By table name, where each table read from inside a CPK is. */
 	private final Map<String, Packed> packed;
+	/** Every loose image, read on first use ({@link #looseImages}). */
+	private List<Image> looseImages;
 	private final List<Path> cpks;
 	/** Keyed by {@code table + "/" + key}: the panes linked to a string no layout names ({@link #link}). */
 	private final Map<String, List<Usage>> linked = new HashMap<>();
@@ -551,8 +555,78 @@ public final class RomfsIndex {
 		return images;
 	}
 
-	/** {@code image}'s file, read from its archive; a model's texture as a BCLIM ({@link Cgfx#asBclim}). */
+	/**
+	 * Whether {@code file} is a loose image: a {@code .bclim}, or an LZ11-compressed
+	 * {@code .bclim.lz}, standing on its own in the romfs rather than in an archive, which the
+	 * game's code loads by its path (a help page's picture, a card's art).
+	 */
+	public static boolean isLooseImage(Path file) {
+		String name = file.getFileName().toString();
+		return name.endsWith(".bclim") || name.endsWith(".bclim.lz");
+	}
+
+	/**
+	 * Every loose image under the root ({@link #isLooseImage}), outside any other romfs nested in
+	 * it, by path; each an {@link Image} whose archive is the file itself and whose path is the
+	 * file's from the root. Read on first use, which decompresses every one (some games have
+	 * thousands), so ask from a background thread; a file that is no BCLIM is left out.
+	 */
+	public synchronized List<Image> looseImages() throws IOException {
+		if (looseImages == null) {
+			List<Path> files = new ArrayList<>();
+			Files.walkFileTree(root, new SimpleFileVisitor<>() {
+				@Override
+				public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException {
+					return dir.equals(root) || !isNestedRomfs(dir) ? FileVisitResult.CONTINUE : FileVisitResult.SKIP_SUBTREE;
+				}
+
+				@Override
+				public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
+					if (isLooseImage(file)) {
+						files.add(file);
+					}
+					return FileVisitResult.CONTINUE;
+				}
+			});
+			Collections.sort(files);
+			List<Image> out = new ArrayList<>();
+			for (Path f : files) {
+				Image i = looseImage(f);
+				if (i != null) {
+					out.add(i);
+				}
+			}
+			looseImages = List.copyOf(out);
+		}
+		return looseImages;
+	}
+
+	/** The loose image {@code file} ({@link #looseImages}), or null when it is not a BCLIM this can read. */
+	public Image looseImage(Path file) {
+		try {
+			byte[] d = looseBytes(file);
+			Bclim b = Bclim.read(d);
+			return new Image(file, root.relativize(file).toString().replace('\\', '/'), Bclim.hash(d), b.width(), b.height(),
+					b.format());
+		} catch (IOException | IllegalArgumentException | IndexOutOfBoundsException unreadable) {
+			return null;
+		}
+	}
+
+	/** A loose image's BCLIM: the file, decompressed when it is compressed. */
+	private static byte[] looseBytes(Path file) throws IOException {
+		byte[] d = Files.readAllBytes(file);
+		return Lz11.isCompressed(d) ? Lz11.decompress(d) : d;
+	}
+
+	/**
+	 * {@code image}'s file, read from its archive; a model's texture as a BCLIM ({@link Cgfx#asBclim});
+	 * a loose image's file, decompressed.
+	 */
 	public byte[] imageBytes(Image image) throws IOException {
+		if (isLooseImage(image.archive())) {
+			return looseBytes(image.archive());
+		}
 		if (Cgfx.isModel(image.archive().getFileName().toString())) {
 			byte[] d = Cgfx.read(image.archive());
 			for (Cgfx.Tex t : Cgfx.textures(d)) {

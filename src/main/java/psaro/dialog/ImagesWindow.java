@@ -62,30 +62,36 @@ import psaro.romfs.RomfsIndex.Image;
  * replaced. Export one as a PNG, change it in any image editor, and import it back; Patch writes
  * it, in the image's own format and size, into every archive that has it.
  *
- * <p>Layout images ({@code .bclim}, in the archives) and models' textures ({@code .bcmdl}) are
- * listed under a tab each, each tab with how many match the filter and the one last picked in it.
+ * <p>Layout images ({@code .bclim}, in the archives), models' textures ({@code .bcmdl}) and loose
+ * images ({@code .bclim} files of their own, which the game's code loads: a help page's picture, a
+ * card's art) are listed under a tab each, each tab with how many match the filter and the one last
+ * picked in it. Loose images can be thousands, so they are read the first time their tab is
+ * opened, and picked by folder as well as by name.
  *
  * <p>A window of its own, not a dialog, so it can be minimized and maximized and left open
  * beside the editor.
  */
 public final class ImagesWindow extends JFrame {
 
-	/** One image and every archive's copy of it (the same file, byte for byte). */
-	private record Group(String hash, List<Image> copies) {
+	/** One image and every copy of it (the same file, byte for byte), all of one kind. */
+	private record Group(String hash, List<Image> copies, int kind) {
 		Image first() {
 			return copies.get(0);
 		}
-
-		/** A model's texture rather than a layout's image. */
-		boolean model() {
-			return Cgfx.isModel(first().archive().getFileName().toString());
-		}
 	}
 
-	/** The tabs, in order: layout images, then models' textures; short, as the list's width takes both. */
-	private static final String[] KINDS = {"Layouts .bclim", "Models .bcmdl"};
+	/** The tabs, in order: layout images, models' textures, then loose images; short, as the list's width takes all. */
+	private static final String[] KINDS = {"Layouts .bclim", "Models .bcmdl", "Files .bclim"};
 	private static final String[] KIND_TIPS = {"Layout images (.bclim) in the archives: buttons, titles, labels",
-			"Textures of 3D models (.bcmdl), such as the record book's pages"};
+			"Textures of 3D models (.bcmdl), such as the record book's pages",
+			"Images that are files of their own (.bclim, .bclim.lz), which the game loads by path: help pictures, "
+					+ "series logos, card and monster art"};
+	private static final int LAYOUTS = 0;
+	private static final int MODELS = 1;
+	private static final int FILES = 2;
+	/** A folder with more folders than this in it is offered as one ({@code chara}, not each character's). */
+	private static final int FOLDERS_AS_ONE = 8;
+	private static final String ALL_FOLDERS = "All folders";
 
 	/** The last folder a PNG was exported to or imported from, this session. */
 	private static File folder;
@@ -94,6 +100,12 @@ public final class ImagesWindow extends JFrame {
 	private final ImageEdits edits;
 	private final Runnable onChange;
 	private final List<Group> groups;
+	/** The loose images, once read ({@link RomfsIndex#looseImages}); null before, while being read. */
+	private List<Group> looseGroups;
+	private boolean readingLoose;
+	/** The folder the loose images are picked from, with how many each has; shown on their tab alone. */
+	private final JComboBox<String> folders = new JComboBox<>(new String[] {ALL_FOLDERS});
+	private final JPanel folderRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
 	private final DefaultListModel<Group> shown = new DefaultListModel<>();
 	private final JList<Group> list = new JList<>(shown);
 	private final JTextField filter = new JTextField(16);
@@ -125,12 +137,14 @@ public final class ImagesWindow extends JFrame {
 		for (Image i : index.images()) {
 			byHash.computeIfAbsent(i.hash(), k -> new ArrayList<>()).add(i);
 		}
-		groups = byHash.entrySet().stream().map(e -> new Group(e.getKey(), List.copyOf(e.getValue())))
+		groups = byHash.entrySet().stream()
+				.map(e -> new Group(e.getKey(), List.copyOf(e.getValue()),
+						Cgfx.isModel(e.getValue().get(0).archive().getFileName().toString()) ? MODELS : LAYOUTS))
 				.sorted((a, b) -> a.first().name().compareToIgnoreCase(b.first().name())).toList();
 
 		JLabel intro = new JLabel("<html>Images with text drawn into them, such as the menu's button labels and screen "
 				+ "titles, are changed here, not in the strings. Export one, edit it in any image editor at the same size, "
-				+ "and import it back: Patch writes it into every archive that has the same image.</html>");
+				+ "and import it back: Patch writes it into every archive or file that has the same image.</html>");
 		intro.setBorder(BorderFactory.createEmptyBorder(10, 12, 6, 12));
 		intro.setPreferredSize(new Dimension(820, intro.getPreferredSize().height * 2));
 
@@ -169,10 +183,22 @@ public final class ImagesWindow extends JFrame {
 		JPanel ticks = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
 		ticks.add(new JLabel("Show:"));
 		ticks.add(show);
+		folders.setToolTipText("Where the loose images are: help pictures are in common/dialog, series logos in common/series");
+		folders.addActionListener(e -> {
+			if (!fillingFolders) {
+				refilter();
+			}
+		});
+		folderRow.add(new JLabel("Folder:"));
+		folderRow.add(folders);
+		folderRow.setVisible(false);
+		JPanel switches = new JPanel(new BorderLayout(0, 2));
+		switches.add(ticks, BorderLayout.NORTH);
+		switches.add(folderRow, BorderLayout.SOUTH);
 		JPanel filters = new JPanel(new BorderLayout(0, 2));
 		filters.setBorder(BorderFactory.createEmptyBorder(4, 6, 4, 6));
 		filters.add(filter, BorderLayout.NORTH);
-		filters.add(ticks, BorderLayout.SOUTH);
+		filters.add(switches, BorderLayout.SOUTH);
 
 		list.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
 		list.setCellRenderer(new Renderer());
@@ -255,21 +281,34 @@ public final class ImagesWindow extends JFrame {
 
 	private void refilter() {
 		int kind = Math.max(0, kinds.getSelectedIndex());
+		if (kind == FILES) {
+			readLoose();
+		}
+		folderRow.setVisible(kind == FILES);
 		Group shownBefore = list.getSelectedValue();
 		if (shownBefore != null) {
-			pickedIn[shownBefore.model() ? 1 : 0] = shownBefore;
+			pickedIn[shownBefore.kind()] = shownBefore;
 		}
 		Group was = pickedIn[kind];
 		String needle = filter.getText().trim().toLowerCase(Locale.ROOT);
+		String folder = String.valueOf(folders.getSelectedItem());
+		String inFolder = folder.equals(ALL_FOLDERS) || folder.equals("null") ? null : folder.substring(0, folder.lastIndexOf("  ("));
 		List<Group> matching = new ArrayList<>();
 		int[] counts = new int[KINDS.length];
-		for (Group g : groups) {
+		List<Group> every = new ArrayList<>(groups);
+		if (looseGroups != null) {
+			every.addAll(looseGroups);
+		}
+		for (Group g : every) {
+			if (g.kind() == FILES && inFolder != null && g.copies().stream().noneMatch(i -> folderOf(i.path()).equals(inFolder))) {
+				continue;
+			}
 			// the archive's folder too: a model's file is named no better than NW4C.bcmdl.lz, its folder scene/record
 			boolean matches = needle.isEmpty() || g.copies().stream().anyMatch(i -> i.path().toLowerCase(Locale.ROOT).contains(needle)
 					|| index.root().relativize(i.archive()).toString().replace('\\', '/').toLowerCase(Locale.ROOT).contains(needle));
 			boolean edited = edits.get(g.hash()) != null;
 			if (matches && (showAll.isSelected() || showEdited.isSelected() == edited)) {
-				int k = g.model() ? 1 : 0;
+				int k = g.kind();
 				counts[k]++;
 				if (k == kind) {
 					matching.add(g);
@@ -277,7 +316,8 @@ public final class ImagesWindow extends JFrame {
 			}
 		}
 		for (int k = 0; k < KINDS.length; k++) {
-			kinds.setTitleAt(k, KINDS[k] + "  " + String.format(Locale.ROOT, "%,d", counts[k]));
+			boolean unread = k == FILES && looseGroups == null;
+			kinds.setTitleAt(k, KINDS[k] + "  " + (unread ? (readingLoose ? "…" : "") : String.format(Locale.ROOT, "%,d", counts[k])));
 		}
 		kinds.revalidate();
 		// added all at once: added one by one, each addition had the list measure every line again
@@ -292,6 +332,93 @@ public final class ImagesWindow extends JFrame {
 		}
 	}
 
+	/**
+	 * Reads the loose images in the background the first time their tab is shown, then lists them
+	 * and fills the folders; at once when they were read before.
+	 */
+	private void readLoose() {
+		if (looseGroups != null || readingLoose) {
+			return;
+		}
+		readingLoose = true;
+		new javax.swing.SwingWorker<List<Image>, Void>() {
+			@Override
+			protected List<Image> doInBackground() throws IOException {
+				return index.looseImages();
+			}
+
+			@Override
+			protected void done() {
+				readingLoose = false;
+				List<Image> loose;
+				try {
+					loose = get();
+				} catch (InterruptedException | java.util.concurrent.ExecutionException e) {
+					loose = List.of();
+					info.setText("Could not read the loose images:\n" + e.getMessage());
+				}
+				Map<String, List<Image>> byHash = new LinkedHashMap<>();
+				loose.forEach(i -> byHash.computeIfAbsent(i.hash(), k -> new ArrayList<>()).add(i));
+				looseGroups = byHash.entrySet().stream().map(e -> new Group(e.getKey(), List.copyOf(e.getValue()), FILES))
+						.sorted((a, b) -> a.first().path().compareToIgnoreCase(b.first().path())).toList();
+				foldersOf(loose);
+				refilter();
+			}
+		}.execute();
+		info.setText("Reading the loose images…");
+	}
+
+	/**
+	 * Fills the folder picker with every folder of {@code loose}, in order, with how many images
+	 * each lists: copies of one image count once, as the list shows them once.
+	 */
+	private void foldersOf(List<Image> loose) {
+		// a folder of many folders (a folder per character) is offered whole
+		Map<String, java.util.Set<String>> under = new java.util.TreeMap<>();
+		for (Image i : loose) {
+			String[] parts = i.path().split("/");
+			if (parts.length > 2) {
+				under.computeIfAbsent(parts[0], k -> new java.util.TreeSet<>()).add(parts[1]);
+			}
+		}
+		manyFolders = new java.util.HashSet<>();
+		under.forEach((top, inside) -> {
+			if (inside.size() > FOLDERS_AS_ONE) {
+				manyFolders.add(top);
+			}
+		});
+		Map<String, java.util.Set<String>> images = new java.util.TreeMap<>();
+		loose.forEach(i -> images.computeIfAbsent(folderOf(i.path()), k -> new java.util.HashSet<>()).add(i.hash()));
+		Map<String, Integer> counts = new java.util.TreeMap<>();
+		images.forEach((f, hashes) -> counts.put(f, hashes.size()));
+		fillingFolders = true;
+		folders.removeAllItems();
+		folders.addItem(ALL_FOLDERS);
+		counts.forEach((f, n) -> folders.addItem(f + "  (" + String.format(Locale.ROOT, "%,d", n) + ")"));
+		fillingFolders = false;
+	}
+
+	/** Set while the folder picker is filled, so each folder added is not taken as one picked. */
+	private boolean fillingFolders;
+
+	/** Folders of many folders, offered whole ({@link #foldersOf}). */
+	private java.util.Set<String> manyFolders = java.util.Set.of();
+
+	/**
+	 * The folder a loose image at {@code path} is picked under: its first two folders
+	 * ({@code common/dialog}), or the first alone when that holds many ({@code chara}).
+	 */
+	private String folderOf(String path) {
+		String[] parts = path.split("/");
+		if (parts.length <= 1) {
+			return ".";
+		}
+		if (parts.length == 2 || manyFolders.contains(parts[0])) {
+			return parts[0];
+		}
+		return parts[0] + "/" + parts[1];
+	}
+
 	private void showSelected() {
 		Group g = list.getSelectedValue();
 		exportButton.setEnabled(g != null);
@@ -300,7 +427,9 @@ public final class ImagesWindow extends JFrame {
 		if (g == null) {
 			original.show(null, 1);
 			replaced.show(null, 1);
-			info.setText("");
+			if (!readingLoose) {
+				info.setText("");
+			}
 			return;
 		}
 		int z = Integer.parseInt(String.valueOf(zoom.getSelectedItem()).replace("×", ""));
@@ -308,12 +437,16 @@ public final class ImagesWindow extends JFrame {
 		original.show(game, z);
 		replaced.show(yours(g), z);
 		Image first = g.first();
+		// a loose image's path is its file's from the root already
 		String where = g.copies().stream().limit(6)
-				.map(i -> index.root().relativize(i.archive()).toString().replace(".arc.lz", "")).collect(Collectors.joining(", "));
+				.map(i -> g.kind() == FILES ? i.path() : index.root().relativize(i.archive()).toString().replace(".arc.lz", ""))
+				.collect(Collectors.joining(", "));
 		info.setText(first.path() + "\n" + first.width() + " × " + first.height() + ", " + Texture.formatName(first.format())
 				+ ((first.format() == Texture.ETC1 || first.format() == Texture.ETC1A4)
 						? " (compressed: an imported image is compressed the same way, so it can lose a little detail)" : "")
-				+ "\nIn " + g.copies().size() + (g.copies().size() == 1 ? " archive: " : " archives: ") + where
+				+ (g.kind() == FILES
+						? (g.copies().size() == 1 ? "\nFile: " + where : "\nIn " + g.copies().size() + " files: " + where)
+						: "\nIn " + g.copies().size() + (g.copies().size() == 1 ? " archive: " : " archives: ") + where)
 				+ (g.copies().size() > 6 ? ", …" : "")
 				+ (edits.get(g.hash()) != null ? "\nYours: " + edits.png(g.hash()) : ""));
 	}

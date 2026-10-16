@@ -281,6 +281,36 @@ class RomfsIndexTest {
 	}
 
 	/**
+	 * Loose images, compressed or not, are found wherever they are but in a nested romfs, each by
+	 * its path from the root, and read back decompressed; a file that is no BCLIM is left out.
+	 */
+	@Test
+	void looseImagesAreReadByPath() throws IOException {
+		table("menu", Map.of("menu_0001", "はい"));
+		int[] red = new int[16 * 8];
+		java.util.Arrays.fill(red, 0xFFFF0000);
+		byte[] help = SampleRomfs.bclim(16, 8, 9, red);
+		Files.createDirectories(romfs.resolve("common/dialog/texture"));
+		Files.write(romfs.resolve("common/dialog/texture/help_e_6405.bclim.lz"), psaro.format.Lz11.compress(help));
+		Files.write(romfs.resolve("common/dialog/texture/plain.bclim"), help);
+		Files.write(romfs.resolve("common/dialog/texture/broken.bclim.lz"), new byte[] {1, 2, 3});
+		Files.createDirectories(romfs.resolve("backup/romfs/common"));
+		Files.write(romfs.resolve("backup/romfs/common/copy.bclim"), help);
+		RomfsIndex index = RomfsIndex.scan(romfs);
+
+		List<RomfsIndex.Image> loose = index.looseImages();
+		assertEquals(List.of("common/dialog/texture/help_e_6405.bclim.lz", "common/dialog/texture/plain.bclim"),
+				loose.stream().map(RomfsIndex.Image::path).toList());
+		RomfsIndex.Image first = loose.get(0);
+		assertEquals("help_e_6405", first.name());
+		assertEquals(16, first.width());
+		assertEquals(romfs.resolve("common/dialog/texture/help_e_6405.bclim.lz"), first.archive());
+		assertEquals(loose.get(1).hash(), first.hash(), "the same image, compressed or not");
+		org.junit.jupiter.api.Assertions.assertArrayEquals(help, index.imageBytes(first), "read back decompressed");
+		assertTrue(index.images().isEmpty(), "loose images are not among the archives' images");
+	}
+
+	/**
 	 * A game that keeps its romfs in one CPK has the text inside it read: a record table
 	 * (compressed), a file of texts and a database as tables named by their paths, each folder's
 	 * map scripts as one table keyed by file and line, and nothing from a file holding no text.
