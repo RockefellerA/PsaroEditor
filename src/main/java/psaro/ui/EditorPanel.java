@@ -386,7 +386,14 @@ public final class EditorPanel extends JPanel {
 		area.setWrapStyleWord(true);
 		area.setCaretPosition(area.getDocument().getLength());
 		JScrollPane scroll = new JScrollPane(area);
-		JOptionPane pane = new JOptionPane(scroll, JOptionPane.PLAIN_MESSAGE, JOptionPane.DEFAULT_OPTION, null,
+		JLabel hint = new JLabel("Notes stay in PsaroEditor for editing; they don't ship with the patch.");
+		hint.putClientProperty(FlatClientProperties.STYLE_CLASS, "small");
+		hint.putClientProperty(FlatClientProperties.STYLE, "foreground: $Label.disabledForeground");
+		hint.setBorder(BorderFactory.createEmptyBorder(4, 0, 0, 0));
+		JPanel box = new JPanel(new BorderLayout());
+		box.add(scroll, BorderLayout.CENTER);
+		box.add(hint, BorderLayout.SOUTH);
+		JOptionPane pane = new JOptionPane(box, JOptionPane.PLAIN_MESSAGE, JOptionPane.DEFAULT_OPTION, null,
 				new Object[] {"Save", "Cancel"}, "Save");
 		javax.swing.JDialog dialog = pane.createDialog(this, "Note for " + k);
 		dialog.setResizable(true);
