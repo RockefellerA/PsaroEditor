@@ -30,6 +30,11 @@ No game data is included or distributed. You need your own extracted romfs.
 
 (Basically, if only strings were changed, use Save. If any images, panes, or fonts were edited, or the game keeps its text in a .cpk, use the Patch window.)
 
+## Other Features
+* Luma Crash Dump parser - If any memory-related hardware issues appear, you can debug them with this.
+* Custom Font importing - The app comes packaged with a standard free replacement font I used for DQ Theatrythm, but you can add your own font families per project.
+* Light and dark modes supported.
+
 ### Acknowledgements
 The 3DS file formats PsaroEditor reads and writes (BCFNT, BCLYT, BCLIM, DARC, CGFX) are documented by the community at [3dbrew](https://www.3dbrew.org/), and Nintendo's LZ compression by Martin Korth's [GBATEK](https://problemkaputt.de/gbatek.htm). Thanks to their contributors.
 
