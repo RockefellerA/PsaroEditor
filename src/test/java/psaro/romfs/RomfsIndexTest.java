@@ -280,6 +280,42 @@ class RomfsIndexTest {
 		assertEquals("darc", new String(raw, 0, 4, java.nio.charset.StandardCharsets.US_ASCII), "an .arc is kept uncompressed");
 	}
 
+	/**
+	 * A game that keeps its romfs in one CPK has the text inside it read: a record table
+	 * (compressed), a file of texts and a database as tables named by their paths, each folder's
+	 * map scripts as one table keyed by file and line, and nothing from a file holding no text.
+	 */
+	@Test
+	void textInsideACpkIsRead() throws IOException {
+		byte[][] db = SampleCpk.thss(List.of("ガンダム"));
+		Map<String, byte[]> files = new LinkedHashMap<>();
+		files.put("common/database/general/gg3d_unit.bin", SampleCpk.fieldTable(0x100, new int[] {4},
+				List.of(new String[] {"ナシ"}, new String[] {"ガンキャノン"})));
+		files.put("nakazawa/text/damage/gg3d_damage_txt.bin", SampleCpk.textBlocks(List.of("・威力がそのままダメージ")));
+		files.put("suzuki/mapscript/01/ev000.bin", SampleCpk.concat(new byte[] {0x1B, 0x0C, 0x00, 0x01, 0x03},
+				SampleCpk.mapLine("ハッ！"), new byte[] {0x01}));
+		files.put("suzuki/mapscript/01/ev001.bin", SampleCpk.concat(SampleCpk.mapLine("カイさん、聞こえますか？"), new byte[] {0x01}));
+		files.put("suzuki/mapscript/01/turn.bin", new byte[] {0x03, 0x64, 0x00, 0x00, 0x00, 0x01});
+		files.put("data/foundation/database.dat", db[0]);
+		files.put("data/foundation/database.ofs", db[1]);
+		files.put("data/foundation/constants.dat", new byte[] {'T', 'H', 'S', 'S'});
+		Files.write(romfs.resolve("data.cpk"), SampleCpk.cpk(files, true, false));
+		assertTrue(RomfsIndex.looksLikeRomfs(romfs));
+
+		RomfsIndex index = RomfsIndex.scan(romfs);
+		assertEquals(List.of("common/database/general/gg3d_unit", "data/foundation/database",
+				"nakazawa/text/damage/gg3d_damage_txt", "suzuki/mapscript/01"), index.tables().stream().map(StringTable::name).toList());
+		StringTable units = index.table("common/database/general/gg3d_unit");
+		assertEquals(RomfsIndex.Kind.RECORDS, units.kind());
+		assertEquals(Map.of("000", "ナシ", "001", "ガンキャノン"), units.strings());
+		assertEquals(romfs.resolve("data.cpk").resolve("common/database/general/gg3d_unit.bin"), units.path());
+		assertEquals(RomfsIndex.Kind.SCRIPT, index.table("nakazawa/text/damage/gg3d_damage_txt").kind());
+		assertEquals(List.of("ガンダム"), List.copyOf(index.table("data/foundation/database").strings().values()));
+		StringTable stage = index.table("suzuki/mapscript/01");
+		assertEquals(RomfsIndex.Kind.SCRIPT, stage.kind());
+		assertEquals(Map.of("ev000:00", "ハッ！", "ev001:00", "カイさん、聞こえますか？"), stage.strings());
+	}
+
 	/** Against a real romfs when one is supplied, as RomfsRoundTripTest does. */
 	@Test
 	void realRomfsResolvesNearlyEveryKeyAndFindsFonts() throws IOException {

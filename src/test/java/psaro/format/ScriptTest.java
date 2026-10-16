@@ -37,4 +37,18 @@ class ScriptTest {
 		assertFalse(Script.is(items));
 		assertThrows(IllegalArgumentException.class, () -> Script.read(items));
 	}
+
+	/** A line written back fills its entry's text, the rest cleared; one longer than the entry holds is refused. */
+	@Test
+	void writesALineInItsEntry() {
+		byte[] file = SampleRomfs.script("prot1_out_pink1", List.<String[]>of(
+				new String[] {"<Talk>", "<chara02 w3 ef6>マフィンおばさーん！<p>"}), "ありがとう。<p>");
+		byte[] out = Script.write(file, Map.of("000", "<chara02 w3 ef6>Auntie Muffin!<p>"));
+		byte[] entry = Records.read(out).get(0);
+		int text = 0x60 + 0x44;
+		assertEquals("<chara02 w3 ef6>Auntie Muffin!<p>", Bytes.ascii(entry, text));
+		assertEquals(0, entry[text + 0xFF]);
+		assertEquals(file.length, out.length);
+		assertThrows(IllegalArgumentException.class, () -> Script.write(file, Map.of("000", "x".repeat(0x100))));
+	}
 }

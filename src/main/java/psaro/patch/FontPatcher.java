@@ -126,10 +126,12 @@ public final class FontPatcher {
 	 * and every layout a previous patch changed; every replaced image and every one a previous
 	 * patch replaced. {@code texts} is the text layouts hold themselves, by layout and pane, in
 	 * every archive carrying the layout; {@code fallbacks}, by archive, layout and pane, the
-	 * English of each keyed pane that holds text of its own, written there too ({@link #plan}).
+	 * English of each keyed pane that holds text of its own, written there too ({@link #plan});
+	 * {@code cpks}, what the English of the tables inside each CPK does to it ({@link CpkPatch}).
 	 */
 	public record Plan(List<FontChange> fonts, List<LayoutChange> layouts, List<ImageChange> images,
-			Map<String, Map<String, String>> texts, Map<Path, Map<String, Map<String, String>>> fallbacks) {
+			Map<String, Map<String, String>> texts, Map<Path, Map<String, Map<String, String>>> fallbacks,
+			List<CpkPatch.Change> cpks) {
 
 		/** A plan with no images. */
 		public Plan(List<FontChange> fonts, List<LayoutChange> layouts) {
@@ -138,12 +140,22 @@ public final class FontPatcher {
 
 		/** A plan writing no text into layouts. */
 		public Plan(List<FontChange> fonts, List<LayoutChange> layouts, List<ImageChange> images) {
-			this(fonts, layouts, images, Map.of(), Map.of());
+			this(fonts, layouts, images, Map.of(), Map.of(), List.of());
 		}
 
 		public boolean hasWork() {
 			return fonts.stream().anyMatch(FontChange::hasWork) || layouts.stream().anyMatch(LayoutChange::hasWork)
-					|| images.stream().anyMatch(ImageChange::hasWork);
+					|| images.stream().anyMatch(ImageChange::hasWork) || cpks.stream().anyMatch(CpkPatch.Change::hasWork);
+		}
+
+		/** The CPKs the patch would rebuild or remove. */
+		public List<CpkPatch.Change> cpksToWrite() {
+			return cpks.stream().filter(CpkPatch.Change::hasWork).toList();
+		}
+
+		/** The strings of tables inside a CPK that the patch leaves in Japanese, as their format cannot hold them; one line each. */
+		public List<String> unwritable() {
+			return cpks.stream().flatMap(c -> c.problems().stream()).toList();
 		}
 
 		/** Images the patch would write or put back. */
@@ -694,7 +706,8 @@ public final class FontPatcher {
 				}
 			}
 		}
-		return new Plan(List.copyOf(fonts), layoutChanges(held, fallbacks), imageChanges(), held, fallbacks);
+		return new Plan(List.copyOf(fonts), layoutChanges(held, fallbacks), imageChanges(), held, fallbacks,
+				CpkPatch.plan(index, texts, output));
 	}
 
 	/**
@@ -1269,7 +1282,19 @@ public final class FontPatcher {
 			Archive.save(root, out);
 			wrote.add(out);
 		}
-		copyToMods(outputFiles(".arc.lz", ".arc", ".bcmdl", ".bcmdl.lz", ".tdt", ".mdt", ".csv"), progress);
+		// a CPK is rebuilt only when what it holds changed, and copied to the mods folder only then: it is hundreds of megabytes
+		List<Path> rebuilt = new ArrayList<>();
+		for (CpkPatch.Change c : plan.cpks()) {
+			if (c.hasWork()) {
+				Path out = CpkPatch.write(index, c, output, progress);
+				if (out != null) {
+					rebuilt.add(out);
+				}
+			}
+		}
+		wrote.addAll(rebuilt);
+		copyToMods(outputFiles(".arc.lz", ".arc", ".bcmdl", ".bcmdl.lz", ".tdt", ".mdt", ".csv", ".dat"), progress);
+		copyToMods(rebuilt, progress);
 		return wrote;
 	}
 

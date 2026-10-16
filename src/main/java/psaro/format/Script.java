@@ -5,9 +5,11 @@ import java.nio.charset.CharacterCodingException;
 import java.nio.charset.Charset;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 /**
  * {@code *.dat} event scripts: a {@link Records} file whose records are scenes of dialogue, each
@@ -78,6 +80,42 @@ public final class Script {
 					String key = String.format(Locale.ROOT, "%03d", e);
 					out.put(records.size() > 1 ? r + ":" + key : key, text);
 				}
+			}
+		}
+		return out;
+	}
+
+	/**
+	 * {@code d} with each line {@code texts} has a different text for (by key) holding it, in its
+	 * entry's 0x100 bytes, NUL-terminated and the rest cleared. Refused when a text is not
+	 * Shift-JIS or does not fit.
+	 */
+	public static byte[] write(byte[] d, Map<String, String> texts) {
+		Map<String, String> current = read(d);
+		List<int[]> spans = Records.spans(d);
+		byte[] out = d.clone();
+		for (int r = 0; r < spans.size(); r++) {
+			int[] span = spans.get(r);
+			int entries = (span[1] - ENTRIES) / ENTRY;
+			for (int e = 0; e < entries; e++) {
+				String key = String.format(Locale.ROOT, "%03d", e);
+				key = spans.size() > 1 ? r + ":" + key : key;
+				String text = texts.get(key);
+				if (text == null || !current.containsKey(key) || text.equals(current.get(key))) {
+					continue;
+				}
+				String missing = ShiftJis.unencodable(text);
+				if (missing != null) {
+					throw new IllegalArgumentException(key + ": Shift-JIS has no " + missing);
+				}
+				byte[] stored = ShiftJis.encode(text);
+				if (stored.length >= TEXT_LENGTH) {
+					throw new IllegalArgumentException(key + ": " + stored.length + " bytes, more than the "
+							+ (TEXT_LENGTH - 1) + " a line holds");
+				}
+				int at = span[0] + ENTRIES + e * ENTRY + TEXT;
+				Arrays.fill(out, at, at + TEXT_LENGTH, (byte) 0);
+				System.arraycopy(stored, 0, out, at, stored.length);
 			}
 		}
 		return out;

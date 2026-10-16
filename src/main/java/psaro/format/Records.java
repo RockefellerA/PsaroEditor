@@ -7,6 +7,7 @@ import java.nio.charset.CharsetDecoder;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -93,6 +94,95 @@ public final class Records {
 			}
 		}
 		return out;
+	}
+
+	/**
+	 * {@code d} with each string {@code texts} has a different text for (by key) holding it, in
+	 * its field: UTF-16 or Shift-JIS as the field is, NUL-terminated, the rest of the field
+	 * cleared. Nothing says how wide a field is, so it is taken to run over the zeros that follow
+	 * its string in every record ({@link #room}); a number after it that is zero in every record
+	 * would read as more room. Refused when a text does not fit or a Shift-JIS field cannot hold it.
+	 */
+	public static byte[] write(byte[] d, Map<String, String> texts) {
+		List<int[]> spans = records(d);
+		if (spans == null) {
+			throw new IllegalArgumentException("not a DARC record file");
+		}
+		List<byte[]> records = read(d);
+		Map<String, String> current = strings(d);
+		if (current.isEmpty()) {
+			return d.clone();
+		}
+		List<Column> columns = columns(records);
+		String[] ids = ids(records);
+		byte[] out = d.clone();
+		for (int k = 0; k < columns.size(); k++) {
+			Column c = columns.get(k);
+			int next = k + 1 < columns.size() ? columns.get(k + 1).offset() : Integer.MAX_VALUE;
+			int room = room(records, c, next);
+			for (int r = 0; r < records.size(); r++) {
+				String key = ids[r] + ":" + String.format(Locale.ROOT, "0x%x", c.offset());
+				String text = texts.get(key);
+				if (text == null || !current.containsKey(key) || text.equals(current.get(key))) {
+					continue;
+				}
+				if (!c.utf16()) {
+					String missing = ShiftJis.unencodable(text);
+					if (missing != null) {
+						throw new IllegalArgumentException(key + ": Shift-JIS has no " + missing);
+					}
+				}
+				byte[] stored = encoded(text, c);
+				if (stored.length > room) {
+					throw new IllegalArgumentException(key + ": " + stored.length + " bytes, more than the " + room
+							+ " the field holds");
+				}
+				int at = spans.get(r)[0] + c.offset();
+				Arrays.fill(out, at, at + room, (byte) 0);
+				System.arraycopy(stored, 0, out, at, stored.length);
+			}
+		}
+		return out;
+	}
+
+	/**
+	 * How many bytes field {@code c} can hold, its NUL too: in every record holding text there, its
+	 * string and the zeros after it, up to the next byte that is not zero, the next field
+	 * ({@code next}) or the record's end, whichever comes first; the fewest of those over the
+	 * records, and never fewer than the longest string the field holds.
+	 */
+	private static int room(List<byte[]> records, Column c, int next) {
+		int room = Integer.MAX_VALUE;
+		int longest = 0;
+		for (byte[] r : records) {
+			String s = string(r, c);
+			if (s == null) {
+				continue;
+			}
+			int limit = Math.min(next, r.length);
+			int p = c.offset() + encoded(s, c).length;
+			while (p < limit && r[p] == 0) {
+				p++;
+			}
+			int free = p - c.offset();
+			room = Math.min(room, c.utf16() ? free & ~1 : free);
+			longest = Math.max(longest, encoded(s, c).length);
+		}
+		return room == Integer.MAX_VALUE ? 0 : Math.max(room, longest);
+	}
+
+	/** {@code text} as field {@code c} holds it, with its NUL. */
+	private static byte[] encoded(String text, Column c) {
+		return c.utf16() ? (text + "\0").getBytes(StandardCharsets.UTF_16LE) : (text + "\0").getBytes(SHIFT_JIS);
+	}
+
+	/** Each record's {offset, size} in {@code d}, in file order. */
+	static List<int[]> spans(byte[] d) {
+		List<int[]> spans = records(d);
+		if (spans == null) {
+			throw new IllegalArgumentException("not a DARC record file");
+		}
+		return spans;
 	}
 
 	/**

@@ -12,6 +12,8 @@ import java.util.List;
 import java.util.Map;
 import psaro.format.Csv;
 import psaro.format.Msgd;
+import psaro.format.Records;
+import psaro.format.Script;
 import psaro.format.Tdt;
 import psaro.project.Translations;
 import psaro.romfs.RomfsIndex;
@@ -19,8 +21,10 @@ import psaro.romfs.RomfsIndex.StringTable;
 
 /**
  * Writes the game's string tables with the English in them to {@code <romfs>.psaro/romfs/text},
- * its message files to {@code .../message} and its data tables to {@code .../table}, beside the
- * patched archives, so that folder is a romfs patch as it stands.
+ * its message files to {@code .../message}, its data tables to {@code .../table} and its record
+ * files and scripts to their own paths, beside the patched archives, so that folder is a romfs
+ * patch as it stands. The text layouts hold and the tables inside a CPK are written by the patch
+ * instead ({@link FontPatcher}, {@link CpkPatch}).
  *
  * <p>A table with English becomes a copy of its {@code .tdt} with each translated string
  * replaced and every other string left in Japanese; a table with none has no copy. The JSON in
@@ -39,13 +43,10 @@ public final class TextExport {
 	public static List<Path> export(RomfsIndex index, Translations translations) throws IOException {
 		Path output = FontPatcher.outputFor(index.root());
 		List<Path> written = new ArrayList<>();
+		List<String> problems = new ArrayList<>();
 		for (StringTable table : index.tables()) {
-			if (table.builtIn()) {
-				// written into the layouts by the patch, having no file of its own
-				continue;
-			}
-			if (table.kind() == RomfsIndex.Kind.RECORDS || table.kind() == RomfsIndex.Kind.SCRIPT) {
-				// not written back yet: its English is kept in .psaro/english until it can be
+			if (table.builtIn() || index.packed(table) != null) {
+				// written by the patch: into the layouts, having no file of its own, or into a rebuilt CPK
 				continue;
 			}
 			Path out = output.resolve(index.root().relativize(table.path()).toString());
@@ -61,17 +62,30 @@ public final class TextExport {
 				Files.deleteIfExists(out);
 				continue;
 			}
-			byte[] bytes = switch (table.kind()) {
-				case MESSAGE -> Msgd.write(Files.readAllBytes(table.path()), new ArrayList<>(strings.values()));
-				case DATA -> Csv.write(Files.readAllBytes(table.path()), strings);
-				default -> Tdt.write(strings);
-			};
+			byte[] bytes;
+			try {
+				bytes = switch (table.kind()) {
+					case MESSAGE -> Msgd.write(Files.readAllBytes(table.path()), new ArrayList<>(strings.values()));
+					case DATA -> Csv.write(Files.readAllBytes(table.path()), strings);
+					case RECORDS -> Records.write(Files.readAllBytes(table.path()), strings);
+					case SCRIPT -> Script.write(Files.readAllBytes(table.path()), strings);
+					default -> Tdt.write(strings);
+				};
+			} catch (IllegalArgumentException cannot) {
+				// the rest of the tables are still written
+				problems.add(table.name() + " " + cannot.getMessage());
+				continue;
+			}
 			if (Files.isRegularFile(out) && Arrays.equals(bytes, Files.readAllBytes(out))) {
 				continue;
 			}
 			Files.createDirectories(out.getParent());
 			write(out, bytes);
 			written.add(out);
+		}
+		if (!problems.isEmpty()) {
+			throw new IOException("These tables could not be written, as their files cannot hold their English:\n"
+					+ String.join("\n", problems));
 		}
 		return written;
 	}

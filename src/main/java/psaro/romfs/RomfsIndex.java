@@ -30,12 +30,17 @@ import psaro.format.Bclim;
 import psaro.format.Bclyt;
 import psaro.format.Bcfnt;
 import psaro.format.Cgfx;
+import psaro.format.Cpk;
 import psaro.format.Csv;
 import psaro.format.Darc;
+import psaro.format.FieldTable;
+import psaro.format.MapScript;
 import psaro.format.Msgd;
 import psaro.format.Records;
 import psaro.format.Script;
 import psaro.format.Tdt;
+import psaro.format.TextBlocks;
+import psaro.format.Thss;
 
 /**
  * What an extracted romfs holds for translation: every string table, and for each string the
@@ -63,6 +68,12 @@ import psaro.format.Tdt;
  * the root: {@code .dat} record files ({@link Records}), as tables of their text fields, and
  * {@code .dat} event scripts ({@link Script}), as tables of their lines. Each is named by its path
  * from the root ({@code paramData/Acc}, {@code scriptData/prot1/prot1_out_pink1}).
+ *
+ * <p>A game that keeps its whole romfs in a CRI {@code .cpk} ({@link Cpk}) has its text read from
+ * inside it, each table named by its path in the CPK: record tables ({@link FieldTable}) and its
+ * database ({@link Thss}) as record tables, numbered texts ({@link TextBlocks}) as scripts, and
+ * the lines of each folder of map scripts ({@link MapScript}) as one script, keyed by file and
+ * line ({@code ev000:03}).
  */
 public final class RomfsIndex {
 
@@ -181,6 +192,12 @@ public final class RomfsIndex {
 	/** An archive's name ends with one of these: compressed, or as some games keep them, not. */
 	private static final List<String> ARCHIVE_SUFFIXES = List.of(".arc.lz", ".arc");
 	private static final String RECORD_SUFFIX = ".dat";
+	private static final String CPK_SUFFIX = ".cpk";
+	/** In a CPK, the files text is read from besides a database, and a database's pointer list. */
+	private static final String CPK_TEXT_SUFFIX = ".bin";
+	private static final String CPK_POINTERS_SUFFIX = ".ofs";
+	/** In a CPK, files larger than this are models, textures and sound, not text, and are not read. */
+	private static final int CPK_TEXT_LIMIT = 4 << 20;
 	/** How deep under a folder {@link #looksLikeRomfs} looks for files it can read. */
 	private static final int LOOK_DEPTH = 3;
 	/**
@@ -216,6 +233,9 @@ public final class RomfsIndex {
 	private final Map<String, Bclyt.Pane> tops;
 	/** Every text pane of every layout in every archive, in archive and layout order. */
 	private final List<Usage> textPanes;
+	/** By table name, where each table read from inside a CPK is. */
+	private final Map<String, Packed> packed;
+	private final List<Path> cpks;
 	/** Keyed by {@code table + "/" + key}: the panes linked to a string no layout names ({@link #link}). */
 	private final Map<String, List<Usage>> linked = new HashMap<>();
 	/** Keyed by archive path + "!" + font name; empty when the archive does not carry the font. */
@@ -226,7 +246,10 @@ public final class RomfsIndex {
 	private RomfsIndex(Path root, Map<String, StringTable> tables, Map<String, List<Usage>> usages,
 			List<Usage> unresolved, int layoutCount, Map<String, List<Path>> fontHomes,
 			Map<String, List<Path>> layoutHomes, Map<Shape, List<Shown>> shapes, List<Image> images,
-			Map<String, String> bodies, Map<String, Bclyt.Pane> tops, List<Usage> textPanes) {
+			Map<String, String> bodies, Map<String, Bclyt.Pane> tops, List<Usage> textPanes, Map<String, Packed> packed,
+			List<Path> cpks) {
+		this.packed = packed;
+		this.cpks = cpks;
 		this.root = root;
 		this.tables = tables;
 		this.usages = usages;
@@ -243,7 +266,7 @@ public final class RomfsIndex {
 
 	/**
 	 * Whether {@code dir} has something an index is built from: string tables, or near the top
-	 * (a few folders down at most) message files, data tables, archives or record files. The
+	 * (a few folders down at most) message files, data tables, archives, record files or a CPK. The
 	 * rest of the folder is not looked at, so a folder that is not a romfs is turned down quickly.
 	 */
 	public static boolean looksLikeRomfs(Path dir) throws IOException {
@@ -260,13 +283,14 @@ public final class RomfsIndex {
 		}
 	}
 
-	/** A file {@link #scan} reads: a message file, a data table, an archive or a record file. */
+	/** A file {@link #scan} reads: a message file, a data table, an archive, a record file or a CPK. */
 	private static boolean readable(Path p) {
 		String name = p.getFileName() == null ? "" : p.getFileName().toString();
 		Path parent = p.getParent() == null ? null : p.getParent().getFileName();
 		String folder = parent == null ? "" : parent.toString();
 		return folder.equals("message") && name.endsWith(MESSAGE_SUFFIX) || folder.equals("table") && name.endsWith(DATA_SUFFIX)
-				|| archive(name) || name.endsWith(RECORD_SUFFIX) && Files.isRegularFile(p) && recordFile(p);
+				|| archive(name) || name.endsWith(RECORD_SUFFIX) && Files.isRegularFile(p) && recordFile(p)
+				|| name.endsWith(CPK_SUFFIX) && Files.isRegularFile(p) && Cpk.is(p);
 	}
 
 	/** Whether {@code file} starts as a record file does, read no further than that. */
@@ -336,6 +360,15 @@ public final class RomfsIndex {
 			}
 			if (!strings.isEmpty() && !tables.containsKey(name)) {
 				tables.put(name, new StringTable(name, p, Collections.unmodifiableMap(strings), kind));
+			}
+		}
+		// the text inside each CPK, named by its path there
+		Map<String, Packed> packed = new HashMap<>();
+		for (Path cpk : found.cpks()) {
+			for (PackedTable t : cpkTables(cpk)) {
+				if (tables.putIfAbsent(t.table().name(), t.table()) == null) {
+					packed.put(t.table().name(), t.packed());
+				}
 			}
 		}
 
@@ -427,7 +460,8 @@ public final class RomfsIndex {
 		}
 		shapes.replaceAll((shape, shown) -> List.copyOf(shown));
 		return new RomfsIndex(root, Collections.unmodifiableMap(tables), usages, List.copyOf(unresolved), layouts,
-				fontHomes, layoutHomes, shapes, List.copyOf(images), bodies, tops, List.copyOf(textPanes));
+				fontHomes, layoutHomes, shapes, List.copyOf(images), bodies, tops, List.copyOf(textPanes), Map.copyOf(packed),
+				List.copyOf(found.cpks()));
 	}
 
 	/**
@@ -480,6 +514,32 @@ public final class RomfsIndex {
 		Set<String> out = new TreeSet<>();
 		tops.keySet().forEach(k -> out.add(k.substring(0, k.lastIndexOf('!'))));
 		return out;
+	}
+
+	/** How a table read from inside a CPK is kept there, which says how its English is written back. */
+	public enum PackedFormat {
+		/** A record table ({@link FieldTable}), in the file at the path. */
+		FIELD_TABLE,
+		/** A file of numbered texts ({@link TextBlocks}), at the path. */
+		TEXT_BLOCKS,
+		/** The map scripts ({@link MapScript}) of the folder at the path, keyed {@code <file>:<line>}. */
+		MAP_SCRIPTS,
+		/** A THSS data file ({@link Thss}) at the path, its pointer list beside it as {@code .ofs}. */
+		DATABASE
+	}
+
+	/** Where a table read from inside a CPK is: the CPK, the path there (a folder, for map scripts), and how it is kept. */
+	public record Packed(Path cpk, String path, PackedFormat format) {
+	}
+
+	/** Where {@code table} is inside a CPK, or null when it is a file of its own. */
+	public Packed packed(StringTable table) {
+		return packed.get(table.name());
+	}
+
+	/** Every CPK under the root, whether or not it holds text. */
+	public List<Path> cpks() {
+		return cpks;
 	}
 
 	public Path root() {
@@ -811,18 +871,20 @@ public final class RomfsIndex {
 		}
 	}
 
-	/** The archives, models and record files under a root, each sorted. */
-	private record Found(List<Path> archives, List<Path> models, List<Path> records) {
+	/** The archives, models, record files and CPKs under a root, each sorted. */
+	private record Found(List<Path> archives, List<Path> models, List<Path> records, List<Path> cpks) {
 	}
 
 	/**
-	 * Every archive, model and record file under {@code root}, leaving out any other romfs nested
-	 * inside it; a {@code .dat} only when it starts as a record file does.
+	 * Every archive, model, record file and CPK under {@code root}, leaving out any other romfs
+	 * nested inside it; a {@code .dat} only when it starts as a record file does, a {@code .cpk}
+	 * only when it starts as a CPK does.
 	 */
 	private static Found walk(Path root) throws IOException {
 		List<Path> archives = new ArrayList<>();
 		List<Path> models = new ArrayList<>();
 		List<Path> records = new ArrayList<>();
+		List<Path> cpks = new ArrayList<>();
 		Files.walkFileTree(root, new SimpleFileVisitor<>() {
 			@Override
 			public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException {
@@ -838,6 +900,8 @@ public final class RomfsIndex {
 					models.add(file);
 				} else if (name.endsWith(RECORD_SUFFIX) && recordFile(file)) {
 					records.add(file);
+				} else if (name.endsWith(CPK_SUFFIX) && Cpk.is(file)) {
+					cpks.add(file);
 				}
 				return FileVisitResult.CONTINUE;
 			}
@@ -845,7 +909,95 @@ public final class RomfsIndex {
 		Collections.sort(archives);
 		Collections.sort(models);
 		Collections.sort(records);
-		return new Found(archives, models, records);
+		Collections.sort(cpks);
+		return new Found(archives, models, records, cpks);
+	}
+
+	/**
+	 * The text inside {@code cpk}: each record table, file of texts and database by its path in the
+	 * CPK without its extension, and each folder's map scripts as one table by the folder's path.
+	 * A table's path is where it is inside the CPK ({@code data.cpk/common/database/...}), not a file
+	 * of its own. A file this cannot read is left out, as is a table with no Japanese.
+	 */
+	private static List<PackedTable> cpkTables(Path cpk) throws IOException {
+		List<PackedTable> out = new ArrayList<>();
+		Map<String, Map<String, String>> scripts = new TreeMap<>();
+		try (Cpk c = Cpk.open(cpk)) {
+			for (Cpk.Entry e : c.entries()) {
+				String path = e.path();
+				if (e.extractSize() > CPK_TEXT_LIMIT) {
+					continue;
+				}
+				try {
+					Map<String, String> strings;
+					Kind kind;
+					PackedFormat format;
+					if (path.endsWith(CPK_TEXT_SUFFIX)) {
+						byte[] d = c.read(e);
+						if (FieldTable.is(d)) {
+							strings = FieldTable.strings(d);
+							kind = Kind.RECORDS;
+							format = PackedFormat.FIELD_TABLE;
+						} else if (TextBlocks.is(d)) {
+							strings = TextBlocks.read(d);
+							kind = Kind.SCRIPT;
+							format = PackedFormat.TEXT_BLOCKS;
+						} else {
+							String file = stem(path.substring(path.lastIndexOf('/') + 1));
+							Map<String, String> lines = scripts.computeIfAbsent(folder(path), k -> new LinkedHashMap<>());
+							MapScript.lines(d).forEach((key, line) -> lines.put(file + ":" + key, line));
+							continue;
+						}
+					} else if (path.endsWith(RECORD_SUFFIX)) {
+						Cpk.Entry pointers = c.find(stem(path) + CPK_POINTERS_SUFFIX);
+						if (pointers == null) {
+							continue;
+						}
+						byte[] d = c.read(e);
+						byte[] ofs = c.read(pointers);
+						if (!Thss.is(d, ofs)) {
+							continue;
+						}
+						strings = Thss.strings(d, ofs);
+						kind = Kind.RECORDS;
+						format = PackedFormat.DATABASE;
+					} else {
+						continue;
+					}
+					if (!strings.isEmpty()) {
+						out.add(new PackedTable(new StringTable(stem(path), cpk.resolve(path), Collections.unmodifiableMap(strings),
+								kind), new Packed(cpk, path, format)));
+					}
+				} catch (IllegalArgumentException | IndexOutOfBoundsException unreadable) {
+					// a file this cannot read is left out
+				}
+			}
+		} catch (IllegalArgumentException | IndexOutOfBoundsException notCpk) {
+			return List.of();
+		}
+		scripts.forEach((folder, lines) -> {
+			if (!lines.isEmpty()) {
+				out.add(new PackedTable(new StringTable(folder, cpk.resolve(folder), Collections.unmodifiableMap(lines), Kind.SCRIPT),
+						new Packed(cpk, folder, PackedFormat.MAP_SCRIPTS)));
+			}
+		});
+		return out;
+	}
+
+	/** A table read from inside a CPK, and where it is there. */
+	private record PackedTable(StringTable table, Packed packed) {
+	}
+
+	/** A path in a CPK without its extension. */
+	private static String stem(String path) {
+		int dot = path.lastIndexOf('.');
+		return dot > path.lastIndexOf('/') ? path.substring(0, dot) : path;
+	}
+
+	/** The folder of a path in a CPK; empty at its top. */
+	private static String folder(String path) {
+		int slash = path.lastIndexOf('/');
+		return slash < 0 ? "" : path.substring(0, slash);
 	}
 
 	/** Whether a file of this name is an archive. */

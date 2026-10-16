@@ -800,13 +800,15 @@ public final class EditorPanel extends JPanel {
 				+ "such as character and card names, which the game draws from code. Keyed by row and column; "
 				+ "link a string's panes under Panes… in the preview. A comma shows full-width (，), "
 				+ "as a cell cannot hold one."),
-		RECORDS(RomfsIndex.Kind.RECORDS, ".dat records", "Record tables (*.dat): the text fields of the game's records, "
-				+ "such as item, enemy and quest names and descriptions and system messages, which the game draws from "
-				+ "code. Keyed by record and the field's offset; link a string's panes under Panes… in the preview. "
-				+ "Not yet written into the patch."),
-		SCRIPT(RomfsIndex.Kind.SCRIPT, ".dat scripts", "Event scripts (*.dat): the lines of the game's dialogue scenes, "
-				+ "numbered by entry, with the tags the game acts on (&lt;chara02 w3 ef6&gt; who speaks and how, &lt;p&gt; "
-				+ "wait for a press). Not yet written into the patch."),
+		RECORDS(RomfsIndex.Kind.RECORDS, "records", "Record tables (*.dat, or tables inside a *.cpk): the text fields "
+				+ "of the game's records, such as item, enemy and quest names and descriptions and system messages, which "
+				+ "the game draws from code. Keyed by record and the field's offset (in a *.cpk's database, by where the "
+				+ "string is); link a string's panes under Panes… in the preview. Save writes a *.dat; Patch rebuilds "
+				+ "a *.cpk with its tables' English."),
+		SCRIPT(RomfsIndex.Kind.SCRIPT, "scripts", "Event scripts (*.dat, or texts and map scripts inside a *.cpk): "
+				+ "the lines of the game's dialogue scenes and its numbered help texts, numbered by entry (a map script's "
+				+ "by file and line), with the tags the game acts on (&lt;chara02 w3 ef6&gt; who speaks and how, &lt;p&gt; "
+				+ "wait for a press). Save writes a *.dat; Patch rebuilds a *.cpk with its texts' English."),
 		BCLYT(RomfsIndex.Kind.BUILT_IN, ".bclyt", "Text the layouts hold themselves, which the game shows in "
 				+ "panes no table fills: no key, a key no table has, or an archive with no table of its own. "
 				+ "Keyed by layout and pane; Patch writes the English into the layouts.");

@@ -379,8 +379,8 @@ public final class MainWindow {
 	private static Opened read(Path dir) throws OpenFailure {
 		RomfsIndex scanned;
 		String lookedFor = "PsaroEditor looks inside an extracted romfs for string tables (text/*.tdt), message files "
-				+ "(message/*_jp.mdt), data tables (table/*.csv), record files and scripts (*.dat) and layout archives "
-				+ "(*.arc, *.arc.lz).";
+				+ "(message/*_jp.mdt), data tables (table/*.csv), record files and scripts (*.dat), layout archives "
+				+ "(*.arc, *.arc.lz) and CRI archives (*.cpk).";
 		try {
 			if (!RomfsIndex.looksLikeRomfs(dir)) {
 				throw new OpenFailure("No string tables were found in " + dir + ".\n" + lookedFor, false);

@@ -75,9 +75,9 @@ class TextExportTest {
 		assertEquals(Map.of("dqc0102a:1", "ローラ姫"), psaro.format.Csv.read(Files.readAllBytes(out)));
 	}
 
-	/** Record tables and scripts are not written back yet: their English stays in the project. */
+	/** Record tables and scripts are written at their own paths, the English in each field. */
 	@Test
-	void recordTablesAndScriptsAreNotWritten() throws IOException {
+	void recordTablesAndScriptsAreWritten() throws IOException {
 		Files.createDirectories(romfs.resolve("paramData"));
 		Files.write(romfs.resolve("paramData/Rod.dat"), psaro.romfs.SampleRomfs.records(List.of(
 				psaro.romfs.SampleRomfs.record(0x80, 0, "rod00_00", Map.of(0x24, psaro.romfs.SampleRomfs.utf16("はじまりのつえ"))))));
@@ -87,9 +87,44 @@ class TextExportTest {
 		translations = Translations.open(index);
 		translations.set(index.table("paramData/Rod"), "rod00_00:0x24", "Starter Staff");
 		translations.set(index.table("scene"), "000", "Yes");
-		assertTrue(TextExport.export(index, translations).isEmpty());
-		assertFalse(Files.exists(dir.resolve("game.psaro/romfs/paramData")));
+		Path rod = dir.resolve("game.psaro/romfs/paramData/Rod.dat");
+		Path scene = dir.resolve("game.psaro/romfs/scene.dat");
+		assertEquals(List.of(rod, scene), TextExport.export(index, translations));
+
+		byte[] record = psaro.format.Records.read(Files.readAllBytes(rod)).get(0);
+		assertEquals("Starter Staff", psaro.format.Records.string(record, new psaro.format.Records.Column(0x24, true)));
+		byte[] entry = psaro.format.Records.read(Files.readAllBytes(scene)).get(0);
+		// the first entry's text, after the scene's name and cast and the entry's command and speaker
+		assertEquals("Yes", new String(entry, 0x60 + 0x44, 3, java.nio.charset.StandardCharsets.US_ASCII));
+		assertEquals(0, entry[0x60 + 0x44 + 3]);
+	}
+
+	/** A line its file cannot hold is named, and the other tables are written all the same. */
+	@Test
+	void textAFileCannotHoldIsNamed() throws IOException {
+		Files.write(romfs.resolve("scene.dat"), psaro.romfs.SampleRomfs.script("scene",
+				List.<String[]>of(new String[] {"<Talk>", "はい"}), ""));
+		index = RomfsIndex.scan(romfs);
+		translations = Translations.open(index);
+		translations.set(index.table("scene"), "000", "x".repeat(0x100));
+		translations.set(index.table("menu"), "menu_0001", "Yes");
+		IOException e = org.junit.jupiter.api.Assertions.assertThrows(IOException.class,
+				() -> TextExport.export(index, translations));
+		assertTrue(e.getMessage().contains("scene 000"), e.getMessage());
+		assertTrue(Files.exists(output()));
 		assertFalse(Files.exists(dir.resolve("game.psaro/romfs/scene.dat")));
+	}
+
+	/** The tables inside a CPK are the patch's to write, rebuilding the CPK; saving writes none. */
+	@Test
+	void tablesInsideACpkAreLeftToThePatch() throws IOException {
+		Files.write(romfs.resolve("data.cpk"), psaro.romfs.SampleCpk.cpk(Map.of("common/gg3d_unit.bin",
+				psaro.romfs.SampleCpk.fieldTable(16, new int[] {4}, List.<String[]>of(new String[] {"ガンダム"}))), false, false));
+		index = RomfsIndex.scan(romfs);
+		translations = Translations.open(index);
+		translations.set(index.table("common/gg3d_unit"), "000", "Gundam");
+		assertTrue(TextExport.export(index, translations).isEmpty());
+		assertFalse(Files.exists(dir.resolve("game.psaro/romfs/data.cpk")));
 	}
 
 	@Test

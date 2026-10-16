@@ -235,7 +235,8 @@ public final class FontPatchDialog extends JDialog {
 
 	/** One line on what a patch would do, for the dialog and the button's tooltip. */
 	public static String summary(Plan plan) {
-		if (plan.fonts().isEmpty() && plan.layouts().isEmpty() && plan.images().isEmpty()) {
+		if (plan.fonts().isEmpty() && plan.layouts().isEmpty() && plan.images().isEmpty()
+				&& plan.cpks().stream().noneMatch(c -> c.changed() || c.hasWork() || !c.problems().isEmpty())) {
 			return "No font needs any glyphs, and no layout or image is changed.";
 		}
 		StringBuilder s = new StringBuilder();
@@ -254,6 +255,10 @@ public final class FontPatchDialog extends JDialog {
 			if (plan.imagesToWrite() > 0) {
 				parts.add(plan.imagesToWrite() + " image" + (plan.imagesToWrite() == 1 ? "" : "s") + " to write");
 			}
+			for (var c : plan.cpksToWrite()) {
+				parts.add(c.changed() ? c.cpk().getFileName() + " to rebuild with " + c.files().size() + " changed file"
+						+ (c.files().size() == 1 ? "" : "s") : c.cpk().getFileName() + " to remove from the patch");
+			}
 			s.append(String.join(", ", parts)).append(".");
 		} else {
 			s.append("The patched files are up to date.");
@@ -261,6 +266,13 @@ public final class FontPatchDialog extends JDialog {
 		Set<Integer> none = plan.unavailable();
 		if (!none.isEmpty()) {
 			s.append(" No font in the romfs has ").append(Fit.describe(none)).append(".");
+		}
+		List<String> unwritable = plan.unwritable();
+		if (!unwritable.isEmpty()) {
+			s.append(" ").append(unwritable.size()).append(unwritable.size() == 1 ? " string stays" : " strings stay")
+					.append(" in Japanese, as the game's files cannot hold ").append(unwritable.size() == 1 ? "it" : "them")
+					.append(": ").append(String.join("; ", unwritable.subList(0, Math.min(3, unwritable.size()))))
+					.append(unwritable.size() > 3 ? "; …" : "").append(".");
 		}
 		return s.toString();
 	}

@@ -89,4 +89,26 @@ class RecordsTest {
 		assertFalse(Records.is(java.util.Arrays.copyOf(truncated, truncated.length - 1)));
 		assertThrows(IllegalArgumentException.class, () -> Records.read(new byte[16]));
 	}
+
+	/**
+	 * English goes in each field, UTF-16 or Shift-JIS as the field is, using the zeros after the
+	 * string in every record as room; a field with a number right after it in some record holds
+	 * no more than reaches that number.
+	 */
+	@Test
+	void writesEachFieldWithinItsRoom() {
+		byte[] d = SampleRomfs.records(List.of(
+				SampleRomfs.record(0x80, 0, "rod00_00", Map.of(0x24, SampleRomfs.utf16("はじまりのつえ"), 0x50, SampleRomfs.shiftJis("つえ"),
+						0x60, new byte[] {7})),
+				SampleRomfs.record(0x80, 1, "rod00_01", Map.of(0x24, SampleRomfs.utf16("ほしのつえ"), 0x50, SampleRomfs.shiftJis("ほし"),
+						0x60, new byte[] {7}))));
+		byte[] out = Records.write(d, Map.of("rod00_00:0x24", "Starter Staff", "rod00_01:0x50", "Star rod"));
+		List<byte[]> records = Records.read(out);
+		assertEquals("Starter Staff", Records.string(records.get(0), new Records.Column(0x24, true)));
+		assertEquals("Star rod", Records.string(records.get(1), new Records.Column(0x50, false)));
+		assertEquals("ほしのつえ", Records.string(records.get(1), new Records.Column(0x24, true)));
+		assertEquals(7, records.get(1)[0x60], "the number after the field is kept");
+		assertThrows(IllegalArgumentException.class, () -> Records.write(d, Map.of("rod00_00:0x50", "A very long staff")));
+		assertThrows(IllegalArgumentException.class, () -> Records.write(d, Map.of("rod00_00:0x50", "Bâton")));
+	}
 }
