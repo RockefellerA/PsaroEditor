@@ -22,6 +22,11 @@ No game data is included or distributed. You need your own extracted romfs.
 
 <img width="979" height="651" alt="Psaro3" src="https://github.com/user-attachments/assets/81d2cf61-a7ad-405b-935c-0a61464704d9" />
 
+## DLC and Other Related Projects:
+* A DLC's romFS is its own project (it has its own title ID, `0004008C…`, and is exported to its own `luma/titles/<id>/romfs`), but it can borrow from the game's project.
+* If the title ID is known (from Export Patch, or from a romFS folder named for it) and is DLC, opening it offers to link the game. File -> Parent game... links, unlinks and imports at any time.
+* Import takes, only where the DLC has nothing of its own: English for strings with the same Japanese, pane links, text/placement changes for layouts both share, per-font patch settings and imported typefaces. The parent is never changed, so it can be repeated.
+
 ## Image Editing:
 * In addition to string replacement, image replacement is included as well via the Images... button.
 * In the Images editor, you can view all 2D and 3D model textures.

@@ -102,6 +102,33 @@ public final class PaneLinks {
 		save();
 	}
 
+	/** Every table's links, by table name and key, as saved; for carrying them to a related project. */
+	public synchronized Map<String, Map<String, List<PaneRef>>> all() {
+		Map<String, Map<String, List<PaneRef>>> copy = new TreeMap<>();
+		links.forEach((table, keys) -> copy.put(table, new TreeMap<>(keys)));
+		return copy;
+	}
+
+	/** Links each key of {@code byKey} in {@code table} to its panes in place of what it had, saving once. */
+	public synchronized void setMany(StringTable table, Map<String, List<PaneRef>> byKey) throws IOException {
+		if (byKey.isEmpty()) {
+			return;
+		}
+		Map<String, List<PaneRef>> linked = links.computeIfAbsent(table.name(), k -> new TreeMap<>());
+		byKey.forEach((key, panes) -> {
+			if (panes.isEmpty()) {
+				linked.remove(key);
+			} else {
+				linked.put(key, List.copyOf(panes));
+			}
+			index.link(table, key, panes);
+		});
+		if (linked.isEmpty()) {
+			links.remove(table.name());
+		}
+		save();
+	}
+
 	private void save() throws IOException {
 		if (links.isEmpty()) {
 			Files.deleteIfExists(file);
