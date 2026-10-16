@@ -11,7 +11,7 @@ No game data is included or distributed. You need your own extracted romfs.
 <img width="1393" height="973" alt="Psaro2" src="https://github.com/user-attachments/assets/aefb4c9c-a433-4ff2-a04c-05b2a3030bdd" />
 
 ## How to Use:
-* Open an existing romFS directory and it will scan for .tdt, .mdt, .csv, .bclyt files.
+* Open an existing romFS directory and it will scan for .tdt, .mdt, .csv, .dat, .bclyt files
 * Any changes made will be saved to a separate folder at the same level, leaving the existing romFS as-is.
 * Navigate through string tables on the left, and through strings inside of those tables on the right.
 * You can edit fonts, text pane attributes, the picture pane attributes (text pane borders, etc).
@@ -28,6 +28,11 @@ No game data is included or distributed. You need your own extracted romfs.
 * You will need to use the Patch dialog to then get them re-written into the .lz's.
 
 (Basically, if only strings were changed, use Save. If any images, panes, or fonts were edited, use the Patch window.)
+
+## Other Features
+* Luma Crash Dump parser - If any memory-related hardware issues appear, you can debug them with this.
+* Custom Font importing - The app comes packaged with a standard free replacement font I used for DQ Theatrythm, but you can add your own font families per project.
+* Light and dark modes supported.
 
 ### Acknowledgements
 The 3DS file formats PsaroEditor reads and writes (BCFNT, BCLYT, BCLIM, DARC, CGFX) are documented by the community at [3dbrew](https://www.3dbrew.org/), and Nintendo's LZ compression by Martin Korth's [GBATEK](https://problemkaputt.de/gbatek.htm). Thanks to their contributors.
