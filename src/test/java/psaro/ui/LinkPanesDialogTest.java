@@ -22,10 +22,11 @@ class LinkPanesDialogTest {
 
 	/**
 	 * Applying a string's panes to others starts with its data table column's strings that have no
-	 * links: not those of another column, not those linked already, not any of a message file's.
+	 * links, or the same links it has: not those of another column, not those linked otherwise, not
+	 * any of a message file's.
 	 */
 	@Test
-	void theSameColumnsUnlinkedStringsComeTicked() throws IOException {
+	void theSameColumnsUnlinkedOrAlikeStringsComeTicked() throws IOException {
 		Path romfs = dir.resolve("game");
 		SampleRomfs.table(romfs, "menu", Map.of("menu_0001", "はい"));
 		SampleRomfs.data(romfs, "JobTable", List.of("JOB001,戦士,せんし", "JOB002,魔法使い,まほうつかい", "JOB003,僧侶,そうりょ"));
@@ -35,11 +36,18 @@ class LinkPanesDialogTest {
 		RomfsIndex index = RomfsIndex.scan(romfs);
 		PaneLinks links = PaneLinks.open(index);
 		var jobs = index.table("table/JobTable");
-		links.set(jobs, "JOB003:1", List.of(new PaneRef("blyt/party_select_up.bclyt", "Txt_Job_Name")));
+		PaneRef name = new PaneRef("blyt/party_select_up.bclyt", "Txt_Job_Name");
+		links.set(jobs, "JOB003:1", List.of(name));
 
-		assertEquals(List.of("JOB002:1"), LinkPanesDialog.sameColumnUnlinked(jobs, "JOB001:1", links));
-		assertEquals(List.of("JOB002:2", "JOB003:2"), LinkPanesDialog.sameColumnUnlinked(jobs, "JOB001:2", links));
-		assertEquals(List.of(), LinkPanesDialog.sameColumnUnlinked(index.table("message/party_top"), "000", links));
+		assertEquals(List.of("JOB002:1"), LinkPanesDialog.sameColumnToTick(jobs, "JOB001:1", links));
+		assertEquals(List.of("JOB002:2", "JOB003:2"), LinkPanesDialog.sameColumnToTick(jobs, "JOB001:2", links));
+		assertEquals(List.of(), LinkPanesDialog.sameColumnToTick(index.table("message/party_top"), "000", links));
+
+		// a pane added to one of a column linked alike is meant for them all
+		links.set(jobs, "JOB001:1", List.of(name));
+		assertEquals(List.of("JOB002:1", "JOB003:1"), LinkPanesDialog.sameColumnToTick(jobs, "JOB001:1", links));
+		links.set(jobs, "JOB002:1", List.of(name, new PaneRef("blyt/party_select_up.bclyt", "Txt_Other")));
+		assertEquals(List.of("JOB003:1"), LinkPanesDialog.sameColumnToTick(jobs, "JOB001:1", links));
 	}
 
 	/**

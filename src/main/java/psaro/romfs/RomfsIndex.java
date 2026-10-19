@@ -30,13 +30,17 @@ import psaro.format.Bclim;
 import psaro.format.Bclyt;
 import psaro.format.Bcfnt;
 import psaro.format.Cgfx;
+import psaro.format.Comp;
 import psaro.format.Cpk;
 import psaro.format.Csv;
 import psaro.format.Darc;
 import psaro.format.FieldTable;
+import psaro.format.Glyphs;
 import psaro.format.Lz11;
 import psaro.format.MapScript;
+import psaro.format.Mbb;
 import psaro.format.Msgd;
+import psaro.format.Nbf;
 import psaro.format.Records;
 import psaro.format.Script;
 import psaro.format.Tdt;
@@ -76,6 +80,10 @@ import psaro.format.Thss;
  * the lines of each folder of map scripts ({@link MapScript}) as one script, keyed by file and
  * line ({@code ev000:03}).
  *
+ * <p>Lost Heroes keeps its text in {@code .mbb} message tables ({@link Mbb}), each named by its
+ * path ({@code Table/Event/Base/MainEventMess0901}); the scenes' {@code .cmp} bundles ({@link Nbf})
+ * carry copies of them, which {@link #bundles} finds so the English goes into those too.
+ *
  * <p>A DLC is read from a folder of content romfs folders, one per content of its CIA
  * ({@link #scanDlc}): each is read as a romfs would be, and also has the data tables at its top
  * read, plain or compressed ({@code contents.csv.lz}, a song's one row of records). Every content
@@ -103,9 +111,9 @@ public final class RomfsIndex {
 			return file.endsWith(MESSAGE_SUFFIX) ? Kind.MESSAGE : file.endsWith(DATA_SUFFIX) ? Kind.DATA : Kind.TABLE;
 		}
 
-		/** True for numbered strings the game draws from code: a message file ({@link Msgd}) or a script. */
+		/** True for numbered strings the game draws from code: a message file ({@link Msgd}, {@link Mbb}) or a script. */
 		public boolean message() {
-			return kind == Kind.MESSAGE || kind == Kind.SCRIPT;
+			return kind == Kind.MESSAGE || kind == Kind.SCRIPT || kind == Kind.MESSAGE_TABLE;
 		}
 
 		/** True for strings keyed by row and column: a data table ({@link Csv}) or a record table. */
@@ -134,6 +142,12 @@ public final class RomfsIndex {
 		RECORDS,
 		/** A {@code .dat} event script's lines ({@link Script}), keyed by entry number ({@code 004}). */
 		SCRIPT,
+		/**
+		 * A {@code .mbb} message table file's strings ({@link Mbb}), keyed by number ({@code 004}),
+		 * after its table's in a file of several ({@code 1:004}): Lost Heroes' text, all of it
+		 * drawn from code, its characters places in the game's font ({@link Glyphs}).
+		 */
+		MESSAGE_TABLE,
 		/**
 		 * The text text panes hold in their layouts, for panes the game shows it in: those with no
 		 * key, a key no table has, or in an archive with no table of its own. Keyed by
@@ -202,6 +216,11 @@ public final class RomfsIndex {
 	/** An archive's name ends with one of these: compressed, or as some games keep them, not. */
 	private static final List<String> ARCHIVE_SUFFIXES = List.of(".arc.lz", ".arc");
 	private static final String RECORD_SUFFIX = ".dat";
+	private static final String MESSAGE_TABLE_SUFFIX = ".mbb";
+	/** Lost Heroes' compressed files, most of them bundles of a scene's files ({@link Nbf}). */
+	private static final String BUNDLE_SUFFIX = ".cmp";
+	/** How much of a {@code .cmp} is read to learn what its bundle holds; the whole file when its entries run past it. */
+	private static final int BUNDLE_HEAD = 64 << 10;
 	private static final String CPK_SUFFIX = ".cpk";
 	/** In a CPK, the files text is read from besides a database, and a database's pointer list. */
 	private static final String CPK_TEXT_SUFFIX = ".bin";
@@ -245,6 +264,8 @@ public final class RomfsIndex {
 	private final List<Usage> textPanes;
 	/** By table name, where each table read from inside a CPK is. */
 	private final Map<String, Packed> packed;
+	/** Each bundle carrying a copy of a message table file, with the tables it carries ({@link #bundles}). */
+	private final Map<Path, List<StringTable>> bundles;
 	/** Every loose image, read on first use ({@link #looseImages}). */
 	private List<Image> looseImages;
 	private final List<Path> cpks;
@@ -261,8 +282,9 @@ public final class RomfsIndex {
 			List<Usage> unresolved, int layoutCount, Map<String, List<Path>> fontHomes,
 			Map<String, List<Path>> layoutHomes, Map<Shape, List<Shown>> shapes, List<Image> images,
 			Map<String, String> bodies, Map<String, Bclyt.Pane> tops, List<Usage> textPanes, Map<String, Packed> packed,
-			List<Path> cpks, List<Path> folders) {
+			Map<Path, List<StringTable>> bundles, List<Path> cpks, List<Path> folders) {
 		this.packed = packed;
+		this.bundles = bundles;
 		this.cpks = cpks;
 		this.folders = folders;
 		this.root = root;
@@ -298,13 +320,14 @@ public final class RomfsIndex {
 		}
 	}
 
-	/** A file {@link #scan} reads: a message file, a data table, an archive, a record file or a CPK. */
+	/** A file {@link #scan} reads: a message file, a data table, an archive, a record file, a message table file or a CPK. */
 	private static boolean readable(Path p) {
 		String name = p.getFileName() == null ? "" : p.getFileName().toString();
 		Path parent = p.getParent() == null ? null : p.getParent().getFileName();
 		String folder = parent == null ? "" : parent.toString();
 		return folder.equals("message") && name.endsWith(MESSAGE_SUFFIX) || folder.equals("table") && name.endsWith(DATA_SUFFIX)
 				|| archive(name) || name.endsWith(RECORD_SUFFIX) && Files.isRegularFile(p) && recordFile(p)
+				|| name.endsWith(MESSAGE_TABLE_SUFFIX) && Files.isRegularFile(p) && messageTableFile(p)
 				|| name.endsWith(CPK_SUFFIX) && Files.isRegularFile(p) && Cpk.is(p);
 	}
 
@@ -313,6 +336,16 @@ public final class RomfsIndex {
 		try (InputStream in = Files.newInputStream(file)) {
 			byte[] magic = in.readNBytes(4);
 			return magic.length == 4 && magic[0] == 'D' && magic[1] == 'A' && magic[2] == 'R' && magic[3] == 'C';
+		} catch (IOException unreadable) {
+			return false;
+		}
+	}
+
+	/** Whether {@code file} starts as a message table file does ({@link Mbb}), read no further than that. */
+	private static boolean messageTableFile(Path file) {
+		try (InputStream in = Files.newInputStream(file)) {
+			byte[] magic = in.readNBytes(4);
+			return magic.length == 4 && magic[0] == 'T' && magic[1] == 'B' && magic[2] == 'B' && magic[3] == '1';
 		} catch (IOException unreadable) {
 			return false;
 		}
@@ -444,6 +477,39 @@ public final class RomfsIndex {
 				tables.put(name, new StringTable(name, p, Collections.unmodifiableMap(strings), kind));
 			}
 		}
+		// message tables, named by their path; one with no strings is left out
+		for (Path p : found.messageTables()) {
+			String name = recordName(root, p, MESSAGE_TABLE_SUFFIX);
+			Map<String, String> strings;
+			try {
+				strings = Mbb.read(Files.readAllBytes(p), glyphs());
+			} catch (IllegalArgumentException | IndexOutOfBoundsException notMbb) {
+				continue;
+			}
+			if (!strings.isEmpty() && !tables.containsKey(name)) {
+				tables.put(name, new StringTable(name, p, Collections.unmodifiableMap(strings), Kind.MESSAGE_TABLE));
+			}
+		}
+		// the bundles carrying copies of them
+		Map<Path, List<StringTable>> bundles = new LinkedHashMap<>();
+		if (tables.values().stream().anyMatch(t -> t.kind() == Kind.MESSAGE_TABLE)) {
+			for (Map.Entry<Part, Found> in : foundIn.entrySet()) {
+				for (Path bundle : in.getValue().bundles()) {
+					List<StringTable> carried = new ArrayList<>();
+					for (String path : bundled(bundle)) {
+						StringTable t = path.endsWith(MESSAGE_TABLE_SUFFIX)
+								? tables.get(in.getKey().prefix() + path.substring(0, path.length() - MESSAGE_TABLE_SUFFIX.length()))
+								: null;
+						if (t != null && t.kind() == Kind.MESSAGE_TABLE) {
+							carried.add(t);
+						}
+					}
+					if (!carried.isEmpty()) {
+						bundles.put(bundle, List.copyOf(carried));
+					}
+				}
+			}
+		}
 		// the text inside each CPK, named by its path there
 		Map<String, Packed> packed = new HashMap<>();
 		for (Map.Entry<Part, Found> in : foundIn.entrySet()) {
@@ -548,7 +614,7 @@ public final class RomfsIndex {
 		shapes.replaceAll((shape, shown) -> List.copyOf(shown));
 		return new RomfsIndex(root, Collections.unmodifiableMap(tables), usages, List.copyOf(unresolved), layouts,
 				fontHomes, layoutHomes, shapes, List.copyOf(images), bodies, tops, List.copyOf(textPanes), Map.copyOf(packed),
-				List.copyOf(found.cpks()), parts.stream().map(Part::dir).toList());
+				Collections.unmodifiableMap(bundles), List.copyOf(found.cpks()), parts.stream().map(Part::dir).toList());
 	}
 
 	/** {@code file}'s name without the {@code .lz} a compressed file's name ends with. */
@@ -1095,8 +1161,9 @@ public final class RomfsIndex {
 		}
 	}
 
-	/** The archives, models, record files and CPKs under a root, each sorted. */
-	private record Found(List<Path> archives, List<Path> models, List<Path> records, List<Path> cpks) {
+	/** The archives, models, record files, message table files, bundles and CPKs under a root, each sorted. */
+	private record Found(List<Path> archives, List<Path> models, List<Path> records, List<Path> messageTables,
+			List<Path> bundles, List<Path> cpks) {
 
 		/** Everything found under several roots, in their order. */
 		static Found of(Collection<Found> all) {
@@ -1106,26 +1173,32 @@ public final class RomfsIndex {
 			List<Path> archives = new ArrayList<>();
 			List<Path> models = new ArrayList<>();
 			List<Path> records = new ArrayList<>();
+			List<Path> messageTables = new ArrayList<>();
+			List<Path> bundles = new ArrayList<>();
 			List<Path> cpks = new ArrayList<>();
 			for (Found f : all) {
 				archives.addAll(f.archives());
 				models.addAll(f.models());
 				records.addAll(f.records());
+				messageTables.addAll(f.messageTables());
+				bundles.addAll(f.bundles());
 				cpks.addAll(f.cpks());
 			}
-			return new Found(archives, models, records, cpks);
+			return new Found(archives, models, records, messageTables, bundles, cpks);
 		}
 	}
 
 	/**
-	 * Every archive, model, record file and CPK under {@code root}, leaving out any other romfs
-	 * nested inside it; a {@code .dat} only when it starts as a record file does, a {@code .cpk}
-	 * only when it starts as a CPK does.
+	 * Every archive, model, record file, message table file, {@code .cmp} and CPK under
+	 * {@code root}, leaving out any other romfs nested inside it; a {@code .dat} only when it starts
+	 * as a record file does, a {@code .mbb} as a message table file does, a {@code .cpk} as a CPK does.
 	 */
 	private static Found walk(Path root) throws IOException {
 		List<Path> archives = new ArrayList<>();
 		List<Path> models = new ArrayList<>();
 		List<Path> records = new ArrayList<>();
+		List<Path> messageTables = new ArrayList<>();
+		List<Path> bundles = new ArrayList<>();
 		List<Path> cpks = new ArrayList<>();
 		Files.walkFileTree(root, new SimpleFileVisitor<>() {
 			@Override
@@ -1142,6 +1215,10 @@ public final class RomfsIndex {
 					models.add(file);
 				} else if (name.endsWith(RECORD_SUFFIX) && recordFile(file)) {
 					records.add(file);
+				} else if (name.endsWith(MESSAGE_TABLE_SUFFIX) && messageTableFile(file)) {
+					messageTables.add(file);
+				} else if (name.endsWith(BUNDLE_SUFFIX)) {
+					bundles.add(file);
 				} else if (name.endsWith(CPK_SUFFIX) && Cpk.is(file)) {
 					cpks.add(file);
 				}
@@ -1151,8 +1228,10 @@ public final class RomfsIndex {
 		Collections.sort(archives);
 		Collections.sort(models);
 		Collections.sort(records);
+		Collections.sort(messageTables);
+		Collections.sort(bundles);
 		Collections.sort(cpks);
-		return new Found(archives, models, records, cpks);
+		return new Found(archives, models, records, messageTables, bundles, cpks);
 	}
 
 	/**
@@ -1263,6 +1342,49 @@ public final class RomfsIndex {
 	private static String recordName(Path root, Path file) {
 		String path = root.relativize(file).toString().replace('\\', '/');
 		return path.substring(0, path.length() - RECORD_SUFFIX.length());
+	}
+
+	/** A file's table name: its path from the root, without {@code suffix}, with forward slashes. */
+	private static String recordName(Path root, Path file, String suffix) {
+		String path = root.relativize(file).toString().replace('\\', '/');
+		return path.substring(0, path.length() - suffix.length());
+	}
+
+	/**
+	 * The paths of the files a {@code .cmp} bundle carries ({@link Nbf}), with forward slashes,
+	 * read from as little of it as holds them; none for a {@code .cmp} that holds no bundle or
+	 * cannot be read.
+	 */
+	private static List<String> bundled(Path file) {
+		try (InputStream in = Files.newInputStream(file)) {
+			byte[] start = in.readNBytes(BUNDLE_HEAD);
+			if (!Comp.is(start) || !Nbf.is(Comp.decompress(start, 16))) {
+				return List.of();
+			}
+			int size = Nbf.headerSize(Comp.decompress(start, 16));
+			byte[] head;
+			try {
+				head = Comp.decompress(start, size);
+			} catch (IndexOutOfBoundsException entriesRunOn) {
+				head = Comp.decompress(Files.readAllBytes(file), size);
+			}
+			return Nbf.paths(head);
+		} catch (IOException | IllegalArgumentException | IndexOutOfBoundsException unreadable) {
+			return List.of();
+		}
+	}
+
+	/** The characters of the message table files' text ({@link Mbb}): Lost Heroes', the one game that has them. */
+	public static Glyphs glyphs() {
+		return Glyphs.lostHeroes();
+	}
+
+	/**
+	 * Every {@code .cmp} bundle carrying a copy of a message table file ({@link Kind#MESSAGE_TABLE}),
+	 * with the tables whose files it carries, in path order.
+	 */
+	public Map<Path, List<StringTable>> bundles() {
+		return bundles;
 	}
 
 	/** A folder named {@code romfs}, or one with string tables of its own: a copy, not the game's. */

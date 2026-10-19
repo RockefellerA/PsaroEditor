@@ -99,6 +99,38 @@ class TextExportTest {
 		assertEquals(0, entry[0x60 + 0x44 + 3]);
 	}
 
+	/**
+	 * A message table file with English is written at its own path, and so is each bundle carrying
+	 * a copy of it, the copy with the English and the bundle's other files as they were. A save with
+	 * nothing new writes neither again; one with the English gone takes both away.
+	 */
+	@Test
+	void messageTablesAndTheBundlesCarryingThemAreWritten() throws IOException {
+		psaro.romfs.SampleRomfs.messageTables(romfs);
+		index = RomfsIndex.scan(romfs);
+		translations = Translations.open(index);
+		StringTable mess = index.table("Table/Event/Base/MainEventMess0901");
+		translations.set(mess, "001", "No way!");
+		Path loose = dir.resolve("game.psaro/romfs/Table/Event/Base/MainEventMess0901.mbb");
+		Path bundle = dir.resolve("game.psaro/romfs/Event/Base/Command/BASE_EVENT_Command0901_pk.cmp");
+		assertEquals(List.of(loose, bundle), TextExport.export(index, translations));
+
+		Map<String, String> english = Map.of("000", "はい", "001", "No way!");
+		assertEquals(english, psaro.format.Mbb.read(Files.readAllBytes(loose), RomfsIndex.glyphs()));
+		List<psaro.format.Nbf.Member> members = psaro.format.Nbf.read(psaro.format.Comp.decompress(Files.readAllBytes(bundle)));
+		assertEquals("Graph/Base/bg.gtx", members.get(0).name());
+		assertEquals(3, members.get(0).data().length);
+		assertEquals("Table\\Event\\Base\\MainEventMess0901.mbb", members.get(1).name());
+		assertEquals(english, psaro.format.Mbb.read(members.get(1).data(), RomfsIndex.glyphs()));
+		assertFalse(Files.exists(dir.resolve("game.psaro/romfs/Battle/Btl_Normal_pk.cmp")));
+
+		assertTrue(TextExport.export(index, translations).isEmpty(), "nothing new is written again");
+		translations.set(mess, "001", null);
+		TextExport.export(index, translations);
+		assertFalse(Files.exists(loose));
+		assertFalse(Files.exists(bundle));
+	}
+
 	/** A line its file cannot hold is named, and the other tables are written all the same. */
 	@Test
 	void textAFileCannotHoldIsNamed() throws IOException {

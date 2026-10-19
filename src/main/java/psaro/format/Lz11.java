@@ -25,6 +25,15 @@ public final class Lz11 {
 	}
 
 	public static byte[] decompress(byte[] data) {
+		return decompress(data, Integer.MAX_VALUE);
+	}
+
+	/**
+	 * The first {@code limit} bytes {@code data} decompresses to, or all of them when there are
+	 * fewer: a header read without unpacking the rest. Only the input those bytes need is read, so
+	 * {@code data} may be the start of the stream alone.
+	 */
+	public static byte[] decompress(byte[] data, int limit) {
 		if (!isCompressed(data)) {
 			throw new IllegalArgumentException("not LZ11 data");
 		}
@@ -34,6 +43,7 @@ public final class Lz11 {
 			size = u8(data, 4) | u8(data, 5) << 8 | u8(data, 6) << 16 | u8(data, 7) << 24;
 			pos = 8;
 		}
+		size = Math.min(size, limit);
 		byte[] out = new byte[size];
 		int o = 0;
 		while (o < size) {

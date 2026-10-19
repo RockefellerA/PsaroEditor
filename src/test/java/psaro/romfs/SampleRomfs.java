@@ -385,6 +385,86 @@ public final class SampleRomfs {
 		return concat(head.array(), body);
 	}
 
+	/**
+	 * A message table file ({@link psaro.format.Mbb}) of {@code tables}, each a list of strings in
+	 * Lost Heroes' characters ({@link psaro.format.Glyphs#lostHeroes}), null for a number with none.
+	 * With {@code backwards}, each table keeps its strings last number first, as some of the game's
+	 * files keep theirs out of order.
+	 */
+	public static byte[] mbb(List<List<String>> tables, boolean backwards) {
+		psaro.format.Glyphs glyphs = psaro.format.Glyphs.lostHeroes();
+		List<byte[]> blobs = new java.util.ArrayList<>();
+		for (List<String> strings : tables) {
+			int n = strings.size();
+			int list = (4 + 4 * n + 15) / 16 * 16;
+			ByteArrayOutputStream data = new ByteArrayOutputStream();
+			int[] offsets = new int[n];
+			for (int k = 0; k < n; k++) {
+				int i = backwards ? n - 1 - k : k;
+				if (strings.get(i) == null) {
+					continue;
+				}
+				offsets[i] = list + data.size();
+				int[] codes = glyphs.encode(strings.get(i));
+				ByteBuffer s = le((codes.length * 2 + 2 + 15) / 16 * 16);
+				for (int c : codes) {
+					s.putShort((short) c);
+				}
+				data.writeBytes(s.array());
+			}
+			ByteBuffer t = le(16 + list + data.size());
+			t.put("MTBL".getBytes(StandardCharsets.US_ASCII)).putInt(16).putInt(list + data.size()).putInt(n).putInt(0);
+			for (int o : offsets) {
+				t.putInt(o);
+			}
+			t.position(16 + list);
+			t.put(data.toByteArray());
+			blobs.add(t.array());
+		}
+		int head = (16 + 4 * tables.size() + 15) / 16 * 16;
+		int size = head + blobs.stream().mapToInt(b -> b.length).sum();
+		ByteBuffer f = le(size).put("TBB1".getBytes(StandardCharsets.US_ASCII)).putInt(16).putInt(tables.size()).putInt(size);
+		int at = head;
+		for (byte[] b : blobs) {
+			f.putInt(at);
+			at += b.length;
+		}
+		f.position(head);
+		for (byte[] b : blobs) {
+			f.put(b);
+		}
+		return f.array();
+	}
+
+	/**
+	 * A romfs laid out as Lost Heroes' is: {@code Table/Common/CommonMess.mbb} (Yes), and
+	 * {@code Table/Event/Base/MainEventMess0901.mbb} (はい, いいえ) with a copy of it in its scene's
+	 * bundle by a path with backslashes as many of the game's are, a bundle carrying none, and a
+	 * font, a {@code .cmp} that holds no bundle.
+	 */
+	public static void messageTables(Path romfs) throws IOException {
+		Files.createDirectories(romfs.resolve("Table/Common"));
+		Files.write(romfs.resolve("Table/Common/CommonMess.mbb"), mbb(List.of(List.of("Yes")), false));
+		byte[] mess = mbb(List.of(List.of("はい", "いいえ")), false);
+		Files.createDirectories(romfs.resolve("Table/Event/Base"));
+		Files.write(romfs.resolve("Table/Event/Base/MainEventMess0901.mbb"), mess);
+		Map<String, byte[]> scene = new LinkedHashMap<>();
+		scene.put("Graph/Base/bg.gtx", new byte[] {1, 2, 3});
+		scene.put("Table\\Event\\Base\\MainEventMess0901.mbb", mess);
+		bundle(romfs, "Event/Base/Command/BASE_EVENT_Command0901_pk.cmp", scene);
+		bundle(romfs, "Battle/Btl_Normal_pk.cmp", Map.of("Graph/Bat/bst.gtx", new byte[] {4}));
+		Files.createDirectories(romfs.resolve("Font"));
+		Files.write(romfs.resolve("Font/Font14.cmp"), psaro.format.Comp.compress("GFPT font sheets".getBytes(StandardCharsets.US_ASCII)));
+	}
+
+	/** A {@code .cmp} bundle ({@link psaro.format.Nbf}) at {@code path} carrying {@code members}, by their paths there. */
+	public static void bundle(Path romfs, String path, Map<String, byte[]> members) throws IOException {
+		List<psaro.format.Nbf.Member> list = new java.util.ArrayList<>();
+		members.forEach((name, data) -> list.add(new psaro.format.Nbf.Member(name, data)));
+		Files.createDirectories(romfs.resolve(path).getParent());
+		Files.write(romfs.resolve(path), psaro.format.Comp.compress(psaro.format.Nbf.write(list)));
+	}
+
 	private static ByteBuffer le(int size) {
 		return ByteBuffer.allocate(size).order(ByteOrder.LITTLE_ENDIAN);
 	}
