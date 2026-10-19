@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Map;
 import psaro.format.Csv;
 import psaro.format.Lz11;
+import psaro.format.Mbb;
 import psaro.format.Msgd;
 import psaro.format.Records;
 import psaro.format.Script;
@@ -23,9 +24,10 @@ import psaro.romfs.RomfsIndex.StringTable;
 /**
  * Writes the game's string tables with the English in them to {@code <romfs>.psaro/romfs/text},
  * its message files to {@code .../message}, its data tables to {@code .../table} and its record
- * files and scripts to their own paths, beside the patched archives, so that folder is a romfs
- * patch as it stands. The text layouts hold and the tables inside a CPK are written by the patch
- * instead ({@link FontPatcher}, {@link CpkPatch}). A table read from a compressed file is written
+ * files, scripts and message table files to their own paths, beside the patched archives, so that
+ * folder is a romfs patch as it stands; and the bundles carrying copies of message table files
+ * with those copies' English ({@link BundleExport}). The text layouts hold and the tables inside a
+ * CPK are written by the patch instead ({@link FontPatcher}, {@link CpkPatch}). A table read from a compressed file is written
  * compressed again, under the same name, as a DLC's {@code <content>/contents.csv.lz} is.
  *
  * <p>A table with English becomes a copy of its {@code .tdt} with each translated string
@@ -46,6 +48,7 @@ public final class TextExport {
 		Path output = FontPatcher.outputFor(index.root());
 		List<Path> written = new ArrayList<>();
 		List<String> problems = new ArrayList<>();
+		Map<StringTable, Map<String, String>> bundled = new LinkedHashMap<>();
 		for (StringTable table : index.tables()) {
 			if (table.builtIn() || index.packed(table) != null) {
 				// written by the patch: into the layouts, having no file of its own, or into a rebuilt CPK
@@ -71,6 +74,7 @@ public final class TextExport {
 					case DATA -> Csv.write(RomfsIndex.readTable(table.path()), strings);
 					case RECORDS -> Records.write(Files.readAllBytes(table.path()), strings);
 					case SCRIPT -> Script.write(Files.readAllBytes(table.path()), strings);
+					case MESSAGE_TABLE -> Mbb.write(Files.readAllBytes(table.path()), strings, RomfsIndex.glyphs());
 					default -> Tdt.write(strings);
 				};
 				if (RomfsIndex.compressed(table.path())) {
@@ -82,6 +86,9 @@ public final class TextExport {
 				problems.add(table.name() + " " + cannot.getMessage());
 				continue;
 			}
+			if (table.kind() == RomfsIndex.Kind.MESSAGE_TABLE) {
+				bundled.put(table, strings);
+			}
 			if (Files.isRegularFile(out) && Arrays.equals(bytes, Files.readAllBytes(out))) {
 				continue;
 			}
@@ -89,6 +96,7 @@ public final class TextExport {
 			write(out, bytes);
 			written.add(out);
 		}
+		written.addAll(BundleExport.export(index, bundled, output));
 		if (!problems.isEmpty()) {
 			throw new IOException("These tables could not be written, as their files cannot hold their English:\n"
 					+ String.join("\n", problems));

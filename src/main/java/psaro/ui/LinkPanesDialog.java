@@ -373,16 +373,21 @@ final class LinkPanesDialog extends JDialog {
 
 	/**
 	 * The strings of {@code table} besides {@code key} in its column that nothing is linked to yet,
-	 * in the table's order: for a data table, the cells of the same column ({@code dqc0102a:1}
-	 * beside {@code dqc0101a:1}); for any other table, none.
+	 * or that are linked to the same panes {@code key} is, in the table's order: for a data table,
+	 * the cells of the same column ({@code dqc0102a:1} beside {@code dqc0101a:1}); for any other
+	 * table, none. Those linked alike are the column linked in one go before, so a pane added to
+	 * one name is added to every name, not to the one alone.
 	 */
-	static List<String> sameColumnUnlinked(StringTable table, String key, PaneLinks links) {
+	static List<String> sameColumnToTick(StringTable table, String key, PaneLinks links) {
 		if (!table.data()) {
 			return List.of();
 		}
 		String column = column(key);
-		return table.strings().keySet().stream()
-				.filter(k -> !k.equals(key) && column(k).equals(column) && links.get(table, k).isEmpty()).toList();
+		Set<PaneRef> before = Set.copyOf(links.get(table, key));
+		return table.strings().keySet().stream().filter(k -> !k.equals(key) && column(k).equals(column)).filter(k -> {
+			List<PaneRef> linked = links.get(table, k);
+			return linked.isEmpty() || Set.copyOf(linked).equals(before);
+		}).toList();
 	}
 
 	private static String column(String key) {
@@ -407,7 +412,8 @@ final class LinkPanesDialog extends JDialog {
 	/**
 	 * Picks other strings of a table to link the same panes to: each with its Japanese and how
 	 * many panes it is linked to already, filtered by what is typed. A data table's strings in the
-	 * same column that nothing is linked to yet come ticked.
+	 * same column that nothing is linked to yet, or that are linked as the string asked about was,
+	 * come ticked.
 	 */
 	private static final class OtherStrings extends JDialog {
 
@@ -430,11 +436,13 @@ final class LinkPanesDialog extends JDialog {
 							+ (n == 0 ? "" : "   (linked to " + n + " pane" + (n == 1 ? "" : "s") + ")")));
 				}
 			});
-			picked.addAll(before != null ? before : sameColumnUnlinked(table, key, links));
+			picked.addAll(before != null ? before : sameColumnToTick(table, key, links));
 
 			JLabel help = new JLabel("<html>Tick the strings the game shows in the same panes as " + key + ". Pressing OK "
 					+ "in the panes window links its ticked panes to them too, in place of what they had."
-					+ (table.data() ? " The strings of the same column that are not linked yet come ticked." : "") + "</html>");
+					+ (table.data() ? " The strings of the same column that are not linked yet, or are linked to the same "
+							+ "panes " + key + " was, come ticked." : "")
+					+ "</html>");
 			help.setBorder(BorderFactory.createEmptyBorder(0, 0, 6, 0));
 			filter.putClientProperty(FlatClientProperties.PLACEHOLDER_TEXT, "Filter by key or Japanese");
 			filter.putClientProperty(FlatClientProperties.TEXT_FIELD_SHOW_CLEAR_BUTTON, true);

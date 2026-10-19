@@ -1390,8 +1390,8 @@ public final class FontPatcher {
 			}
 		}
 		wrote.addAll(rebuilt);
-		copyToMods(outputFiles(".arc.lz", ".arc", ".bcmdl", ".bcmdl.lz", ".bclim", ".bclim.lz", ".tdt", ".mdt", ".csv", ".dat"),
-				progress);
+		copyToMods(outputFiles(".arc.lz", ".arc", ".bcmdl", ".bcmdl.lz", ".bclim", ".bclim.lz", ".tdt", ".mdt", ".csv", ".dat",
+				".mbb", ".cmp"), progress);
 		copyToMods(rebuilt, progress);
 		return wrote;
 	}

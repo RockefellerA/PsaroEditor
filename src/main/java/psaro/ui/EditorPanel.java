@@ -837,6 +837,10 @@ public final class EditorPanel extends JPanel {
 				+ "the lines of the game's dialogue scenes and its numbered help texts, numbered by entry (a map script's "
 				+ "by file and line), with the tags the game acts on (&lt;chara02 w3 ef6&gt; who speaks and how, &lt;p&gt; "
 				+ "wait for a press). Save writes a *.dat; Patch rebuilds a *.cpk with its texts' English."),
+		MBB(RomfsIndex.Kind.MESSAGE_TABLE, ".mbb", "Message tables (*.mbb): Lost Heroes' text, numbered strings the game "
+				+ "draws from code, by number (after the table's in a file of several: 1:004). The game's commands show as four "
+				+ "hex digits in braces ({8074}) and are written back as they are. Save writes the *.mbb and every scene's "
+				+ "*.cmp bundle that carries a copy of it."),
 		BCLYT(RomfsIndex.Kind.BUILT_IN, ".bclyt", "Text the layouts hold themselves, which the game shows in "
 				+ "panes no table fills: no key, a key no table has, or an archive with no table of its own. "
 				+ "Keyed by layout and pane; Patch writes the English into the layouts.");
