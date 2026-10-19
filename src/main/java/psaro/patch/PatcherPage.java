@@ -19,9 +19,9 @@ import org.json.JSONObject;
  * player's own decrypted copy of whichever they pick (a CIA, or the game's .3ds) and hands back
  * the patched copy. It tells which title a copy is by its title id. The player's copy is read in
  * the page a piece at a time and never leaves their machine; the page holds nothing of the title
- * but the files the patch changes. Export patch writes it as a download of its own, the patcher
- * zip, beside the Luma3DS one; a DLC's page also goes in the Luma3DS zip, in {@link #FOLDER},
- * as a DLC has no other way to be patched.
+ * but the files the patch changes. Export patch as a patched CIA writes it as a download of its
+ * own, the patcher zip; as LayeredFS, a DLC's page goes in the zip, in {@link #FOLDER}, as a DLC
+ * has no other way to be patched.
  */
 public final class PatcherPage {
 

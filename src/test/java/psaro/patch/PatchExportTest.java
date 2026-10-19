@@ -186,6 +186,29 @@ class PatchExportTest {
 		assertFalse(ExportSettings.open(romfs).ownReadme());
 	}
 
+	/** How the patch is applied, and for a patched CIA what is made, are kept per project, with the added files. */
+	@Test
+	void theWayThePatchIsAppliedIsKeptForTheProject() throws IOException {
+		Path romfs = dir.resolve("game");
+		ExportSettings s = ExportSettings.open(romfs);
+		assertEquals(ExportSettings.Mode.LAYERED_FS, s.mode());
+		assertTrue(s.patcherDownload());
+		assertFalse(s.buildCopies());
+
+		Path ips = dir.resolve("fix/code.ips");
+		s.setExtras(List.of(new PatchExport.Extra(ips, PatchExport.defaultDestination(ips))));
+		s.setMode(ExportSettings.Mode.CIA, false, true);
+		ExportSettings again = ExportSettings.open(romfs);
+		assertEquals(ExportSettings.Mode.CIA, again.mode());
+		assertFalse(again.patcherDownload());
+		assertTrue(again.buildCopies());
+		assertEquals(1, again.extras().size(), "the added files are kept beside it");
+
+		// settings written before there was a way to choose read as LayeredFS
+		Files.writeString(dir.resolve("game.psaro/export.json"), "{\"extraFiles\": [], \"gamePatcher\": true}");
+		assertEquals(ExportSettings.Mode.LAYERED_FS, ExportSettings.open(romfs).mode());
+	}
+
 	@Test
 	void nothingPatchedYetIsNotExported() throws IOException {
 		Path patch = Files.createDirectories(dir.resolve("game.psaro/romfs"));

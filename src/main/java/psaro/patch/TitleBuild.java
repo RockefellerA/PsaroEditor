@@ -80,6 +80,16 @@ public final class TitleBuild {
 		return new Info(Format.CIA, cia.titleId(), cia.version());
 	}
 
+	/**
+	 * Where the patched copy of {@code base} goes: beside it, named as it is with "patched" for
+	 * "decrypted" (or after its name), with {@code format}'s extension.
+	 */
+	public static Path patchedPath(Path base, Format format) {
+		String stem = base.getFileName().toString().replaceFirst("(?i)\\.(cia|3ds|cci)$", "")
+				.replaceFirst("(?i)\\s*decrypted$", "");
+		return base.resolveSibling(stem + " patched" + format.extension);
+	}
+
 	private static boolean isNcsd(Path file) throws IOException {
 		try (InputStream in = Files.newInputStream(file)) {
 			return Ncsd.is(in.readNBytes(0x200));

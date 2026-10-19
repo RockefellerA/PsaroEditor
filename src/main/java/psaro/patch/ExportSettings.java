@@ -14,13 +14,23 @@ import psaro.patch.PatchExport.Extra;
 import psaro.project.Translations;
 
 /**
- * What Export patch packs besides the patch folder, per project: the readme, kept in
- * {@code <romfs>.psaro/patch-readme.txt} so it can be edited anywhere (the default readme while
- * there is none), and the files added to the zip, in {@code <romfs>.psaro/export.json}, each by
- * the path it is read from and its path in the zip, with whether a patcher download is written
- * beside it. A file is read when the zip is written, so the zip always has it as it is then.
+ * What Export patch was last told, per project: how the patch is applied ({@link Mode}); for
+ * LayeredFS, the readme, kept in {@code <romfs>.psaro/patch-readme.txt} so it can be edited
+ * anywhere (the default readme while there is none), and the files added to the zip, each by the
+ * path it is read from and its path in the zip; for a patched CIA, whether the patcher download is
+ * written and whether patched copies are built. All but the readme are in
+ * {@code <romfs>.psaro/export.json}. An added file is read when the zip is written, so the zip
+ * always has it as it is then.
  */
 public final class ExportSettings {
+
+	/** How players apply the patch. */
+	public enum Mode {
+		/** A zip of the patched files, which Luma3DS's game patching or Citra's mods folder lays over the game's romfs. */
+		LAYERED_FS,
+		/** The game and its DLC rebuilt with the patch in them ({@link TitleBuild}), by a patcher page or here. */
+		CIA
+	}
 
 	/** The readme's file in the project folder. */
 	public static final String README_FILE = "patch-readme.txt";
@@ -30,8 +40,11 @@ public final class ExportSettings {
 	private final Path file;
 	private String readme;
 	private List<Extra> extras = List.of();
-	/** Whether the zip's patcher page holds the game's files too ({@link PatcherPage}). */
-	private boolean gamePatcher;
+	private Mode mode = Mode.LAYERED_FS;
+	/** For a patched CIA: whether the patcher download is written ({@link PatcherPage}). */
+	private boolean patcherDownload = true;
+	/** For a patched CIA: whether patched copies are built from the decrypted copies chosen. */
+	private boolean buildCopies;
 
 	private ExportSettings(Path folder) {
 		this.readmeFile = folder.resolve(README_FILE);
@@ -48,7 +61,9 @@ public final class ExportSettings {
 		if (Files.isRegularFile(s.file)) {
 			try {
 				JSONObject json = new JSONObject(Files.readString(s.file, StandardCharsets.UTF_8));
-				s.gamePatcher = json.optBoolean("gamePatcher", false);
+				s.mode = json.optEnum(Mode.class, "mode", Mode.LAYERED_FS);
+				s.patcherDownload = json.optBoolean("patcherDownload", true);
+				s.buildCopies = json.optBoolean("buildCopies", false);
 				JSONArray files = json.optJSONArray("extraFiles");
 				List<Extra> read = new ArrayList<>();
 				for (int i = 0; files != null && i < files.length(); i++) {
@@ -106,18 +121,31 @@ public final class ExportSettings {
 		save();
 	}
 
-	/**
-	 * Whether Export patch also writes the patcher download beside the Luma3DS zip: the patcher page
-	 * ({@link PatcherPage}) with the game's patched files (and its DLC's), so players can build a
-	 * patched copy of the game instead of using Luma3DS's game patching. About as large as the patch.
-	 */
-	public synchronized boolean gamePatcher() {
-		return gamePatcher;
+	/** How players apply the patch, as last chosen. */
+	public synchronized Mode mode() {
+		return mode;
 	}
 
-	public synchronized void setGamePatcher(boolean on) throws IOException {
-		if (on != gamePatcher) {
-			gamePatcher = on;
+	/**
+	 * For a patched CIA: whether the patcher download is written, the patcher page ({@link PatcherPage})
+	 * with the game's patched files and its DLC's, for players to build their own patched copies. About
+	 * as large as the patch.
+	 */
+	public synchronized boolean patcherDownload() {
+		return patcherDownload;
+	}
+
+	/** For a patched CIA: whether patched copies are built here, from the decrypted copies chosen. */
+	public synchronized boolean buildCopies() {
+		return buildCopies;
+	}
+
+	/** Saves how the patch is applied and, for a patched CIA, what is made. */
+	public synchronized void setMode(Mode mode, boolean patcherDownload, boolean buildCopies) throws IOException {
+		if (mode != this.mode || patcherDownload != this.patcherDownload || buildCopies != this.buildCopies) {
+			this.mode = mode;
+			this.patcherDownload = patcherDownload;
+			this.buildCopies = buildCopies;
 			save();
 		}
 	}
@@ -127,9 +155,12 @@ public final class ExportSettings {
 		for (Extra e : extras) {
 			list.put(new JSONObject().put("source", e.source().toString()).put("destination", e.destination()));
 		}
-		JSONObject json = new JSONObject().put("extraFiles", list);
-		if (gamePatcher) {
-			json.put("gamePatcher", true);
+		JSONObject json = new JSONObject().put("extraFiles", list).put("mode", mode.name());
+		if (!patcherDownload) {
+			json.put("patcherDownload", false);
+		}
+		if (buildCopies) {
+			json.put("buildCopies", true);
 		}
 		Files.createDirectories(file.getParent());
 		Files.writeString(file, json.toString(2) + "\n", StandardCharsets.UTF_8);

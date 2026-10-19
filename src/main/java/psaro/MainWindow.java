@@ -49,7 +49,7 @@ import psaro.dialog.FontPatchDialog;
 import psaro.dialog.ImagesWindow;
 import psaro.dialog.OpenRomfsDialog;
 import psaro.patch.ImageEdits;
-import psaro.dialog.ExportPatchDialog;
+import psaro.dialog.ExportWizard;
 import psaro.dialog.FontsDialog;
 import psaro.dialog.PreferencesDialog;
 import psaro.format.Csv;
@@ -106,11 +106,9 @@ public final class MainWindow {
 	private final SearchBox search = new SearchBox();
 	/** Opens the font patch; lit while the patched fonts are behind the English. */
 	private final JButton patchButton = new JButton("Patch");
-	/** Packs the patch folder into a zip to hand out; once a romfs is open. */
+	/** Exports the game and its DLC for players, as LayeredFS files or patched CIAs; once a romfs is open. */
 	private final JMenuItem exportPatch = new JMenuItem("Export patch…");
 	private final JMenuItem fontsItem = new JMenuItem("Fonts…");
-	/** Builds a patched copy of the title in view from a decrypted copy of it ({@link TitleBuild}). */
-	private final JMenuItem buildItem = new JMenuItem("Build patched copy…");
 	/** Gives the DLC the game's English for its strings with the same Japanese; while the DLC is in view. */
 	private final JMenuItem fillFromGame = new JMenuItem("Fill DLC from game");
 	/** Set while a patch is being packed, one at a time. */
@@ -227,12 +225,6 @@ public final class MainWindow {
 		open.setToolTipText("Open a game's extracted romfs, or a DLC's content romfs folders beside the game open");
 		open.addActionListener(e -> chooseRomfs(OpenRomfsDialog.Kind.GAME));
 
-		buildItem.setMnemonic(KeyEvent.VK_B);
-		buildItem.setEnabled(false);
-		buildItem.setToolTipText("Build the game or DLC in view, patched, from your decrypted CIA (or the game's .3ds), to "
-				+ "install or play in place of the original");
-		buildItem.addActionListener(e -> buildCopy(active));
-
 		fillFromGame.setMnemonic(KeyEvent.VK_I);
 		fillFromGame.setEnabled(false);
 		fillFromGame.setToolTipText("Give the DLC's strings without English the game's English for the same Japanese");
@@ -244,8 +236,8 @@ public final class MainWindow {
 
 		exportPatch.setMnemonic(KeyEvent.VK_E);
 		exportPatch.setEnabled(false);
-		exportPatch.setToolTipText("Pack the patched files into a zip for players: Luma3DS's layout, with this project's "
-				+ "readme and any files it adds");
+		exportPatch.setToolTipText("Export the game and its DLC for players: as LayeredFS files for Luma3DS or Citra, or as "
+				+ "patched CIAs");
 		exportPatch.addActionListener(e -> exportPatch());
 
 		fontsItem.setMnemonic(KeyEvent.VK_N);
@@ -272,7 +264,6 @@ public final class MainWindow {
 		file.add(open);
 		file.add(save);
 		file.add(exportPatch);
-		file.add(buildItem);
 		file.addSeparator();
 		file.add(fontsItem);
 		file.add(fillFromGame);
@@ -947,38 +938,6 @@ public final class MainWindow {
 		return true;
 	}
 
-	/**
-	 * Export patch with the DLC in view. Its English is written into its contents' own files,
-	 * compressed as the DLC keeps them, in its patch folder; neither Luma3DS nor Citra lays those
-	 * over a DLC as it does a game's romfs, so it is patched by building its CIA again with them in
-	 * it ({@link #buildCopy}). Players get the same from the game's zip ({@link PatcherPage}).
-	 */
-	private void exportDlc() {
-		if (!save()) {
-			return;
-		}
-		exportText(dlc, false);
-		Path folder = dlc.patcher.output();
-		Object[] options = {"Build patched copy…", "Open folder", "Cancel"};
-		int choice = JOptionPane.showOptionDialog(frame, "The DLC's English is written into its contents' own files, "
-				+ "compressed as the DLC keeps them, in\n  " + folder
-				+ "\n\nLuma3DS patches only a game's own romfs, and Citra lays one mods folder over every content of a DLC "
-				+ "alike,\nso the DLC is patched by installing it again with these files in it, built from a decrypted CIA of "
-				+ "it\n(GodMode9 can build one from the DLC installed on a 3DS). Players get it from the game's patch: Export "
-				+ "patch\non the Game tab puts the patcher page in its zip.",
-				"Export patch", JOptionPane.YES_NO_CANCEL_OPTION, JOptionPane.INFORMATION_MESSAGE, null, options, options[0]);
-		if (choice == 1) {
-			try {
-				Files.createDirectories(folder);
-				java.awt.Desktop.getDesktop().open(folder.toFile());
-			} catch (IOException | UnsupportedOperationException e) {
-				error("Could not open " + folder + ":\n" + e.getMessage());
-			}
-		} else if (choice == 0) {
-			buildCopy(dlc);
-		}
-	}
-
 	/** The version of the title in {@code base} where it says (a CIA's TMD), else null; null for no base too. */
 	private static Integer versionOf(Path base) {
 		if (base == null || !Files.isRegularFile(base)) {
@@ -991,183 +950,32 @@ public final class MainWindow {
 		}
 	}
 
-	/** The game's title id as the export was given it, upper-cased, or null when none was. */
-	private String gameTitleId() {
-		String id = game == null ? null : game.patcher.settings().titleId();
-		return PatchExport.isTitleId(id) ? id.toUpperCase(java.util.Locale.ROOT) : null;
-	}
-
-	/** The DLC's title id: the game's with DLC's category ({@code 0004008C}), or null when the game's is not known. */
-	private String dlcTitleId() {
-		String id = gameTitleId();
-		return id == null ? null : "0004008C" + id.substring(8);
-	}
-
 	/**
-	 * File → Build patched copy: {@code p}'s title (the game, or its DLC) built from a decrypted
-	 * copy of it with the patch in it ({@link TitleBuild}), to install or play in place of the
-	 * original: a CIA from a CIA, a .3ds from the game's .3ds.
-	 */
-	private void buildCopy(Project p) {
-		if (p == null || exporting || !save()) {
-			return;
-		}
-		exportText(p, false);
-		boolean isDlc = p == dlc;
-		String what = isDlc ? "DLC" : "game";
-		if (!isDlc && plan != null && plan.hasWork()) {
-			Object[] options = {"Patch first", "Build anyway", "Cancel"};
-			int choice = JOptionPane.showOptionDialog(frame, "The fonts or layouts have changed since the last patch, so the "
-					+ "files to build with are behind.\n" + FontPatchDialog.summary(plan), "Build patched copy",
-					JOptionPane.YES_NO_CANCEL_OPTION, JOptionPane.WARNING_MESSAGE, null, options, options[0]);
-			if (choice == 0) {
-				openPatch();
-				return;
-			}
-			if (choice != 1) {
-				return;
-			}
-		}
-		Path base = chooseBase(p, what);
-		if (base == null) {
-			return;
-		}
-		TitleBuild.Info info;
-		try {
-			info = TitleBuild.info(base);
-		} catch (IOException e) {
-			error("Could not read " + base.getFileName() + ":\n" + e.getMessage());
-			return;
-		}
-		if (isDlc && info.format() != TitleBuild.Format.CIA) {
-			error(base.getFileName() + " is a game card's image; a DLC comes only as a CIA.");
-			return;
-		}
-		String expected = isDlc ? dlcTitleId() : gameTitleId();
-		if (expected != null && !expected.equals(info.id()) && JOptionPane.showConfirmDialog(frame, base.getFileName()
-				+ " is title " + info.id() + ", but the " + what + " is " + expected + ".\nBuild from it anyway?",
-				"Build patched copy", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE) != JOptionPane.YES_OPTION) {
-			return;
-		}
-		String ext = info.format().extension;
-		String stem = base.getFileName().toString().replaceFirst("(?i)\\.(cia|3ds|cci)$", "").replaceFirst("(?i)\\s*decrypted$", "");
-		JFileChooser chooser = new JFileChooser(base.getParent() == null ? null : base.getParent().toFile());
-		chooser.setDialogTitle("Build patched copy of the " + what);
-		chooser.setSelectedFile(new java.io.File(stem + " patched" + ext));
-		chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("*" + ext, ext.substring(1)));
-		if (chooser.showSaveDialog(frame) != JFileChooser.APPROVE_OPTION) {
-			return;
-		}
-		Path out = chooser.getSelectedFile().toPath();
-		if (!out.getFileName().toString().toLowerCase(java.util.Locale.ROOT).endsWith(ext)) {
-			out = out.resolveSibling(out.getFileName() + ext);
-		}
-		if (same(out, base)) {
-			error("Build the patched copy beside the decrypted one, not over it: it is what the next build starts from.");
-			return;
-		}
-		if (Files.exists(out) && JOptionPane.showConfirmDialog(frame, out.getFileName() + " exists. Replace it?",
-				"Build patched copy", JOptionPane.YES_NO_OPTION) != JOptionPane.YES_OPTION) {
-			return;
-		}
-		Path target = out;
-		Path folder = p.patcher.output();
-		exporting = true;
-		refresh();
-		status.setText("Building " + target.getFileName() + "…");
-		new SwingWorker<TitleBuild.Result, Integer>() {
-			@Override
-			protected TitleBuild.Result doInBackground() throws IOException {
-				var files = isDlc ? TitleBuild.dlcFiles(folder) : TitleBuild.gameFiles(folder);
-				int[] shown = {-1};
-				return TitleBuild.build(base, files, target, share -> {
-					int percent = (int) (share * 100);
-					if (percent != shown[0]) {
-						shown[0] = percent;
-						publish(percent);
-					}
-				});
-			}
-
-			@Override
-			protected void process(List<Integer> percents) {
-				status.setText("Building " + target.getFileName() + "… " + percents.get(percents.size() - 1) + "%");
-			}
-
-			@Override
-			protected void done() {
-				exporting = false;
-				refresh();
-				try {
-					TitleBuild.Result r = get();
-					String use = r.format() == TitleBuild.Format.THREE_DS
-							? "Play it in Citra, or have GodMode9 build a CIA from it to install on a 3DS."
-							: "Install it in place of the " + what + ": with FBI on a 3DS with Luma3DS, or in Citra with File → Install CIA.";
-					JOptionPane.showMessageDialog(frame, String.format(java.util.Locale.ROOT,
-							"Built %s (%.1f MB): %,d %s rebuilt with %,d patched %s.%n%n%s%n%s",
-							target, r.bytes() / 1048576.0, r.contents(), r.contents() == 1 ? "content" : "contents", r.files(),
-							r.files() == 1 ? "file" : "files", use,
-							isDlc ? "Keep the decrypted CIA to put the DLC back as it was."
-									: "It needs no Luma3DS game patching: remove the game's luma/titles romfs folder when you use it."),
-							"Build patched copy", JOptionPane.INFORMATION_MESSAGE);
-				} catch (ExecutionException e) {
-					error("Could not build the patched copy:\n" + e.getCause().getMessage());
-				} catch (InterruptedException e) {
-					Thread.currentThread().interrupt();
-				}
-			}
-		}.execute();
-	}
-
-	/**
-	 * The decrypted copy of {@code p}'s title to build from: the one chosen last time, or one chosen
-	 * now and remembered in its project ({@link BuildBase}). Null when none is chosen.
-	 */
-	private Path chooseBase(Project p, String what) {
-		Path last = BuildBase.of(p.dir);
-		JFileChooser chooser = new JFileChooser(last != null && last.getParent() != null ? last.getParent().toFile() : null);
-		chooser.setDialogTitle("Your decrypted copy of the " + what + ", to build from");
-		chooser.setFileFilter(p == dlc ? new javax.swing.filechooser.FileNameExtensionFilter("CIA (*.cia)", "cia")
-				: new javax.swing.filechooser.FileNameExtensionFilter("CIA or .3ds (*.cia, *.3ds, *.cci)", "cia", "3ds", "cci"));
-		if (last != null && Files.isRegularFile(last)) {
-			chooser.setSelectedFile(last.toFile());
-		}
-		if (chooser.showOpenDialog(frame) != JFileChooser.APPROVE_OPTION) {
-			return null;
-		}
-		Path base = chooser.getSelectedFile().toPath();
-		try {
-			BuildBase.set(p.dir, base);
-		} catch (IOException e) {
-			// chosen again next time; the build goes ahead
-		}
-		return base;
-	}
-
-	/**
-	 * Packs the patch folder into a zip for players ({@link PatchExport}): the English saved and
-	 * its tables written first, a patch that is behind offered first, then the project's title id,
-	 * readme and added files shown to change ({@link ExportPatchDialog}), which are kept whether or
-	 * not it goes on to export.
+	 * File → Export patch: the game and its DLC together, whichever is in view; the English saved and
+	 * its tables written first, and a font patch that is behind offered first. Then how players apply
+	 * the patch is chosen ({@link ExportWizard}), with what follows from it: the patched files for
+	 * LayeredFS in a zip ({@link #exportLayeredFs}), or patched CIAs ({@link #exportCia}). What is
+	 * chosen is kept whether or not it goes on to export.
 	 */
 	private void exportPatch() {
-		if (patcher == null) {
+		if (game == null || exporting || !save()) {
 			return;
 		}
-		if (active == dlc) {
-			exportDlc();
-			return;
+		exportText(game, false);
+		if (dlc != null) {
+			exportText(dlc, false);
 		}
-		if (!save()) {
-			return;
-		}
-		exportText(active, false);
-		if (plan != null && plan.hasWork()) {
+		// the game's fonts are the DLC's too, so the game's plan is the one that counts
+		Plan gamePlan = fontProject() == game ? plan : game.plan;
+		if (gamePlan != null && gamePlan.hasWork()) {
 			Object[] options = {"Patch first", "Export anyway", "Cancel"};
 			int choice = JOptionPane.showOptionDialog(frame, "The fonts or layouts have changed since the last patch, "
-					+ "so the files to export are behind.\n" + FontPatchDialog.summary(plan), "Export patch",
+					+ "so the files to export are behind.\n" + FontPatchDialog.summary(gamePlan), "Export patch",
 					JOptionPane.YES_NO_CANCEL_OPTION, JOptionPane.WARNING_MESSAGE, null, options, options[0]);
 			if (choice == 0) {
+				if (fontProject() != game) {
+					showProject(game);
+				}
 				openPatch();
 				return;
 			}
@@ -1175,21 +983,22 @@ public final class MainWindow {
 				return;
 			}
 		}
-		PatchSettings settings = patcher.settings();
+		PatchSettings settings = game.patcher.settings();
 		String known = settings.titleId();
 		if (known == null && settings.modsFolder() != null) {
 			known = PatchExport.titleIdFrom(settings.modsFolder());
 		}
 		ExportSettings exportSettings;
 		try {
-			exportSettings = ExportSettings.open(index.root());
+			exportSettings = ExportSettings.open(game.index.root());
 		} catch (IOException e) {
 			error("Could not read the export settings:\n" + e.getMessage());
 			return;
 		}
-		ExportPatchDialog dialog = new ExportPatchDialog(frame, exportSettings, patcher.output(), known);
-		dialog.setVisible(true);
-		String id = dialog.titleId();
+		ExportWizard wizard = new ExportWizard(frame, exportSettings, game.patcher.output(), known, dlc != null,
+				BuildBase.of(game.dir), dlc == null ? null : BuildBase.of(dlc.dir));
+		wizard.setVisible(true);
+		String id = wizard.titleId();
 		if (PatchExport.isTitleId(id) && !id.equals(settings.titleId())) {
 			try {
 				settings.setTitleId(id);
@@ -1197,92 +1006,73 @@ public final class MainWindow {
 				// remembered next time only; the export goes ahead
 			}
 		}
-		if (!dialog.exportChosen()) {
+		remember(game, wizard.base(false));
+		if (dlc != null) {
+			remember(dlc, wizard.base(true));
+		}
+		if (!wizard.exportChosen()) {
 			return;
 		}
-		String readme = dialog.readme();
-		List<PatchExport.Extra> extras = new ArrayList<>(dialog.extras());
-		// the patcher page: the DLC's files whenever it has English, the game's when the export says so
-		boolean withGame = exportSettings.gamePatcher();
-		Path dlcFolder = null;
-		if (dlc != null) {
-			exportText(dlc, false);
-			dlcFolder = dlc.patcher.output();
+		if (wizard.mode() == ExportSettings.Mode.LAYERED_FS) {
+			exportLayeredFs(id, wizard.readme(), wizard.extras());
+		} else {
+			exportCia(id, wizard.patcherDownload(), wizard.builds());
 		}
-		Path dlcBase = dlc == null ? null : BuildBase.of(dlc.dir);
-		Path gameBase = BuildBase.of(game.dir);
-		Path pageFolder = Translations.folderFor(game.dir).resolve("export");
-		String pageName = index.root().getFileName() + " patcher";
-		JFileChooser chooser = new JFileChooser(Translations.folderFor(index.root()).getParent().toFile());
+	}
+
+	/** Remembers {@code base} as the decrypted copy {@code p}'s title builds from, when one was given. */
+	private static void remember(Project p, Path base) {
+		if (base == null || base.toAbsolutePath().normalize().equals(BuildBase.of(p.dir))) {
+			return;
+		}
+		try {
+			BuildBase.set(p.dir, base);
+		} catch (IOException e) {
+			// given again next time; the export goes ahead
+		}
+	}
+
+	/**
+	 * Packs the game's patch folder into a zip for players ({@link PatchExport}), laid out for
+	 * Luma3DS's game patching, with {@code readme} and the {@code extras} added; and, the DLC having
+	 * no other way to be patched, the DLC's patcher page ({@link PatcherPage}) when it has English.
+	 */
+	private void exportLayeredFs(String titleId, String readme, List<PatchExport.Extra> extras) {
+		Path root = game.index.root();
+		JFileChooser chooser = new JFileChooser(Translations.folderFor(root).getParent().toFile());
 		chooser.setDialogTitle("Export patch");
-		chooser.setSelectedFile(new java.io.File(index.root().getFileName() + " patch.zip"));
+		chooser.setSelectedFile(new java.io.File(root.getFileName() + " patch.zip"));
 		chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("Zip archive (*.zip)", "zip"));
 		if (chooser.showSaveDialog(frame) != JFileChooser.APPROVE_OPTION) {
 			return;
 		}
-		Path zip = chooser.getSelectedFile().toPath();
-		if (!zip.getFileName().toString().toLowerCase(java.util.Locale.ROOT).endsWith(".zip")) {
-			zip = zip.resolveSibling(zip.getFileName() + ".zip");
-		}
-		if (Files.exists(zip) && JOptionPane.showConfirmDialog(frame, zip.getFileName() + " exists. Replace it?",
+		Path target = zipPath(chooser.getSelectedFile().toPath());
+		if (Files.exists(target) && JOptionPane.showConfirmDialog(frame, target.getFileName() + " exists. Replace it?",
 				"Export patch", JOptionPane.YES_NO_OPTION) != JOptionPane.YES_OPTION) {
 			return;
 		}
-		Path target = zip;
-		// the patcher download beside it: "<name> patch.zip" gives "<name> patcher.zip"
-		String stem = zip.getFileName().toString().replaceFirst("(?i)\\.zip$", "").replaceFirst("(?i)\\s*patch$", "");
-		Path patcherZip = withGame ? zip.resolveSibling(stem + " patcher.zip") : null;
-		if (patcherZip != null && Files.exists(patcherZip) && !same(patcherZip, zip)
-				&& JOptionPane.showConfirmDialog(frame, patcherZip.getFileName() + " exists. Replace it?", "Export patch",
-						JOptionPane.YES_NO_OPTION) != JOptionPane.YES_OPTION) {
-			return;
-		}
-		String titleId = id.toUpperCase(java.util.Locale.ROOT);
-		// the game's, whichever tab is in view by the time it runs
-		Path patchFolder = patcher.output();
-		Path dlcPatch = dlcFolder;
+		Path patchFolder = game.patcher.output();
+		Path dlcPatch = dlc == null ? null : dlc.patcher.output();
+		Path dlcBase = dlc == null ? null : BuildBase.of(dlc.dir);
+		Path pageFolder = Translations.folderFor(game.dir).resolve("export");
+		String pageName = root.getFileName() + " patcher";
 		exporting = true;
 		refresh();
 		status.setText("Exporting " + target.getFileName() + "…");
 		boolean[] dlcPage = {false};
-		long[] patcherBytes = {0};
 		new SwingWorker<PatchExport.Result, Void>() {
 			@Override
 			protected PatchExport.Result doInBackground() throws IOException {
-				PatcherPage.Title dlcTitle = dlcPatch == null ? null : new PatcherPage.Title(PatcherPage.Kind.DLC,
-						"0004008C" + titleId.substring(8), versionOf(dlcBase), TitleBuild.dlcFiles(dlcPatch));
-				// the Luma3DS download, with the DLC's page, the DLC having no other way to be patched
 				List<PatchExport.Extra> all = new ArrayList<>(extras);
-				PatcherPage.Written forDlc = dlcTitle == null ? null
-						: PatcherPage.write(pageFolder.resolve("luma"), pageName, List.of(dlcTitle));
+				PatcherPage.Written forDlc = dlcPatch == null ? null : PatcherPage.write(pageFolder.resolve("luma"), pageName,
+						List.of(dlcTitle(titleId, dlcPatch, dlcBase)));
+				String text = PatchExport.withoutFooter(readme).stripTrailing();
 				if (forDlc != null) {
 					all.addAll(PatcherPage.inFolder(forDlc));
 					dlcPage[0] = true;
-				}
-				String text = PatchExport.withoutFooter(readme).stripTrailing();
-				if (patcherZip != null) {
-					text += "\n\nThere is also a patcher download, " + patcherZip.getFileName() + ", for building a patched copy of "
-							+ "the game to install or play instead of using Luma3DS game patching.";
-				}
-				if (forDlc != null) {
 					text += "\n\nThe DLC is patched by building a patched copy of it: see " + PatcherPage.FOLDER + "/README.txt.";
 				}
-				PatchExport.Result r = PatchExport.write(patchFolder, titleId, text + "\n", all, target, step -> { });
-				// the patcher download: the page, for the game and the DLC, and its readme
-				if (patcherZip != null) {
-					List<PatcherPage.Title> titles = new ArrayList<>();
-					titles.add(new PatcherPage.Title(PatcherPage.Kind.GAME, titleId, versionOf(gameBase), TitleBuild.gameFiles(patchFolder)));
-					if (dlcTitle != null) {
-						titles.add(dlcTitle);
-					}
-					PatcherPage.Written page = PatcherPage.write(pageFolder.resolve("patcher"), pageName, titles);
-					if (page != null) {
-						PatchExport.writeFiles(titleId, page.readme(), List.of(new PatchExport.Extra(page.page(), PatcherPage.PAGE)),
-								patcherZip);
-						patcherBytes[0] = Files.size(patcherZip);
-					}
-				}
-				return r;
+				return PatchExport.write(patchFolder, titleId, text + "\n", all, target, step -> { });
 			}
 
 			@Override
@@ -1291,24 +1081,135 @@ public final class MainWindow {
 				refresh();
 				try {
 					PatchExport.Result r = get();
-					String also = (patcherBytes[0] > 0 ? String.format(java.util.Locale.ROOT,
-							"%n%nAnd the patcher download, %s (%.1f MB): players open its %s in a browser to build a patched copy of "
-									+ "%s from their own.", patcherZip.getFileName(), patcherBytes[0] / 1048576.0, PatcherPage.PAGE,
-							dlcPatch != null ? "the game or its DLC" : "the game") : "")
-							+ (dlcPage[0] ? "\n\nThe DLC's page is in the Luma3DS zip too, in " + PatcherPage.FOLDER + "/." : "");
 					JOptionPane.showMessageDialog(frame, String.format(java.util.Locale.ROOT,
 							"Packed %,d files%s (%.1f MB) into %s,%nlaid out for Luma3DS under luma/titles/%s/romfs/, "
 									+ "with the readme.", r.files(),
 							r.extras() == 0 ? "" : String.format(java.util.Locale.ROOT, " and %,d added %s", r.extras(),
 									r.extras() == 1 ? "file" : "files"),
-							r.bytes() / 1048576.0, target, titleId) + also, "Export patch", JOptionPane.INFORMATION_MESSAGE);
-				} catch (java.util.concurrent.ExecutionException e) {
+							r.bytes() / 1048576.0, target, titleId)
+							+ (dlcPage[0] ? "\n\nThe DLC's patcher page is in it too, in " + PatcherPage.FOLDER + "/." : ""),
+							"Export patch", JOptionPane.INFORMATION_MESSAGE);
+				} catch (ExecutionException e) {
 					error("Could not export the patch:\n" + e.getCause().getMessage());
 				} catch (InterruptedException e) {
 					Thread.currentThread().interrupt();
 				}
 			}
 		}.execute();
+	}
+
+	/**
+	 * Exports the patch as patched CIAs: with {@code patcherDownload}, the patcher download, the
+	 * patcher page ({@link PatcherPage}) with the game's patched files and its DLC's, for players to
+	 * build their own; and each of {@code builds}, a patched copy built here ({@link TitleBuild}).
+	 */
+	private void exportCia(String titleId, boolean patcherDownload, List<ExportWizard.Build> builds) {
+		Path root = game.index.root();
+		Path patcherZip = null;
+		if (patcherDownload) {
+			JFileChooser chooser = new JFileChooser(Translations.folderFor(root).getParent().toFile());
+			chooser.setDialogTitle("Export patch: the patcher download");
+			chooser.setSelectedFile(new java.io.File(root.getFileName() + " patcher.zip"));
+			chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("Zip archive (*.zip)", "zip"));
+			if (chooser.showSaveDialog(frame) != JFileChooser.APPROVE_OPTION) {
+				return;
+			}
+			patcherZip = zipPath(chooser.getSelectedFile().toPath());
+			if (Files.exists(patcherZip) && JOptionPane.showConfirmDialog(frame, patcherZip.getFileName()
+					+ " exists. Replace it?", "Export patch", JOptionPane.YES_NO_OPTION) != JOptionPane.YES_OPTION) {
+				return;
+			}
+		}
+		Path zip = patcherZip;
+		Path gameFolder = game.patcher.output();
+		Path dlcPatch = dlc == null ? null : dlc.patcher.output();
+		Path gameBase = BuildBase.of(game.dir);
+		Path dlcBase = dlc == null ? null : BuildBase.of(dlc.dir);
+		Path pageFolder = Translations.folderFor(game.dir).resolve("export");
+		String pageName = root.getFileName() + " patcher";
+		exporting = true;
+		refresh();
+		status.setText("Exporting…");
+		// what was written, a paragraph each, for the summary (or with what stopped it)
+		List<String> wrote = java.util.Collections.synchronizedList(new ArrayList<>());
+		new SwingWorker<Void, String>() {
+			@Override
+			protected Void doInBackground() throws IOException {
+				if (zip != null) {
+					publish("Writing " + zip.getFileName() + "…");
+					List<PatcherPage.Title> titles = new ArrayList<>();
+					titles.add(new PatcherPage.Title(PatcherPage.Kind.GAME, titleId, versionOf(gameBase),
+							TitleBuild.gameFiles(gameFolder)));
+					if (dlcPatch != null) {
+						titles.add(dlcTitle(titleId, dlcPatch, dlcBase));
+					}
+					PatcherPage.Written page = PatcherPage.write(pageFolder.resolve("patcher"), pageName, titles);
+					if (page == null) {
+						throw new IOException("There is nothing patched to put in the patcher download yet: save some English first.");
+					}
+					PatchExport.writeFiles(titleId, page.readme(), List.of(new PatchExport.Extra(page.page(), PatcherPage.PAGE)),
+							zip);
+					wrote.add(String.format(java.util.Locale.ROOT, "The patcher download, %s (%.1f MB): players open its %s in "
+							+ "a browser to build a patched copy of %s from their own.", zip, Files.size(zip) / 1048576.0,
+							PatcherPage.PAGE, dlcPatch != null ? "the game or its DLC" : "the game"));
+				}
+				for (ExportWizard.Build b : builds) {
+					String what = b.dlc() ? "DLC" : "game";
+					var files = b.dlc() ? TitleBuild.dlcFiles(dlcPatch) : TitleBuild.gameFiles(gameFolder);
+					int[] shown = {-1};
+					TitleBuild.Result r = TitleBuild.build(b.base(), files, b.out(), share -> {
+						int percent = (int) (share * 100);
+						if (percent != shown[0]) {
+							shown[0] = percent;
+							publish("Building " + b.out().getFileName() + "… " + percent + "%");
+						}
+					});
+					String use = r.format() == TitleBuild.Format.THREE_DS
+							? "Play it in Citra, or have GodMode9 build a CIA from it to install on a 3DS."
+							: "Install it in place of the " + what + ": with FBI on a 3DS with Luma3DS, or in Citra with File → Install CIA.";
+					wrote.add(String.format(java.util.Locale.ROOT, "The patched %s, %s (%.1f MB): %,d %s rebuilt with %,d patched "
+							+ "%s. %s %s", what, b.out(), r.bytes() / 1048576.0, r.contents(),
+							r.contents() == 1 ? "content" : "contents", r.files(), r.files() == 1 ? "file" : "files", use,
+							b.dlc() ? "Keep the decrypted CIA to put the DLC back as it was."
+									: "It needs no Luma3DS game patching: remove the game's luma/titles romfs folder when you use it."));
+				}
+				return null;
+			}
+
+			@Override
+			protected void process(List<String> steps) {
+				status.setText(steps.get(steps.size() - 1));
+			}
+
+			@Override
+			protected void done() {
+				exporting = false;
+				refresh();
+				String summary = String.join("\n\n", wrote);
+				try {
+					get();
+					JOptionPane.showMessageDialog(frame, "Exported:\n\n" + summary, "Export patch",
+							JOptionPane.INFORMATION_MESSAGE);
+				} catch (ExecutionException e) {
+					error((summary.isEmpty() ? "" : "Exported:\n\n" + summary + "\n\n") + "Could not finish the export:\n"
+							+ e.getCause().getMessage());
+				} catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+				}
+			}
+		}.execute();
+	}
+
+	/** The DLC as the patcher page takes it: its title id, from the game's, and its patched files. */
+	private static PatcherPage.Title dlcTitle(String gameId, Path dlcPatch, Path dlcBase) throws IOException {
+		return new PatcherPage.Title(PatcherPage.Kind.DLC, "0004008C" + gameId.substring(8), versionOf(dlcBase),
+				TitleBuild.dlcFiles(dlcPatch));
+	}
+
+	/** {@code chosen}, ending .zip. */
+	private static Path zipPath(Path chosen) {
+		return chosen.getFileName().toString().toLowerCase(java.util.Locale.ROOT).endsWith(".zip") ? chosen
+				: chosen.resolveSibling(chosen.getFileName() + ".zip");
 	}
 
 	/**
@@ -1356,8 +1257,7 @@ public final class MainWindow {
 		boolean dirtyHere = translations != null && translations.isDirty();
 		save.setEnabled(dirty);
 		saveButton.setEnabled(dirty);
-		exportPatch.setEnabled(patcher != null && !exporting);
-		buildItem.setEnabled(patcher != null && !exporting);
+		exportPatch.setEnabled(game != null && !exporting);
 		fontsItem.setEnabled(patcher != null);
 		fillFromGame.setEnabled(dlc != null && active == dlc);
 		saveButton.putClientProperty(FlatClientProperties.STYLE, dirty ? HIGHLIGHT : null);

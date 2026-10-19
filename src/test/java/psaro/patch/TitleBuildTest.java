@@ -189,6 +189,15 @@ class TitleBuildTest {
 		assertEquals(List.of("text/a.tdt"), List.copyOf(TitleBuild.gameFiles(dir.resolve("p")).get("0000").keySet()));
 	}
 
+	/** A patched copy goes beside its decrypted one, "decrypted" giving way to "patched", in its format. */
+	@Test
+	void aPatchedCopyIsNamedForItsDecryptedOne() {
+		assertEquals(dir.resolve("TDQDLC patched.cia"), TitleBuild.patchedPath(dir.resolve("TDQDLC decrypted.cia"),
+				TitleBuild.Format.CIA));
+		assertEquals(dir.resolve("TDQ patched.3ds"), TitleBuild.patchedPath(dir.resolve("TDQ.CCI"), TitleBuild.Format.THREE_DS));
+		assertEquals(dir.resolve("game patched.cia"), TitleBuild.patchedPath(dir.resolve("game"), TitleBuild.Format.CIA));
+	}
+
 	/**
 	 * The players' page holds each title's patched files with its title id and version, a title with
 	 * nothing patched left out; nothing in it can end its data early.
