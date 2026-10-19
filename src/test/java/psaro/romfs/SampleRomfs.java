@@ -74,6 +74,15 @@ public final class SampleRomfs {
 	}
 
 	/** {@code table/<name>.csv} holding {@code lines}. */
+	/**
+	 * A DLC content romfs, {@code <dlc>/<folder>}, holding its one row of records as a DLC song's
+	 * does: {@code contents.csv.lz}, compressed, at its top.
+	 */
+	public static void content(Path dlc, String folder, List<String> lines) throws IOException {
+		Files.createDirectories(dlc.resolve(folder));
+		Files.write(dlc.resolve(folder + "/contents.csv.lz"), psaro.format.Lz11.compress(csv(lines)));
+	}
+
 	public static void data(Path romfs, String name, List<String> lines) throws IOException {
 		Files.createDirectories(romfs.resolve("table"));
 		Files.write(romfs.resolve("table/" + name + ".csv"), csv(lines));

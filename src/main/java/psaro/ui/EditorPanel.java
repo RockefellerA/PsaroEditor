@@ -90,6 +90,9 @@ public final class EditorPanel extends JPanel {
 	private final JComponent actions;
 	/** The search-all-strings box, shown above the list of tables. */
 	private final JComponent search;
+	/** Where {@link #search} and {@link #actions} go, which the window's other editors share ({@link #reclaim}). */
+	private final JPanel searchRow = new JPanel(new BorderLayout());
+	private final JPanel saveBox = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 4));
 
 	/**
 	 * The string tables under a {@link Header} per kind: the .tdt tables, the .mdt message files,
@@ -188,7 +191,6 @@ public final class EditorPanel extends JPanel {
 		JScrollPane tableScroll = new JScrollPane(tables);
 		JPanel left = new JPanel(new BorderLayout());
 		JPanel head = new JPanel(new BorderLayout());
-		JPanel searchRow = new JPanel(new BorderLayout());
 		searchRow.setBorder(BorderFactory.createEmptyBorder(6, 6, 0, 6));
 		searchRow.add(search, BorderLayout.CENTER);
 		head.add(searchRow, BorderLayout.NORTH);
@@ -203,6 +205,17 @@ public final class EditorPanel extends JPanel {
 			// the first table, past its header
 			tables.setSelectedIndex(1);
 		}
+	}
+
+	/**
+	 * Takes back the search box and the window's buttons, which another editor (the game's or its
+	 * DLC's, shown in turn) had while it was in view: a component has one place at a time.
+	 */
+	public void reclaim() {
+		searchRow.add(search, BorderLayout.CENTER);
+		saveBox.add(actions);
+		revalidate();
+		repaint();
 	}
 
 	// ── Layout ───────────────────────────────────────────────────────────────
@@ -246,7 +259,6 @@ public final class EditorPanel extends JPanel {
 		JPanel filters = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 4));
 		filters.add(filter);
 		filters.add(untranslatedOnly);
-		JPanel saveBox = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 4));
 		saveBox.add(actions);
 		JPanel bar = new JPanel(new BorderLayout());
 		bar.add(filters, BorderLayout.CENTER);
@@ -558,6 +570,15 @@ public final class EditorPanel extends JPanel {
 	public void fontsChanged() {
 		preview.fontsChanged();
 		strings.remeasure();
+		if (key != null) {
+			codesChanged();
+		}
+	}
+
+	/** After strings are given English from elsewhere (a DLC's from its game): every row, count and fit again. */
+	public void translationsChanged() {
+		strings.remeasure();
+		tables.repaint();
 		if (key != null) {
 			codesChanged();
 		}
@@ -911,8 +932,10 @@ public final class EditorPanel extends JPanel {
 			}
 			StringTable t = (StringTable) value;
 			super.getListCellRendererComponent(list, t.name(), i, selected, focus);
-			String name = t.kind() == RomfsIndex.Kind.MESSAGE ? t.name().substring(RomfsIndex.MESSAGE_PREFIX.length())
-					: t.kind() == RomfsIndex.Kind.DATA ? t.name().substring(RomfsIndex.DATA_PREFIX.length()) : t.name();
+			// a DLC content's own tables start with its folder instead (009a/contents)
+			String prefix = t.kind() == RomfsIndex.Kind.MESSAGE ? RomfsIndex.MESSAGE_PREFIX
+					: t.kind() == RomfsIndex.Kind.DATA ? RomfsIndex.DATA_PREFIX : "";
+			String name = t.name().startsWith(prefix) ? t.name().substring(prefix.length()) : t.name();
 			int done = translations.translatedCount(t);
 			boolean complete = done >= t.strings().size();
 			setText(name + "   " + done + " / " + t.strings().size());

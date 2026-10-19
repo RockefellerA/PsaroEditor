@@ -22,6 +22,9 @@ import psaro.project.Translations;
  * <p>Older settings gave every font the same letters (one string, "ty" when unset). That value is
  * kept as {@link #legacyExtraSpace} until {@link FontPatcher} hands it to the fonts it was used
  * for and calls {@link #setExtraSpace(Collection, String)}.
+ *
+ * <p>A DLC's settings inherit its game's ({@link #openDlc}): the same typefaces, and the game's
+ * letters and typeface for any font the DLC has not set itself.
  */
 public final class PatchSettings {
 
@@ -41,15 +44,43 @@ public final class PatchSettings {
 	private Path modsFolder;
 	/** The game's title id, as the exported patch's folders name it, or null if none was given. */
 	private String titleId;
+	/**
+	 * For a DLC's settings, its game's, which it inherits: a font the DLC sets nothing for takes
+	 * the game's letters and typeface. Null for a game's own.
+	 */
+	private final PatchSettings game;
 
-	private PatchSettings(Path file, Typefaces typefaces) {
+	private PatchSettings(Path file, Typefaces typefaces, PatchSettings game) {
 		this.file = file;
 		this.typefaces = typefaces;
+		this.game = game;
 	}
 
 	/** Loads what was saved for {@code romfs}, and the typefaces imported into it; nothing saved yet gives the defaults. */
 	public static PatchSettings open(Path romfs) throws IOException {
-		PatchSettings s = new PatchSettings(Translations.folderFor(romfs).resolve("fonts.json"), Typefaces.open(romfs));
+		return load(new PatchSettings(Translations.folderFor(romfs).resolve("fonts.json"), Typefaces.open(romfs), null));
+	}
+
+	/**
+	 * Loads what was saved for the DLC whose folder is {@code dlc}, inheriting {@code game}'s
+	 * settings: it draws from the game's typefaces (the same ones, so a typeface imported into
+	 * either is there for both), and a font it sets nothing for takes the game's letters and
+	 * typeface, whatever the game changes them to. What the DLC sets for a font, even none or the
+	 * game font, is its own. The title id and mods folder are never inherited, a DLC having its own.
+	 */
+	public static PatchSettings openDlc(Path dlc, PatchSettings game) throws IOException {
+		PatchSettings s = new PatchSettings(Translations.folderFor(dlc).resolve("fonts.json"), game.typefaces(), game);
+		// a new DLC project has no letters of its own from before they were set per font
+		s.legacy = null;
+		return load(s);
+	}
+
+	/** Whether these settings inherit a game's ({@link #openDlc}). */
+	public boolean inherits() {
+		return game != null;
+	}
+
+	private static PatchSettings load(PatchSettings s) throws IOException {
 		if (Files.isRegularFile(s.file)) {
 			try {
 				JSONObject json = new JSONObject(Files.readString(s.file, StandardCharsets.UTF_8));
@@ -64,7 +95,8 @@ public final class PatchSettings {
 				if (from != null) {
 					from.keySet().forEach(font -> {
 						String id = from.getString(font);
-						if (!id.equals(Typeface.GAME.id())) {
+						// a DLC keeps choosing the game font, which stands against what the game chose
+						if (!id.equals(Typeface.GAME.id()) || s.game != null) {
 							s.lettersFrom.put(font, id);
 						}
 					});
@@ -81,9 +113,10 @@ public final class PatchSettings {
 		return s;
 	}
 
-	/** The characters that get one more pixel of advance when they are added to {@code font}. */
+	/** The characters that get one more pixel of advance when they are added to {@code font}; a DLC's, the game's unless set. */
 	public synchronized String extraSpace(String font) {
-		return extraSpace.getOrDefault(font, "");
+		String own = extraSpace.get(font);
+		return own != null ? own : game != null ? game.extraSpace(font) : "";
 	}
 
 	/** The typefaces there are to draw from: the bundled one and those imported into the project. */
@@ -96,35 +129,60 @@ public final class PatchSettings {
 	 * typeface not imported here.
 	 */
 	public synchronized Typeface lettersFrom(String font) {
-		return typefaces.of(lettersFrom.get(font));
+		return typefaces.of(lettersFromId(font));
 	}
 
-	/** The id of the typeface {@code font} is set to, imported here or not; null for the game's fonts. */
+	/**
+	 * The id of the typeface {@code font} is set to, imported here or not; null for the game's
+	 * fonts. A DLC's is the game's unless it set its own.
+	 */
 	public synchronized String lettersFromId(String font) {
-		return lettersFrom.get(font);
+		String own = lettersFrom.get(font);
+		if (own != null) {
+			return own.equals(Typeface.GAME.id()) ? null : own;
+		}
+		return game != null ? game.lettersFromId(font) : null;
+	}
+
+	/** Every font set to a typeface, here or (for a DLC) in the game. */
+	private synchronized java.util.Set<String> fontsSet() {
+		java.util.Set<String> out = new java.util.TreeSet<>(lettersFrom.keySet());
+		if (game != null) {
+			out.addAll(game.fontsSet());
+		}
+		return out;
 	}
 
 	/** Every font set to a typeface there is here, with it. */
 	public synchronized Map<String, Typeface> fontsDrawnFrom() {
 		Map<String, Typeface> out = new TreeMap<>();
-		lettersFrom.forEach((font, id) -> {
-			Typeface t = typefaces.of(id);
+		for (String font : fontsSet()) {
+			Typeface t = typefaces.of(lettersFromId(font));
 			if (t.bundled()) {
 				out.put(font, t);
 			}
-		});
+		}
 		return Map.copyOf(out);
 	}
 
 	/** The id of every typeface a font is set to, imported here or not. */
 	public synchronized java.util.Set<String> typefaceIds() {
-		return java.util.Set.copyOf(lettersFrom.values());
+		java.util.Set<String> out = new java.util.TreeSet<>();
+		for (String font : fontsSet()) {
+			String id = lettersFromId(font);
+			if (id != null) {
+				out.add(id);
+			}
+		}
+		return java.util.Set.copyOf(out);
 	}
 
-	/** Sets where the letters added to {@code font} come from. */
+	/** Sets where the letters added to {@code font} come from; a DLC's choice of the game font stands against the game's choice. */
 	public synchronized void setLettersFrom(String font, Typeface typeface) throws IOException {
 		if (typeface.bundled()) {
 			lettersFrom.put(font, typeface.id());
+		} else if (game != null) {
+			lettersFrom.put(font, Typeface.GAME.id());
 		} else {
 			lettersFrom.remove(font);
 		}
@@ -168,7 +226,7 @@ public final class PatchSettings {
 		String clean = chars.codePoints().filter(c -> !Character.isWhitespace(c)).distinct()
 				.collect(StringBuilder::new, StringBuilder::appendCodePoint, StringBuilder::append).toString();
 		for (String font : fonts) {
-			if (clean.isEmpty()) {
+			if (clean.isEmpty() && game == null) {
 				extraSpace.remove(font);
 			} else {
 				extraSpace.put(font, clean);
