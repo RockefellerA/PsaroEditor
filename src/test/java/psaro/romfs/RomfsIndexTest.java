@@ -159,6 +159,27 @@ class RomfsIndexTest {
 	}
 
 	/**
+	 * Panes the game fills from code (no key, as the sugoroku board names are) are one text's
+	 * layers when they hold the same placeholder; a pane holding another at the same place is not.
+	 */
+	@Test
+	void unkeyedPanesHoldingOnePlaceholderAreOneTextsLayers() throws IOException {
+		table("menu", Map.of("menu_0001", "はい"));
+		byte[] other = SampleRomfs.pane("Txt_Num", null, "0");
+		other[0x52] = 2;
+		byte[] top = SampleRomfs.pane("Txt_Name_01", null, "*");
+		top[0x52] = 1;
+		archive("scene/sugoroku/map.arc.lz", "blyt/map.bclyt", List.of("a.bcfnt", "b.bcfnt", "c.bcfnt"), other,
+				SampleRomfs.pane("Txt_Name_03", null, "*"), SampleRomfs.pane("Txt_Name_02", null, "*"), top);
+		RomfsIndex index = RomfsIndex.scan(romfs);
+		assertEquals("b.bcfnt", index.layeredUnder("a.bcfnt"));
+		assertEquals("Txt_Name_01", index.paneOnTop("blyt/map.bclyt", "Txt_Name_03").name());
+		assertEquals("Txt_Name_01", index.paneOnTop("blyt/map.bclyt", "Txt_Name_02").name());
+		assertNull(index.paneOnTop("blyt/map.bclyt", "Txt_Name_01"), "drawn on top");
+		assertNull(index.layeredUnder("c.bcfnt"), "another placeholder");
+	}
+
+	/**
 	 * A message file is a table of numbered strings no layout names; a pane the game fills from
 	 * code (its key in no table) can be linked to one, and then shows it.
 	 */

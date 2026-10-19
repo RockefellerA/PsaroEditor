@@ -482,7 +482,7 @@ public final class RomfsIndex {
 			String body = null;
 			for (int j = i + 1; j < text.size(); j++) {
 				Bclyt.Pane over = text.get(j);
-				if (!under.keys().isEmpty() && under.keys().equals(over.keys()) && under.stacksOn(over)
+				if (sameText(under, over) && under.stacksOn(over)
 						&& under.text().boxWidth() == over.text().boxWidth()
 						&& under.text().boxHeight() == over.text().boxHeight()
 						&& !under.text().font().equals(over.text().font())) {
@@ -495,6 +495,17 @@ public final class RomfsIndex {
 				tops.put(layout + "!" + under.name(), top);
 			}
 		}
+	}
+
+	/**
+	 * Whether two panes show one string: the same keys, or, for panes the game fills from code
+	 * (no key, as the board names on the sugoroku map are), the same placeholder.
+	 */
+	private static boolean sameText(Bclyt.Pane a, Bclyt.Pane b) {
+		if (!a.keys().isEmpty()) {
+			return a.keys().equals(b.keys());
+		}
+		return b.keys().isEmpty() && a.text().placeholder().equals(b.text().placeholder());
 	}
 
 	/**
