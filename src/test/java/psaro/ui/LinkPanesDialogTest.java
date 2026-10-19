@@ -41,4 +41,30 @@ class LinkPanesDialogTest {
 		assertEquals(List.of("JOB002:2", "JOB003:2"), LinkPanesDialog.sameColumnUnlinked(jobs, "JOB001:2", links));
 		assertEquals(List.of(), LinkPanesDialog.sameColumnUnlinked(index.table("message/party_top"), "000", links));
 	}
+
+	/**
+	 * A message string is suggested the panes of a layout's string with the same text, placeholders
+	 * aside, each naming that string; one with too little text of its own, or a layout's string
+	 * itself, is suggested none.
+	 */
+	@Test
+	void panesShowingTheSameTextAreSuggested() throws IOException {
+		Path romfs = dir.resolve("game");
+		SampleRomfs.table(romfs, "dharma_complete",
+				Map.of("dsjc_1010", "[キャラクター名]は\n[職業名]に転職した！", "dsjc_0540", "×[さとり所有数]"));
+		SampleRomfs.message(romfs, "dharma_complete", List.of("%lsは\n%lsに転職した！", "×%d", "転職しなかった"));
+		SampleRomfs.archive(romfs, "common/dialog/dharma_complete.arc.lz", "blyt/dialog_dharma_complete_down.bclyt",
+				List.of("a.bcfnt"), Map.of(), SampleRomfs.pane("Txt_Main", "dsjc_1010"),
+				SampleRomfs.pane("Txt_Main_Satori", "dsjc_1010"), SampleRomfs.pane("Txt_Num", "dsjc_0540"));
+		RomfsIndex index = RomfsIndex.scan(romfs);
+		var message = index.table("message/dharma_complete");
+
+		String layout = "blyt/dialog_dharma_complete_down.bclyt";
+		assertEquals(Map.of(new PaneRef(layout, "Txt_Main"), "dharma_complete › dsjc_1010",
+				new PaneRef(layout, "Txt_Main_Satori"), "dharma_complete › dsjc_1010"),
+				LinkPanesDialog.suggestions(index, message, "000"));
+		assertEquals(Map.of(), LinkPanesDialog.suggestions(index, message, "001"));
+		assertEquals(Map.of(), LinkPanesDialog.suggestions(index, message, "002"));
+		assertEquals(Map.of(), LinkPanesDialog.suggestions(index, index.table("dharma_complete"), "dsjc_1010"));
+	}
 }

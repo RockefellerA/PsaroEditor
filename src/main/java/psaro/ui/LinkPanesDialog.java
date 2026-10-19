@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 import javax.swing.AbstractAction;
 import javax.swing.BorderFactory;
 import javax.swing.DefaultListModel;
@@ -40,8 +41,9 @@ import psaro.text.ControlCodes;
 
 /**
  * Picks the panes a string is shown in, for one the game draws from code ({@link
- * psaro.project.PaneLinks}): every text pane in the romfs, those linked first, then those whose
- * key no table has (the panes the game fills from code), filtered by what is typed.
+ * psaro.project.PaneLinks}): every text pane in the romfs, those suggested first (the panes of a
+ * layout's string with the same text, {@link #suggestions}), unticked, then those linked, then
+ * those whose key no table has (the panes the game fills from code), filtered by what is typed.
  *
  * <p>The ticks can be copied and pasted into another string's, for strings shown in the same
  * panes (every character's name in a data table): the copy is kept while the editor runs. Or
@@ -49,9 +51,14 @@ import psaro.text.ControlCodes;
  */
 final class LinkPanesDialog extends JDialog {
 
-	/** One pane, wherever its layout is, and how it reads in the list. */
-	private record Entry(PaneRef ref, String label, boolean noString) {
+	/** One pane, wherever its layout is, how it reads in the list, and whether it is suggested. */
+	private record Entry(PaneRef ref, String label, boolean noString, boolean suggested) {
 	}
+
+	/** A printf placeholder ({@code %ls}, {@code %d}) or a layout string's ({@code [職業名]}). */
+	private static final Pattern PLACEHOLDER = Pattern.compile("%[-0-9.]*l?[sdiuxXfc]|\\[[^\\]]*\\]");
+	/** Fewer letters than this besides placeholders match too much ({@code Lv %d}) to suggest. */
+	private static final int SUGGEST_MIN_LETTERS = 2;
 
 	/** What was chosen: the panes, and the strings to link them to (the one asked about first). */
 	record Choice(List<PaneRef> panes, List<String> keys) {
@@ -76,11 +83,14 @@ final class LinkPanesDialog extends JDialog {
 		super(owner, "Panes showing " + table.name() + " › " + key, ModalityType.APPLICATION_MODAL);
 		String what = table.name() + " › " + key;
 		this.chosen = new LinkedHashSet<>(links.get(table, key));
-		this.all = entries(index, chosen);
+		Map<PaneRef, String> suggested = suggestions(index, table, key);
+		this.all = entries(index, chosen, suggested);
 
 		JLabel help = new JLabel("<html>Tick the panes the game shows this string in. The preview and the fit check "
-				+ "then use them, and the patch gives their fonts the letters the English needs. Panes whose key no "
-				+ "table has, the ones the game fills from code, come first.</html>");
+				+ "then use them, and the patch gives their fonts the letters the English needs. "
+				+ (suggested.isEmpty() ? "" : "Panes that show the same text from a layout's own string come first, "
+						+ "suggested but not ticked: the same words can be on more than one screen, so check the game. ")
+				+ "Panes whose key no table has, the ones the game fills from code, come next.</html>");
 		help.setBorder(BorderFactory.createEmptyBorder(0, 0, 6, 0));
 		filter.putClientProperty(FlatClientProperties.PLACEHOLDER_TEXT, "Filter by archive, layout, pane or key");
 		filter.putClientProperty(FlatClientProperties.TEXT_FIELD_SHOW_CLEAR_BUTTON, true);
@@ -249,7 +259,7 @@ final class LinkPanesDialog extends JDialog {
 		updateClipboard();
 	}
 
-	/** Ticks the panes copied, and only them, bringing them to the top of the list. */
+	/** Ticks the panes copied, and only them, bringing them to the top of the list below the suggestions. */
 	private void pasteSelections() {
 		chosen.clear();
 		chosen.addAll(copied);
@@ -286,8 +296,11 @@ final class LinkPanesDialog extends JDialog {
 		shown.addAll(matching);
 	}
 
-	/** Every text pane once per layout and name: linked first, then those with no string, then by layout. */
-	private static List<Entry> entries(RomfsIndex index, Set<PaneRef> linked) {
+	/**
+	 * Every text pane once per layout and name: suggested first, each naming the string it was
+	 * suggested by, then linked, then those with no string, then by layout.
+	 */
+	private static List<Entry> entries(RomfsIndex index, Set<PaneRef> linked, Map<PaneRef, String> suggested) {
 		Set<PaneRef> noString = new LinkedHashSet<>();
 		for (Usage u : index.unresolved()) {
 			noString.add(new PaneRef(u.layout(), u.pane().name()));
@@ -305,18 +318,57 @@ final class LinkPanesDialog extends JDialog {
 			String layout = ref.layout().substring(ref.layout().lastIndexOf('/') + 1).replace(".bclyt", "");
 			boolean none = noString.contains(ref) || u.pane().keys().isEmpty();
 			String keys = u.pane().keys().isEmpty() ? "no key" : String.join(", ", u.pane().keys());
-			out.add(new Entry(ref, String.format(Locale.ROOT, "%s › %s › %s   (%s%s, %s, %.0f×%.0f)", archive, layout,
+			String by = suggested.get(ref);
+			out.add(new Entry(ref, String.format(Locale.ROOT, "%s › %s › %s   (%s%s, %s, %.0f×%.0f)%s", archive, layout,
 					ref.pane(), keys, none ? ", no string" : "", t.font() == null ? "system font" : t.font().replace(".bcfnt", ""),
-					t.boxWidth(), t.boxHeight()), none));
+					t.boxWidth(), t.boxHeight(), by == null ? "" : "   suggested: same text as " + by), none, by != null));
 		});
 		out.sort(order(linked));
 		return out;
 	}
 
-	/** Those in {@code linked} first, then those with no string, then by layout and pane. */
+	/** Those suggested first, then those in {@code linked}, then those with no string, then by layout and pane. */
 	private static Comparator<Entry> order(Set<PaneRef> linked) {
-		return Comparator.comparing((Entry e) -> !linked.contains(e.ref())).thenComparing(e -> !e.noString())
-				.thenComparing(e -> e.ref().layout()).thenComparing(e -> e.ref().pane());
+		return Comparator.comparing((Entry e) -> !e.suggested()).thenComparing(e -> !linked.contains(e.ref()))
+				.thenComparing(e -> !e.noString()).thenComparing(e -> e.ref().layout()).thenComparing(e -> e.ref().pane());
+	}
+
+	/**
+	 * The panes to suggest for {@code key} of {@code table}, a string drawn from code: those that
+	 * show a layout's own string ({@code text/*.tdt}) with the same text, its placeholders and
+	 * spaces aside ({@code %lsは\n%lsに転職した！} and {@code [キャラクター名]は\n[職業名]に転職した！}),
+	 * each with the string it shows ({@code dharma_complete › dsjc_1010}). The same words can be on
+	 * more than one screen, so these are suggestions, never ticked; a text of fewer than
+	 * {@link #SUGGEST_MIN_LETTERS} letters besides placeholders suggests none.
+	 */
+	static Map<PaneRef, String> suggestions(RomfsIndex index, StringTable table, String key) {
+		String text = table.strings().get(key);
+		if (table.kind() == RomfsIndex.Kind.TABLE || table.builtIn() || text == null) {
+			return Map.of();
+		}
+		String same = sameText(text);
+		if (same.replace("\0", "").length() < SUGGEST_MIN_LETTERS) {
+			return Map.of();
+		}
+		Map<PaneRef, String> out = new LinkedHashMap<>();
+		for (StringTable t : index.tables()) {
+			if (t.kind() != RomfsIndex.Kind.TABLE) {
+				continue;
+			}
+			t.strings().forEach((k, v) -> {
+				if (sameText(v).equals(same)) {
+					for (Usage u : index.usages(t, k)) {
+						out.putIfAbsent(new PaneRef(u.layout(), u.pane().name()), t.name() + " › " + k);
+					}
+				}
+			});
+		}
+		return out;
+	}
+
+	/** {@code text} with each placeholder made one mark, {@code %%} the {@code %} it prints, and no spaces. */
+	private static String sameText(String text) {
+		return PLACEHOLDER.matcher(text).replaceAll("\0").replace("%%", "%").replaceAll("[ 　]", "");
 	}
 
 	/**
