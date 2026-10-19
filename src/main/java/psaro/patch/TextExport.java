@@ -11,6 +11,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import psaro.format.Csv;
+import psaro.format.Lz11;
 import psaro.format.Msgd;
 import psaro.format.Records;
 import psaro.format.Script;
@@ -24,7 +25,8 @@ import psaro.romfs.RomfsIndex.StringTable;
  * its message files to {@code .../message}, its data tables to {@code .../table} and its record
  * files and scripts to their own paths, beside the patched archives, so that folder is a romfs
  * patch as it stands. The text layouts hold and the tables inside a CPK are written by the patch
- * instead ({@link FontPatcher}, {@link CpkPatch}).
+ * instead ({@link FontPatcher}, {@link CpkPatch}). A table read from a compressed file is written
+ * compressed again, under the same name, as a DLC's {@code <content>/contents.csv.lz} is.
  *
  * <p>A table with English becomes a copy of its {@code .tdt} with each translated string
  * replaced and every other string left in Japanese; a table with none has no copy. The JSON in
@@ -65,12 +67,16 @@ public final class TextExport {
 			byte[] bytes;
 			try {
 				bytes = switch (table.kind()) {
-					case MESSAGE -> Msgd.write(Files.readAllBytes(table.path()), new ArrayList<>(strings.values()));
-					case DATA -> Csv.write(Files.readAllBytes(table.path()), strings);
+					case MESSAGE -> Msgd.write(RomfsIndex.readTable(table.path()), new ArrayList<>(strings.values()));
+					case DATA -> Csv.write(RomfsIndex.readTable(table.path()), strings);
 					case RECORDS -> Records.write(Files.readAllBytes(table.path()), strings);
 					case SCRIPT -> Script.write(Files.readAllBytes(table.path()), strings);
 					default -> Tdt.write(strings);
 				};
+				if (RomfsIndex.compressed(table.path())) {
+					// kept as the game keeps it: a DLC's contents.csv.lz goes back compressed
+					bytes = Lz11.compress(bytes);
+				}
 			} catch (IllegalArgumentException cannot) {
 				// the rest of the tables are still written
 				problems.add(table.name() + " " + cannot.getMessage());

@@ -17,8 +17,8 @@ import psaro.project.Translations;
  * What Export patch packs besides the patch folder, per project: the readme, kept in
  * {@code <romfs>.psaro/patch-readme.txt} so it can be edited anywhere (the default readme while
  * there is none), and the files added to the zip, in {@code <romfs>.psaro/export.json}, each by
- * the path it is read from and its path in the zip. A file is read when the zip is written, so
- * the zip always has it as it is then.
+ * the path it is read from and its path in the zip, with whether the zip's patcher page holds the
+ * game's files too. A file is read when the zip is written, so the zip always has it as it is then.
  */
 public final class ExportSettings {
 
@@ -30,6 +30,8 @@ public final class ExportSettings {
 	private final Path file;
 	private String readme;
 	private List<Extra> extras = List.of();
+	/** Whether the zip's patcher page holds the game's files too ({@link PatcherPage}). */
+	private boolean gamePatcher;
 
 	private ExportSettings(Path folder) {
 		this.readmeFile = folder.resolve(README_FILE);
@@ -45,7 +47,9 @@ public final class ExportSettings {
 		}
 		if (Files.isRegularFile(s.file)) {
 			try {
-				JSONArray files = new JSONObject(Files.readString(s.file, StandardCharsets.UTF_8)).optJSONArray("extraFiles");
+				JSONObject json = new JSONObject(Files.readString(s.file, StandardCharsets.UTF_8));
+				s.gamePatcher = json.optBoolean("gamePatcher", false);
+				JSONArray files = json.optJSONArray("extraFiles");
 				List<Extra> read = new ArrayList<>();
 				for (int i = 0; files != null && i < files.length(); i++) {
 					JSONObject e = files.getJSONObject(i);
@@ -99,11 +103,35 @@ public final class ExportSettings {
 			return;
 		}
 		extras = List.copyOf(files);
+		save();
+	}
+
+	/**
+	 * Whether the zip's patcher page ({@link PatcherPage}) holds the game's patched files, so players
+	 * can build a patched copy of the game instead of using Luma3DS's game patching. A DLC's files
+	 * are always in it; the game's make it as large again as the patch.
+	 */
+	public synchronized boolean gamePatcher() {
+		return gamePatcher;
+	}
+
+	public synchronized void setGamePatcher(boolean on) throws IOException {
+		if (on != gamePatcher) {
+			gamePatcher = on;
+			save();
+		}
+	}
+
+	private void save() throws IOException {
 		JSONArray list = new JSONArray();
 		for (Extra e : extras) {
 			list.put(new JSONObject().put("source", e.source().toString()).put("destination", e.destination()));
 		}
+		JSONObject json = new JSONObject().put("extraFiles", list);
+		if (gamePatcher) {
+			json.put("gamePatcher", true);
+		}
 		Files.createDirectories(file.getParent());
-		Files.writeString(file, new JSONObject().put("extraFiles", list).toString(2) + "\n", StandardCharsets.UTF_8);
+		Files.writeString(file, json.toString(2) + "\n", StandardCharsets.UTF_8);
 	}
 }

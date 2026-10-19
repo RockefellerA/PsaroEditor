@@ -75,6 +75,12 @@ import psaro.format.Thss;
  * database ({@link Thss}) as record tables, numbered texts ({@link TextBlocks}) as scripts, and
  * the lines of each folder of map scripts ({@link MapScript}) as one script, keyed by file and
  * line ({@code ev000:03}).
+ *
+ * <p>A DLC is read from a folder of content romfs folders, one per content of its CIA
+ * ({@link #scanDlc}): each is read as a romfs would be, and also has the data tables at its top
+ * read, plain or compressed ({@code contents.csv.lz}, a song's one row of records). Every content
+ * has files of the same names, so each table's name starts with its content's folder
+ * ({@code 009a/contents}).
  */
 public final class RomfsIndex {
 
@@ -88,9 +94,9 @@ public final class RomfsIndex {
 	 */
 	public record StringTable(String name, Path path, Map<String, String> strings, Kind kind) {
 
-		/** A table, a message file or a data table, told apart by its file's name. */
+		/** A table, a message file or a data table, told apart by its file's name, compressed or not. */
 		public StringTable(String name, Path path, Map<String, String> strings) {
-			this(name, path, strings, kindOf(path.getFileName().toString()));
+			this(name, path, strings, kindOf(uncompressedName(path.getFileName().toString())));
 		}
 
 		private static Kind kindOf(String file) {
@@ -191,6 +197,8 @@ public final class RomfsIndex {
 	private static final String DATA_SUFFIX = ".csv";
 	/** The name a data table takes before its own: {@code table/CharaTable}. */
 	public static final String DATA_PREFIX = "table/";
+	/** What an LZ11-compressed file's name ends with ({@link Lz11}). */
+	private static final String LZ_SUFFIX = ".lz";
 	/** An archive's name ends with one of these: compressed, or as some games keep them, not. */
 	private static final List<String> ARCHIVE_SUFFIXES = List.of(".arc.lz", ".arc");
 	private static final String RECORD_SUFFIX = ".dat";
@@ -240,6 +248,8 @@ public final class RomfsIndex {
 	/** Every loose image, read on first use ({@link #looseImages}). */
 	private List<Image> looseImages;
 	private final List<Path> cpks;
+	/** The folders the index was read from: the root, or for a DLC each content folder under it. */
+	private final List<Path> folders;
 	/** Keyed by {@code table + "/" + key}: the panes linked to a string no layout names ({@link #link}). */
 	private final Map<String, List<Usage>> linked = new HashMap<>();
 	/** Keyed by archive path + "!" + font name; empty when the archive does not carry the font. */
@@ -251,9 +261,10 @@ public final class RomfsIndex {
 			List<Usage> unresolved, int layoutCount, Map<String, List<Path>> fontHomes,
 			Map<String, List<Path>> layoutHomes, Map<Shape, List<Shown>> shapes, List<Image> images,
 			Map<String, String> bodies, Map<String, Bclyt.Pane> tops, List<Usage> textPanes, Map<String, Packed> packed,
-			List<Path> cpks) {
+			List<Path> cpks, List<Path> folders) {
 		this.packed = packed;
 		this.cpks = cpks;
+		this.folders = folders;
 		this.root = root;
 		this.tables = tables;
 		this.usages = usages;
@@ -307,49 +318,116 @@ public final class RomfsIndex {
 		}
 	}
 
+	/**
+	 * A folder an index is read from, with the prefix its tables' names take: a game's romfs is one,
+	 * named as it always was; a DLC is one per content, each named for its folder ({@code 009a/}).
+	 * A DLC's content also has the data tables at its top read ({@code contents.csv.lz}), as some
+	 * DLC keeps its one row of records there, and compressed data tables anywhere.
+	 */
+	private record Part(Path dir, String prefix, boolean dlc) {
+	}
+
 	/** Reads every string table and every layout under {@code root}. */
 	public static RomfsIndex scan(Path root) throws IOException {
+		return scan(root, List.of(new Part(root, "", false)));
+	}
+
+	/**
+	 * Reads a DLC: the content romfs folders {@code contents} (their names) under {@code root},
+	 * each read as a romfs of its own would be, its tables' names starting with its folder's
+	 * ({@code 009a/contents}) so the contents' like-named files stay apart.
+	 */
+	public static RomfsIndex scanDlc(Path root, List<String> contents) throws IOException {
+		if (contents.isEmpty()) {
+			throw new IllegalArgumentException("no content folders chosen");
+		}
+		List<Part> parts = new ArrayList<>();
+		for (String c : contents) {
+			parts.add(new Part(root.resolve(c), c + "/", true));
+		}
+		return scan(root, parts);
+	}
+
+	/**
+	 * Whether {@code dir} is a DLC's content romfs: one {@link #looksLikeRomfs}, or one with data
+	 * tables at its top, plain or compressed.
+	 */
+	public static boolean looksLikeContent(Path dir) throws IOException {
+		return Files.isDirectory(dir) && (!looseDataFiles(dir).isEmpty() || looksLikeRomfs(dir));
+	}
+
+	/** The folders right under {@code dlc} that are content romfs folders ({@link #looksLikeContent}), by name. */
+	public static List<String> contentFolders(Path dlc) throws IOException {
+		if (!Files.isDirectory(dlc)) {
+			return List.of();
+		}
+		List<String> out = new ArrayList<>();
+		try (Stream<Path> dirs = Files.list(dlc)) {
+			for (Path d : dirs.filter(Files::isDirectory).sorted().toList()) {
+				if (looksLikeContent(d)) {
+					out.add(d.getFileName().toString());
+				}
+			}
+		}
+		return out;
+	}
+
+	private static RomfsIndex scan(Path root, List<Part> parts) throws IOException {
 		Map<String, StringTable> tables = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
 		Map<String, List<String>> tablesByKey = new HashMap<>();
-		for (Path p : tableFiles(root)) {
-			String name = tableName(p, tables.keySet());
-			Map<String, String> strings = Collections.unmodifiableMap(Tdt.read(Files.readAllBytes(p)));
-			tables.put(name, new StringTable(name, p, strings));
-			for (String key : strings.keySet()) {
-				tablesByKey.computeIfAbsent(key, k -> new ArrayList<>()).add(name);
+		for (Part part : parts) {
+			for (Path p : tableFiles(part.dir())) {
+				String name = tableName(part.prefix(), p, tables.keySet());
+				Map<String, String> strings = Collections.unmodifiableMap(Tdt.read(Files.readAllBytes(p)));
+				tables.put(name, new StringTable(name, p, strings));
+				for (String key : strings.keySet()) {
+					tablesByKey.computeIfAbsent(key, k -> new ArrayList<>()).add(name);
+				}
 			}
 		}
-		// keyed by number, which every message file repeats, so no pane's key resolves to one
-		for (Path p : messageFiles(root)) {
-			List<String> read;
-			try {
-				read = Msgd.read(Files.readAllBytes(p));
-			} catch (IllegalArgumentException | IndexOutOfBoundsException notMsgd) {
-				continue;
-			}
-			Map<String, String> strings = new LinkedHashMap<>();
-			for (int i = 0; i < read.size(); i++) {
-				strings.put(String.format(Locale.ROOT, "%03d", i), read.get(i));
-			}
-			String name = MESSAGE_PREFIX + strip(p, MESSAGE_SUFFIX);
-			tables.put(name, new StringTable(name, p, Collections.unmodifiableMap(strings)));
-		}
-		// keyed by row id and column, none of which a pane's key is; a table with no Japanese is left out
-		for (Path p : dataFiles(root)) {
-			Map<String, String> strings;
-			try {
-				strings = Csv.read(Files.readAllBytes(p));
-			} catch (IllegalArgumentException notCsv) {
-				continue;
-			}
-			if (!strings.isEmpty()) {
-				String name = DATA_PREFIX + strip(p, DATA_SUFFIX);
+		for (Part part : parts) {
+			// keyed by number, which every message file repeats, so no pane's key resolves to one
+			for (Path p : messageFiles(part.dir())) {
+				List<String> read;
+				try {
+					read = Msgd.read(Files.readAllBytes(p));
+				} catch (IllegalArgumentException | IndexOutOfBoundsException notMsgd) {
+					continue;
+				}
+				Map<String, String> strings = new LinkedHashMap<>();
+				for (int i = 0; i < read.size(); i++) {
+					strings.put(String.format(Locale.ROOT, "%03d", i), read.get(i));
+				}
+				String name = part.prefix() + MESSAGE_PREFIX + strip(p, MESSAGE_SUFFIX);
 				tables.put(name, new StringTable(name, p, Collections.unmodifiableMap(strings)));
+			}
+			// keyed by row id and column, none of which a pane's key is; a table with no Japanese is left out
+			List<Path> data = new ArrayList<>(dataFiles(part.dir(), part.dlc()));
+			if (part.dlc()) {
+				data.addAll(looseDataFiles(part.dir()));
+			}
+			for (Path p : data) {
+				Map<String, String> strings;
+				try {
+					strings = Csv.read(readTable(p));
+				} catch (IllegalArgumentException | IndexOutOfBoundsException notCsv) {
+					continue;
+				}
+				String stem = uncompressedName(p.getFileName().toString());
+				stem = stem.substring(0, stem.length() - DATA_SUFFIX.length());
+				String name = part.prefix() + (p.getParent().equals(part.dir()) ? "" : DATA_PREFIX) + stem;
+				if (!strings.isEmpty() && !tables.containsKey(name)) {
+					tables.put(name, new StringTable(name, p, Collections.unmodifiableMap(strings)));
+				}
 			}
 		}
 
-		// every archive, model and record file, in one walk of the tree
-		Found found = walk(root);
+		// every archive, model and record file, in one walk of each part's tree
+		Map<Part, Found> foundIn = new LinkedHashMap<>();
+		for (Part part : parts) {
+			foundIn.put(part, walk(part.dir()));
+		}
+		Found found = Found.of(foundIn.values());
 		// record tables and scripts, named by their path; one with no Japanese is left out
 		for (Path p : found.records()) {
 			String name = recordName(root, p);
@@ -368,13 +446,18 @@ public final class RomfsIndex {
 		}
 		// the text inside each CPK, named by its path there
 		Map<String, Packed> packed = new HashMap<>();
-		for (Path cpk : found.cpks()) {
-			for (PackedTable t : cpkTables(cpk)) {
-				if (tables.putIfAbsent(t.table().name(), t.table()) == null) {
-					packed.put(t.table().name(), t.packed());
+		for (Map.Entry<Part, Found> in : foundIn.entrySet()) {
+			for (Path cpk : in.getValue().cpks()) {
+				for (PackedTable t : cpkTables(cpk, in.getKey().prefix())) {
+					if (tables.putIfAbsent(t.table().name(), t.table()) == null) {
+						packed.put(t.table().name(), t.packed());
+					}
 				}
 			}
 		}
+		// each archive with the prefix of the part it is in, for the table named after it
+		Map<Path, String> prefixOf = new HashMap<>();
+		foundIn.forEach((part, f) -> f.archives().forEach(a -> prefixOf.put(a, part.prefix())));
 
 		Map<String, List<Usage>> usages = new HashMap<>();
 		List<Usage> unresolved = new ArrayList<>();
@@ -389,7 +472,7 @@ public final class RomfsIndex {
 		Map<String, Bclyt.Pane> tops = new HashMap<>();
 		int layouts = 0;
 		for (Path archive : found.archives()) {
-			StringTable own = tables.get(archiveName(archive));
+			StringTable own = tables.get(prefixOf.getOrDefault(archive, "") + archiveName(archive));
 			Darc.Node darc;
 			try {
 				darc = Archive.load(archive);
@@ -465,7 +548,39 @@ public final class RomfsIndex {
 		shapes.replaceAll((shape, shown) -> List.copyOf(shown));
 		return new RomfsIndex(root, Collections.unmodifiableMap(tables), usages, List.copyOf(unresolved), layouts,
 				fontHomes, layoutHomes, shapes, List.copyOf(images), bodies, tops, List.copyOf(textPanes), Map.copyOf(packed),
-				List.copyOf(found.cpks()));
+				List.copyOf(found.cpks()), parts.stream().map(Part::dir).toList());
+	}
+
+	/** {@code file}'s name without the {@code .lz} a compressed file's name ends with. */
+	private static String uncompressedName(String file) {
+		return file.endsWith(LZ_SUFFIX) ? file.substring(0, file.length() - LZ_SUFFIX.length()) : file;
+	}
+
+	/**
+	 * The bytes of the string table file {@code file}, decompressed when it is a compressed one
+	 * ({@code contents.csv.lz}); what its strings are read from and its English written into.
+	 */
+	public static byte[] readTable(Path file) throws IOException {
+		byte[] d = Files.readAllBytes(file);
+		return file.getFileName().toString().endsWith(LZ_SUFFIX) && Lz11.isCompressed(d) ? Lz11.decompress(d) : d;
+	}
+
+	/** Whether {@code file} is kept compressed, so its English is written back compressed ({@link #readTable}). */
+	public static boolean compressed(Path file) {
+		return file.getFileName().toString().endsWith(LZ_SUFFIX);
+	}
+
+	/**
+	 * The folders the index was read from: the root for a game; for a DLC, each content folder
+	 * chosen under it ({@link #scanDlc}).
+	 */
+	public List<Path> folders() {
+		return folders;
+	}
+
+	/** Whether this is a DLC's index ({@link #scanDlc}), its root a folder of content romfs folders. */
+	public boolean dlc() {
+		return !folders.equals(List.of(root));
 	}
 
 	/**
@@ -577,28 +692,30 @@ public final class RomfsIndex {
 	}
 
 	/**
-	 * Every loose image under the root ({@link #isLooseImage}), outside any other romfs nested in
-	 * it, by path; each an {@link Image} whose archive is the file itself and whose path is the
+	 * Every loose image under the folders read ({@link #folders}, {@link #isLooseImage}), outside
+	 * any other romfs nested in them, by path; each an {@link Image} whose archive is the file itself and whose path is the
 	 * file's from the root. Read on first use, which decompresses every one (some games have
 	 * thousands), so ask from a background thread; a file that is no BCLIM is left out.
 	 */
 	public synchronized List<Image> looseImages() throws IOException {
 		if (looseImages == null) {
 			List<Path> files = new ArrayList<>();
-			Files.walkFileTree(root, new SimpleFileVisitor<>() {
-				@Override
-				public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException {
-					return dir.equals(root) || !isNestedRomfs(dir) ? FileVisitResult.CONTINUE : FileVisitResult.SKIP_SUBTREE;
-				}
-
-				@Override
-				public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
-					if (isLooseImage(file)) {
-						files.add(file);
+			for (Path folder : folders) {
+				Files.walkFileTree(folder, new SimpleFileVisitor<>() {
+					@Override
+					public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException {
+						return dir.equals(folder) || !isNestedRomfs(dir) ? FileVisitResult.CONTINUE : FileVisitResult.SKIP_SUBTREE;
 					}
-					return FileVisitResult.CONTINUE;
-				}
-			});
+
+					@Override
+					public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
+						if (isLooseImage(file)) {
+							files.add(file);
+						}
+						return FileVisitResult.CONTINUE;
+					}
+				});
+			}
 			Collections.sort(files);
 			List<Image> out = new ArrayList<>();
 			for (Path f : files) {
@@ -926,9 +1043,9 @@ public final class RomfsIndex {
 	 * {@code p}'s table name: its file name without {@code .tdt} or a tag for Japanese, which the
 	 * archive it pairs with is named; its whole file name when another table already has that.
 	 */
-	private static String tableName(Path p, Set<String> taken) {
-		String name = JAPANESE_TAG.matcher(strip(p, TABLE_SUFFIX)).replaceFirst("");
-		return name.isEmpty() || taken.contains(name) ? p.getFileName().toString() : name;
+	private static String tableName(String prefix, Path p, Set<String> taken) {
+		String name = prefix + JAPANESE_TAG.matcher(strip(p, TABLE_SUFFIX)).replaceFirst("");
+		return name.equals(prefix) || taken.contains(name) ? prefix + p.getFileName() : name;
 	}
 
 	/** Whether {@code text} holds kana or kanji, so it reads as text rather than a placeholder ({@code *}, {@code 123}). */
@@ -936,14 +1053,36 @@ public final class RomfsIndex {
 		return text != null && text.codePoints().anyMatch(c -> c >= 0x3040 && c < 0xA000 || c >= 0xFF00 && c < 0xFFF0);
 	}
 
-	private static List<Path> dataFiles(Path root) throws IOException {
+	/** The data tables in {@code root}'s {@code table} folder; with {@code compressedToo}, {@code .csv.lz} as well. */
+	private static List<Path> dataFiles(Path root, boolean compressedToo) throws IOException {
 		Path table = root.resolve("table");
 		if (!Files.isDirectory(table)) {
 			return List.of();
 		}
 		try (Stream<Path> files = Files.list(table)) {
-			return files.filter(p -> p.getFileName().toString().endsWith(DATA_SUFFIX)).sorted().toList();
+			return compressedFirst(files.filter(p -> dataFile(p.getFileName().toString(), compressedToo)).sorted().toList());
 		}
+	}
+
+	/** The data tables right in {@code dir}, plain or compressed: a DLC content's own records ({@code contents.csv.lz}). */
+	private static List<Path> looseDataFiles(Path dir) throws IOException {
+		try (Stream<Path> files = Files.list(dir)) {
+			return compressedFirst(
+					files.filter(p -> dataFile(p.getFileName().toString(), true) && Files.isRegularFile(p)).sorted().toList());
+		}
+	}
+
+	/**
+	 * {@code files} without a plain file whose compressed copy is among them: the compressed one is
+	 * what the game reads, the plain one a tool's decompressed copy left beside it.
+	 */
+	private static List<Path> compressedFirst(List<Path> files) {
+		Set<Path> all = Set.copyOf(files);
+		return files.stream().filter(p -> !all.contains(p.resolveSibling(p.getFileName() + LZ_SUFFIX))).toList();
+	}
+
+	private static boolean dataFile(String name, boolean compressedToo) {
+		return name.endsWith(DATA_SUFFIX) || compressedToo && name.endsWith(DATA_SUFFIX + LZ_SUFFIX);
 	}
 
 	private static List<Path> messageFiles(Path root) throws IOException {
@@ -958,6 +1097,24 @@ public final class RomfsIndex {
 
 	/** The archives, models, record files and CPKs under a root, each sorted. */
 	private record Found(List<Path> archives, List<Path> models, List<Path> records, List<Path> cpks) {
+
+		/** Everything found under several roots, in their order. */
+		static Found of(Collection<Found> all) {
+			if (all.size() == 1) {
+				return all.iterator().next();
+			}
+			List<Path> archives = new ArrayList<>();
+			List<Path> models = new ArrayList<>();
+			List<Path> records = new ArrayList<>();
+			List<Path> cpks = new ArrayList<>();
+			for (Found f : all) {
+				archives.addAll(f.archives());
+				models.addAll(f.models());
+				records.addAll(f.records());
+				cpks.addAll(f.cpks());
+			}
+			return new Found(archives, models, records, cpks);
+		}
 	}
 
 	/**
@@ -1002,9 +1159,10 @@ public final class RomfsIndex {
 	 * The text inside {@code cpk}: each record table, file of texts and database by its path in the
 	 * CPK without its extension, and each folder's map scripts as one table by the folder's path.
 	 * A table's path is where it is inside the CPK ({@code data.cpk/common/database/...}), not a file
-	 * of its own. A file this cannot read is left out, as is a table with no Japanese.
+	 * of its own. A file this cannot read is left out, as is a table with no Japanese. Each name
+	 * starts with {@code prefix}, a DLC content's folder.
 	 */
-	private static List<PackedTable> cpkTables(Path cpk) throws IOException {
+	private static List<PackedTable> cpkTables(Path cpk, String prefix) throws IOException {
 		List<PackedTable> out = new ArrayList<>();
 		Map<String, Map<String, String>> scripts = new TreeMap<>();
 		try (Cpk c = Cpk.open(cpk)) {
@@ -1050,7 +1208,7 @@ public final class RomfsIndex {
 						continue;
 					}
 					if (!strings.isEmpty()) {
-						out.add(new PackedTable(new StringTable(stem(path), cpk.resolve(path), Collections.unmodifiableMap(strings),
+						out.add(new PackedTable(new StringTable(prefix + stem(path), cpk.resolve(path), Collections.unmodifiableMap(strings),
 								kind), new Packed(cpk, path, format)));
 					}
 				} catch (IllegalArgumentException | IndexOutOfBoundsException unreadable) {
@@ -1062,7 +1220,7 @@ public final class RomfsIndex {
 		}
 		scripts.forEach((folder, lines) -> {
 			if (!lines.isEmpty()) {
-				out.add(new PackedTable(new StringTable(folder, cpk.resolve(folder), Collections.unmodifiableMap(lines), Kind.SCRIPT),
+				out.add(new PackedTable(new StringTable(prefix + folder, cpk.resolve(folder), Collections.unmodifiableMap(lines), Kind.SCRIPT),
 						new Packed(cpk, folder, PackedFormat.MAP_SCRIPTS)));
 			}
 		});

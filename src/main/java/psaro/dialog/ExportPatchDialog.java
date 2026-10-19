@@ -57,6 +57,7 @@ public final class ExportPatchDialog extends JDialog {
 	private final Model model = new Model();
 	private final JTable table = new JTable(model);
 	private final JButton remove = new JButton("Remove");
+	private final javax.swing.JCheckBox gamePatcher = new javax.swing.JCheckBox();
 	private boolean export;
 
 	/**
@@ -137,6 +138,14 @@ public final class ExportPatchDialog extends JDialog {
 		readmePanel.setAlignmentX(LEFT_ALIGNMENT);
 		filesPanel.setAlignmentX(LEFT_ALIGNMENT);
 		content.add(idRow);
+		content.add(Box.createVerticalStrut(6));
+		gamePatcher.setSelected(settings.gamePatcher());
+		gamePatcher.setText(String.format(Locale.ROOT, "Add the game to the patcher page (about %.0f MB more): players can build a "
+				+ "patched copy of the game instead of using Luma3DS's game patching", folderSize(patchFolder) * 4 / 3.0 / 1048576));
+		gamePatcher.setToolTipText("<html>Patcher/" + psaro.patch.PatcherPage.PAGE + " rebuilds a player's decrypted CIA or .3ds of the game "
+				+ "with this patch in it.<br>An attached DLC's patched files always go in it.</html>");
+		gamePatcher.setAlignmentX(LEFT_ALIGNMENT);
+		content.add(gamePatcher);
 		content.add(Box.createVerticalStrut(8));
 		content.add(readmePanel);
 		content.add(Box.createVerticalStrut(8));
@@ -182,6 +191,18 @@ public final class ExportPatchDialog extends JDialog {
 	/** The files added to the zip as they stand. */
 	public List<Extra> extras() {
 		return settings.extras();
+	}
+
+	/** The bytes of every file under {@code folder}; none when it cannot be read. */
+	private static long folderSize(Path folder) {
+		if (!Files.isDirectory(folder)) {
+			return 0;
+		}
+		try (var walk = Files.walk(folder)) {
+			return walk.filter(Files::isRegularFile).mapToLong(p -> p.toFile().length()).sum();
+		} catch (IOException | java.io.UncheckedIOException e) {
+			return 0;
+		}
 	}
 
 	private static JPanel section(String title) {
@@ -231,6 +252,7 @@ public final class ExportPatchDialog extends JDialog {
 		try {
 			settings.setReadme(readme.getText());
 			settings.setExtras(model.rows);
+			settings.setGamePatcher(gamePatcher.isSelected());
 			return true;
 		} catch (IOException e) {
 			JOptionPane.showMessageDialog(this, "Could not save the export settings:\n" + e.getMessage(), "Export patch",

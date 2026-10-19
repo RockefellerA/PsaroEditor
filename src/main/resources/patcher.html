@@ -1,0 +1,590 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DLC patcher</title>
+<style>
+:root {
+  --bg: #f4f4f6; --card: #ffffff; --text: #1d1d22; --muted: #66666f; --line: #dcdce2;
+  --accent: #2f6fdf; --accent-text: #ffffff; --bad: #c0392b; --good: #23874a;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #18181b; --card: #222227; --text: #ececf0; --muted: #a0a0aa; --line: #38383f;
+    --accent: #5b8ef0; --accent-text: #ffffff; --bad: #ef6b5b; --good: #4cc27a;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 560px; margin: 40px auto; padding: 0 16px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 22px; }
+h1 { font-size: 20px; margin: 0 0 4px; }
+.sub { color: var(--muted); margin: 0 0 18px; }
+.drop { display: block; border: 2px dashed var(--line); border-radius: 8px; padding: 22px; text-align: center; cursor: pointer; }
+.drop:hover, .drop.over { border-color: var(--accent); }
+.drop input { display: none; }
+.drop strong { color: var(--accent); }
+#picked { margin-top: 10px; min-height: 1.5em; word-break: break-all; }
+button, a.save { display: inline-block; margin-top: 16px; padding: 9px 18px; border: 0; border-radius: 6px; font: inherit; font-weight: 600;
+  background: var(--accent); color: var(--accent-text); cursor: pointer; text-decoration: none; }
+button:disabled { opacity: .45; cursor: default; }
+progress { width: 100%; height: 8px; margin-top: 16px; accent-color: var(--accent); }
+#status { margin-top: 8px; color: var(--muted); min-height: 1.5em; white-space: pre-line; }
+#status.bad { color: var(--bad); }
+#status.good { color: var(--good); }
+details { margin-top: 18px; color: var(--muted); }
+details summary { cursor: pointer; color: var(--text); }
+details p { margin: 8px 0; }
+</style>
+</head>
+<body>
+<main>
+  <div class="card">
+    <h1 id="name">Patcher</h1>
+    <p class="sub">Builds a patched copy from your own decrypted copy of <span id="what">the title</span>.
+      Everything happens in this page: nothing is uploaded.</p>
+    <label class="drop" id="drop">
+      <input type="file" id="file" accept=".cia,.3ds,.cci">
+      <strong>Choose your decrypted copy</strong><br><span id="kinds">a .cia</span>, or drop it here
+    </label>
+    <div id="picked"></div>
+    <button id="build" disabled>Build patched copy</button>
+    <progress id="bar" max="1" value="0" hidden></progress>
+    <div id="status"></div>
+    <div id="done" hidden><a class="save" id="save">Save the patched copy</a></div>
+    <details>
+      <summary>Where to get a decrypted copy, and using the result</summary>
+      <p>On a 3DS with custom firmware, GodMode9 can build a decrypted CIA of a title installed on it, and dump a game card
+        as a decrypted .3ds. The copy has to be decrypted: this page cannot read an encrypted one.</p>
+      <p>Install a patched CIA in place of the original: with FBI on a 3DS with Luma3DS, or in Citra (or Azahar) with
+        File → Install CIA. Play a patched .3ds in Citra, or have GodMode9 build a CIA from it to install on a 3DS.
+        A patched game needs no Luma3DS game patching: if you used the patch's luma folder before, delete its romfs folder.</p>
+      <p>Keep your decrypted copy: installing it puts the original back.</p>
+    </details>
+  </div>
+</main>
+<script type="application/json" id="patch">{{PATCH}}</script>
+<script>
+'use strict';
+/* <core> Rebuilds a decrypted CIA or .3ds with some romfs files replaced, reading only what it needs of the file. */
+
+const K = Uint32Array.of(
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+  0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+  0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+  0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+  0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+  0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2);
+
+/** SHA-256, fed in pieces. */
+class Sha256 {
+  constructor() {
+    this.h = Uint32Array.of(0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19);
+    this.w = new Uint32Array(64);
+    this.buf = new Uint8Array(64);
+    this.n = 0;
+    this.len = 0;
+  }
+  update(d) {
+    let i = 0;
+    this.len += d.length;
+    if (this.n) {
+      const t = Math.min(64 - this.n, d.length);
+      this.buf.set(d.subarray(0, t), this.n);
+      this.n += t;
+      i = t;
+      if (this.n < 64) return this;
+      this.block(this.buf, 0);
+      this.n = 0;
+    }
+    for (; i + 64 <= d.length; i += 64) this.block(d, i);
+    if (i < d.length) {
+      this.buf.set(d.subarray(i));
+      this.n = d.length - i;
+    }
+    return this;
+  }
+  block(d, o) {
+    const w = this.w, H = this.h;
+    for (let t = 0; t < 16; t++, o += 4) w[t] = d[o] << 24 | d[o + 1] << 16 | d[o + 2] << 8 | d[o + 3];
+    for (let t = 16; t < 64; t++) {
+      const x = w[t - 15], y = w[t - 2];
+      w[t] = w[t - 16] + ((x >>> 7 | x << 25) ^ (x >>> 18 | x << 14) ^ x >>> 3) + w[t - 7]
+        + ((y >>> 17 | y << 15) ^ (y >>> 19 | y << 13) ^ y >>> 10);
+    }
+    let a = H[0], b = H[1], c = H[2], e0 = H[3], e = H[4], f = H[5], g = H[6], h = H[7];
+    for (let t = 0; t < 64; t++) {
+      const t1 = h + ((e >>> 6 | e << 26) ^ (e >>> 11 | e << 21) ^ (e >>> 25 | e << 7)) + (e & f ^ ~e & g) + K[t] + w[t] | 0;
+      const t2 = ((a >>> 2 | a << 30) ^ (a >>> 13 | a << 19) ^ (a >>> 22 | a << 10)) + (a & b ^ a & c ^ b & c) | 0;
+      h = g; g = f; f = e; e = e0 + t1 | 0; e0 = c; c = b; b = a; a = t1 + t2 | 0;
+    }
+    H[0] += a; H[1] += b; H[2] += c; H[3] += e0; H[4] += e; H[5] += f; H[6] += g; H[7] += h;
+  }
+  digest() {
+    const bits = this.len * 8;
+    const pad = new Uint8Array((this.n + 9 + 63) & ~63);
+    pad.set(this.buf.subarray(0, this.n));
+    pad[this.n] = 0x80;
+    const v = new DataView(pad.buffer);
+    v.setUint32(pad.length - 8, Math.floor(bits / 4294967296));
+    v.setUint32(pad.length - 4, bits >>> 0);
+    for (let i = 0; i < pad.length; i += 64) this.block(pad, i);
+    const out = new Uint8Array(32);
+    const o = new DataView(out.buffer);
+    for (let i = 0; i < 8; i++) o.setUint32(i * 4, this.h[i]);
+    return out;
+  }
+}
+const sha256 = d => new Sha256().update(d).digest();
+
+const align = (x, a) => Math.ceil(x / a) * a;
+const view = b => new DataView(b.buffer, b.byteOffset, b.byteLength);
+const u64le = (v, i) => v.getUint32(i, true) + v.getUint32(i + 4, true) * 4294967296;
+const u64be = (v, i) => v.getUint32(i) * 4294967296 + v.getUint32(i + 4);
+const setU64le = (v, i, x) => { v.setUint32(i, x >>> 0, true); v.setUint32(i + 4, Math.floor(x / 4294967296), true); };
+const setU64be = (v, i, x) => { v.setUint32(i, Math.floor(x / 4294967296)); v.setUint32(i + 4, x >>> 0); };
+const hex = (n, w) => n.toString(16).padStart(w, '0');
+const NONE = 0xFFFFFFFF;
+const CHUNK = 8 << 20;
+
+async function read(file, at, n) {
+  return new Uint8Array(await file.slice(at, at + n).arrayBuffer());
+}
+
+/** A part of what is written: bytes held here, or a range of the file read when needed. */
+const range = (start, end) => ({ start, end });
+const partSize = p => p instanceof Uint8Array ? p.length : p.end - p.start;
+
+/** Each part's bytes, in pieces of at most CHUNK. */
+async function* pieces(file, parts) {
+  for (const p of parts) {
+    if (p instanceof Uint8Array) {
+      if (p.length) yield p;
+      continue;
+    }
+    for (let at = p.start; at < p.end; at += CHUNK) yield await read(file, at, Math.min(CHUNK, p.end - at));
+  }
+}
+
+/** SHA-256 of each block-sized piece of the parts' bytes, the last padded with zeros; one block for none. */
+async function blockHashes(file, parts, block, tick) {
+  const out = [];
+  const buf = new Uint8Array(block);
+  let fill = 0;
+  for await (const piece of pieces(file, parts)) {
+    let i = 0;
+    while (i < piece.length) {
+      if (fill === 0 && piece.length - i >= block) {
+        out.push(sha256(piece.subarray(i, i + block)));
+        i += block;
+        continue;
+      }
+      const n = Math.min(block - fill, piece.length - i);
+      buf.set(piece.subarray(i, i + n), fill);
+      fill += n;
+      i += n;
+      if (fill === block) {
+        out.push(sha256(buf));
+        fill = 0;
+      }
+    }
+    if (tick) await tick(piece.length);
+  }
+  if (fill > 0 || out.length === 0) {
+    buf.fill(0, fill);
+    out.push(sha256(buf));
+  }
+  const all = new Uint8Array(out.length * 32);
+  out.forEach((h, k) => all.set(h, k * 32));
+  return all;
+}
+
+async function hashParts(file, parts, tick) {
+  const s = new Sha256();
+  for await (const piece of pieces(file, parts)) {
+    s.update(piece);
+    if (tick) await tick(piece.length);
+  }
+  return s.digest();
+}
+
+/** The CIA's sections and contents, its contents left in the file. */
+async function readCia(file) {
+  const head = await read(file, 0, 0x2020);
+  const h = view(head);
+  if (head.length < 0x2020 || h.getUint32(0, true) !== 0x2020) throw new Error('This is not a CIA.');
+  const certSize = h.getUint32(8, true), ticketSize = h.getUint32(12, true), tmdSize = h.getUint32(16, true);
+  const metaSize = h.getUint32(20, true), contentSize = u64le(h, 24);
+  const certAt = align(0x2020, 64), ticketAt = certAt + align(certSize, 64), tmdAt = ticketAt + align(ticketSize, 64);
+  const contentsAt = tmdAt + align(tmdSize, 64);
+  const tmd = await read(file, tmdAt, tmdSize);
+  const t = view(tmd);
+  const body = { 0x10000: 0x240, 0x10003: 0x240, 0x10001: 0x140, 0x10004: 0x140, 0x10002: 0x80, 0x10005: 0x80 }[t.getUint32(0)];
+  if (!body) throw new Error('This CIA\'s TMD is not one this page can read.');
+  const count = t.getUint16(body + 0x9E);
+  const records = body + 0xC4 + 64 * 0x24;
+  const contents = [];
+  let at = contentsAt;
+  for (let i = 0; i < count; i++) {
+    const r = records + i * 0x30;
+    const index = t.getUint16(r + 4);
+    if (!(head[0x20 + (index >> 3)] & 0x80 >> (index & 7))) continue;
+    const size = u64be(t, r + 8);
+    contents.push({ id: t.getUint32(r), index, type: t.getUint16(r + 6), size, offset: at, record: r });
+    at += size;
+  }
+  if (at - contentsAt !== contentSize) throw new Error('This CIA\'s contents do not add up to the size its header gives: is it whole?');
+  return {
+    head, tmd, body, count, records, contents, contentSize, contentsAt, metaSize,
+    certs: range(certAt, certAt + certSize), ticket: range(ticketAt, ticketAt + ticketSize),
+    meta: range(contentsAt + align(contentSize, 64), contentsAt + align(contentSize, 64) + metaSize),
+    titleId: hex(t.getUint32(body + 0x4C), 8).toUpperCase() + hex(t.getUint32(body + 0x50), 8).toUpperCase(),
+    version: t.getUint16(body + 0x9C)
+  };
+}
+
+/** The content a patch folder names: four hex digits for its index, eight for its id. */
+function contentFor(cia, name) {
+  if (!/^([0-9a-f]{4}|[0-9a-f]{8})$/i.test(name)) return null;
+  const n = parseInt(name, 16);
+  return cia.contents.find(c => name.length === 4 ? c.index === n : c.id === n) || null;
+}
+
+/** Every file of the level 3 whose tables are {@code tables}: path, entry offset, data offset and size. */
+function entries(tables) {
+  const v = view(tables);
+  const dirs = v.getUint32(0x0C, true), files = v.getUint32(0x1C, true);
+  const name = (at, n) => new TextDecoder('utf-16le').decode(tables.subarray(at, at + n));
+  const out = [];
+  const walk = (dir, path, depth) => {
+    if (depth > 64) throw new Error('The romfs\'s folders loop.');
+    for (let f = v.getUint32(dirs + dir + 0x0C, true); f !== NONE; f = v.getUint32(files + f + 4, true)) {
+      out.push({ path: path + name(files + f + 0x20, v.getUint32(files + f + 0x1C, true)), meta: f,
+        offset: u64le(v, files + f + 8), size: u64le(v, files + f + 0x10) });
+    }
+    for (let d = v.getUint32(dirs + dir + 8, true); d !== NONE; d = v.getUint32(dirs + d + 4, true)) {
+      walk(d, path + name(dirs + d + 0x18, v.getUint32(dirs + d + 0x14, true)) + '/', depth + 1);
+    }
+  };
+  walk(0, '', 0);
+  return out;
+}
+
+/**
+ * Rebuilds {@code content} (a decrypted NCCH) with {@code files} (path to bytes) in place of its romfs's
+ * own, its tree, names and tables kept: the parts to write, their size and the SHA-256 of them all.
+ */
+async function rebuildContent(file, content, files, tick) {
+  if (content.type & 1) throw new Error('is encrypted: this page needs a decrypted copy.');
+  const head = await read(file, content.offset, 0x200);
+  const hv = view(head);
+  if (String.fromCharCode(...head.subarray(0x100, 0x104)) !== 'NCCH') throw new Error('is not an NCCH.');
+  if (!(head[0x18F] & 4)) throw new Error('is encrypted: this page needs a decrypted copy.');
+  const unit = 0x200 << head[0x18E];
+  const romfsOff = hv.getUint32(0x1B0, true) * unit;
+  if (romfsOff + hv.getUint32(0x1B4, true) * unit !== hv.getUint32(0x104, true) * unit || romfsOff === 0) {
+    throw new Error('has sections after its romfs, or no romfs.');
+  }
+  const pre = await read(file, content.offset, romfsOff);
+  const romfsAt = content.offset + romfsOff;
+  const ivfc = await read(file, romfsAt, 0x60);
+  const iv = view(ivfc);
+  if (String.fromCharCode(...ivfc.subarray(0, 4)) !== 'IVFC' || iv.getUint32(4, true) !== 0x10000) throw new Error('has no IVFC romfs.');
+  const master = iv.getUint32(8, true);
+  const blockLog = [0, 1, 2].map(k => iv.getUint32(0x0C + k * 0x18 + 16, true));
+  const lv3At = align(0x60 + master, 1 << blockLog[2]);
+  const lv3Head = view(await read(file, romfsAt + lv3At, 0x28));
+  if (lv3Head.getUint32(0, true) !== 0x28) throw new Error('has its romfs\'s level 3 not where its header says.');
+  const dataOffset = lv3Head.getUint32(0x24, true);
+  const tables = await read(file, romfsAt + lv3At, dataOffset);
+  const tv = view(tables);
+  const list = entries(tables);
+  const own = path => Object.prototype.hasOwnProperty.call(files, path);
+  for (const path of Object.keys(files)) {
+    if (!list.some(e => e.path === path)) throw new Error('has no file ' + path + ': is this the title the patch was made for?');
+  }
+  list.sort((a, b) => a.offset - b.offset || a.meta - b.meta);
+  const level3 = [tables];
+  const fileMeta = tv.getUint32(0x1C, true);
+  const dataAt = romfsAt + lv3At + dataOffset;
+  let at = 0;
+  for (const e of list) {
+    const pad = align(at, 0x10) - at;
+    if (pad) level3.push(new Uint8Array(pad));
+    at += pad;
+    const bytes = own(e.path) ? files[e.path] : range(dataAt + e.offset, dataAt + e.offset + e.size);
+    setU64le(tv, fileMeta + e.meta + 8, at);
+    setU64le(tv, fileMeta + e.meta + 0x10, partSize(bytes));
+    level3.push(bytes);
+    at += partSize(bytes);
+  }
+  const lv3Size = dataOffset + at;
+
+  const level2 = await blockHashes(file, level3, 1 << blockLog[2], tick);
+  const level1 = await blockHashes(file, [level2], 1 << blockLog[1]);
+  const masterHash = await blockHashes(file, [level1], 1 << blockLog[0]);
+  const newLv3At = align(0x60 + masterHash.length, 1 << blockLog[2]);
+  const lv1At = align(newLv3At + lv3Size, 1 << blockLog[0]);
+  const lv2At = align(lv1At + level1.length, 1 << blockLog[1]);
+  const total = align(align(lv2At + level2.length, 1 << blockLog[1]), 0x200);
+  const top = new Uint8Array(newLv3At);
+  const t = view(top);
+  top.set([0x49, 0x56, 0x46, 0x43]);
+  t.setUint32(4, 0x10000, true);
+  t.setUint32(8, masterHash.length, true);
+  const lv2Logical = align(level1.length, 1 << blockLog[1]);
+  const levels = [[0, level1.length], [lv2Logical, level2.length], [align(lv2Logical + level2.length, 1 << blockLog[2]), lv3Size]];
+  levels.forEach(([off, size], k) => {
+    setU64le(t, 0x0C + k * 0x18, off);
+    setU64le(t, 0x0C + k * 0x18 + 8, size);
+    t.setUint32(0x0C + k * 0x18 + 16, blockLog[k], true);
+  });
+  t.setUint32(0x54, 0x5C, true);
+  top.set(masterHash, 0x60);
+  const romfs = [top, ...level3, new Uint8Array(lv1At - newLv3At - lv3Size), level1,
+    new Uint8Array(lv2At - lv1At - level1.length), level2, new Uint8Array(total - lv2At - level2.length)];
+
+  const pv = view(pre);
+  const hashed = align(0x60 + masterHash.length, 0x200);
+  pv.setUint32(0x104, (pre.length + total) / unit, true);
+  pv.setUint32(0x1B4, total / unit, true);
+  pv.setUint32(0x1B8, Math.ceil(hashed / unit), true);
+  pre.set(sha256(top.subarray(0, Math.ceil(hashed / unit) * unit)), 0x1E0);
+  const parts = [pre, ...romfs];
+  return { parts, size: pre.length + total, hash: await hashParts(file, parts, tick) };
+}
+
+/** A game card's image (.3ds): its start up to its first partition, its partitions, and its game's title id. */
+async function readNcsd(file) {
+  const header = await read(file, 0, 0x200);
+  const h = view(header);
+  const unit = 0x200 << header[0x18E];
+  const partitions = [];
+  for (let i = 0; i < 8; i++) {
+    const offset = h.getUint32(0x120 + i * 8, true) * unit, size = h.getUint32(0x124 + i * 8, true) * unit;
+    if (size) partitions.push({ index: i, offset, size });
+  }
+  partitions.sort((a, b) => a.offset - b.offset);
+  if (!partitions.length || partitions[0].offset < 0x200 || partitions[0].offset > 1 << 20) {
+    throw new Error('This .3ds has no partitions where a .3ds keeps them.');
+  }
+  const last = partitions[partitions.length - 1];
+  if (last.offset + last.size > file.size) throw new Error('This .3ds ends before its last partition does: is it whole?');
+  const game = partitions.find(p => p.index === 0);
+  if (!game) throw new Error('This .3ds has no game partition.');
+  const g = view(await read(file, game.offset, 0x200));
+  return {
+    ncsd: true, unit, partitions, head: await read(file, 0, partitions[0].offset),
+    titleId: hex(g.getUint32(0x11C, true), 8).toUpperCase() + hex(g.getUint32(0x118, true), 8).toUpperCase()
+  };
+}
+
+/** What {@code file} is, a .3ds or a CIA, told by what it holds rather than its name. */
+async function readTitle(file) {
+  const start = await read(file, 0, 0x200);
+  return start.length >= 0x200 && String.fromCharCode(...start.subarray(0x100, 0x104)) === 'NCSD' ? readNcsd(file) : readCia(file);
+}
+
+/**
+ * {@code file} (a decrypted CIA or .3ds) with the patch's files in it, as the parts of a Blob: the title of
+ * {@code patch.titles} with its title id, each content (or partition) it names rebuilt, every other copied,
+ * the TMD or partition table made to match. A title's {@code contents} maps a content folder to its files,
+ * each base64.
+ */
+async function patchTitle(file, patch, progress) {
+  const title = await readTitle(file);
+  const kind = title.ncsd ? '.3ds' : 'CIA';
+  const target = patch.titles.find(t => t.titleId.toUpperCase() === title.titleId);
+  if (!target) {
+    throw new Error('This ' + kind + ' is title ' + title.titleId + ', but the patch is for '
+      + patch.titles.map(t => t.titleId + ' (the ' + (t.kind === 'dlc' ? 'DLC' : 'game') + ')').join(' or ') + '.');
+  }
+  const problems = [];
+  const wanted = [];
+  for (const [name, files] of Object.entries(target.contents)) {
+    const c = title.ncsd ? (/^[0-9a-f]{4}$/i.test(name) ? title.partitions.find(p => p.index === parseInt(name, 16)) : null)
+      : contentFor(title, name);
+    if (!c) problems.push((title.ncsd ? 'Partition ' : 'Content ') + name + ' is not in this ' + kind + '.');
+    else wanted.push([c, files]);
+  }
+  if (problems.length) throw new Error(problems.join('\n'));
+  // each rebuilt content is read twice: once for its romfs's hashes, once for its own
+  const total = wanted.reduce((n, [c]) => n + 2 * c.size, 0);
+  let done = 0;
+  const tick = async n => {
+    done += n;
+    if (progress) await progress(Math.min(1, done / total));
+  };
+  const rebuilt = new Map();
+  for (const [c, files] of wanted) {
+    const bytes = {};
+    for (const [path, b64] of Object.entries(files)) bytes[path] = base64(b64);
+    try {
+      rebuilt.set(c.index, await rebuildContent(file, c, bytes, tick));
+    } catch (e) {
+      throw new Error((title.ncsd ? 'Partition ' : 'Content ') + hex(c.index, 4) + ' ' + e.message);
+    }
+  }
+  const files = wanted.reduce((n, [, f]) => n + Object.keys(f).length, 0);
+  const parts = title.ncsd ? ncsdParts(title, rebuilt) : ciaParts(title, rebuilt);
+  return { parts, rebuilt: rebuilt.size, files, title, target, kind };
+}
+
+/**
+ * A .3ds's parts with its partitions {@code rebuilt}: each placed after the last with the gap the image had,
+ * the partition table and filled size following, the card's size grown only when outgrown.
+ */
+function ncsdParts(card, rebuilt) {
+  const head = card.head.slice();
+  const h = view(head);
+  const parts = [head];
+  let at = head.length, was = head.length;
+  for (const p of card.partitions) {
+    const gap = p.offset - was;
+    const n = rebuilt.get(p.index);
+    const size = n ? n.size : p.size;
+    at += gap;
+    h.setUint32(0x120 + p.index * 8, at / card.unit, true);
+    h.setUint32(0x124 + p.index * 8, size / card.unit, true);
+    if (gap > 0) parts.push(range(p.offset - gap, p.offset));
+    if (n) parts.push(...n.parts);
+    else parts.push(range(p.offset, p.offset + p.size));
+    at += size;
+    was = p.offset + p.size;
+  }
+  if (at > h.getUint32(0x104, true) * card.unit) {
+    let size = 1;
+    while (size < at) size *= 2;
+    h.setUint32(0x104, size / card.unit, true);
+  }
+  if (head.length >= 0x304) h.setUint32(0x300, at >>> 0, true);
+  return parts;
+}
+
+/** A CIA's parts with its contents {@code rebuilt}: decrypted, their sizes and hashes in the TMD made to match. */
+function ciaParts(cia, rebuilt) {
+  const tmd = cia.tmd.slice();
+  const t = view(tmd);
+  for (let i = 0; i < cia.count; i++) {
+    const r = cia.records + i * 0x30;
+    const n = rebuilt.get(t.getUint16(r + 4));
+    if (!n) continue;
+    t.setUint16(r + 6, t.getUint16(r + 6) & ~1);
+    setU64be(t, r + 8, n.size);
+    tmd.set(n.hash, r + 16);
+  }
+  for (let k = 0; k < 64; k++) {
+    const info = cia.body + 0xC4 + k * 0x24;
+    const first = t.getUint16(info), n = t.getUint16(info + 2);
+    if (n) tmd.set(sha256(tmd.subarray(cia.records + first * 0x30, cia.records + (first + n) * 0x30)), info + 4);
+  }
+  tmd.set(sha256(tmd.subarray(cia.body + 0xC4, cia.body + 0xC4 + 64 * 0x24)), cia.body + 0xA4);
+
+  let contentSize = 0;
+  const contentParts = [];
+  for (const c of cia.contents) {
+    const n = rebuilt.get(c.index);
+    contentSize += n ? n.size : c.size;
+    if (n) contentParts.push(...n.parts);
+    else contentParts.push(range(c.offset, c.offset + c.size));
+  }
+  const head = cia.head.slice();
+  setU64le(view(head), 0x18, contentSize);
+  const pad = n => new Uint8Array(align(n, 64) - n);
+  return [head, pad(0x2020), cia.certs, pad(partSize(cia.certs)), cia.ticket, pad(partSize(cia.ticket)), tmd,
+    pad(tmd.length), ...contentParts, pad(contentSize), cia.meta];
+}
+
+function base64(s) {
+  const bin = atob(s);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+/* </core> */
+
+const patch = JSON.parse(document.getElementById('patch').textContent);
+const $ = id => document.getElementById(id);
+let picked = null;
+let url = null;
+if (patch.name) {
+  $('name').textContent = patch.name;
+  document.title = patch.name;
+}
+{
+  const game = patch.titles.some(t => t.kind === 'game'), dlc = patch.titles.some(t => t.kind === 'dlc');
+  $('what').textContent = game && dlc ? 'the game or its DLC' : game ? 'the game' : 'the DLC';
+  $('kinds').textContent = game ? 'a .cia or the game\'s .3ds' : 'a .cia';
+}
+
+function status(text, kind) {
+  $('status').textContent = text;
+  $('status').className = kind || '';
+}
+
+function pick(f) {
+  picked = f || null;
+  $('picked').textContent = picked ? picked.name + ' (' + (picked.size / 1048576).toFixed(1) + ' MB)' : '';
+  $('build').disabled = !picked;
+  $('done').hidden = true;
+  status('');
+}
+
+$('file').addEventListener('change', e => pick(e.target.files[0]));
+const drop = $('drop');
+drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
+drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+drop.addEventListener('drop', e => {
+  e.preventDefault();
+  drop.classList.remove('over');
+  pick(e.dataTransfer.files[0]);
+});
+
+$('build').addEventListener('click', async () => {
+  $('build').disabled = true;
+  $('done').hidden = true;
+  $('bar').hidden = false;
+  $('bar').value = 0;
+  status('Building…');
+  let last = 0;
+  try {
+    const out = await patchTitle(picked, patch, async share => {
+      $('bar').value = share;
+      // let the page draw now and then
+      if (performance.now() - last > 100) {
+        last = performance.now();
+        await new Promise(r => setTimeout(r));
+      }
+    });
+    if (url) URL.revokeObjectURL(url);
+    const blob = new Blob(out.parts.map(p => p instanceof Uint8Array ? p : picked.slice(p.start, p.end)),
+      { type: 'application/octet-stream' });
+    url = URL.createObjectURL(blob);
+    const ext = out.title.ncsd ? '.3ds' : '.cia';
+    const name = picked.name.replace(/\.(cia|3ds|cci)$/i, '').replace(/\s*decrypted$/i, '') + ' patched' + ext;
+    const save = $('save');
+    save.href = url;
+    save.download = name;
+    $('done').hidden = false;
+    $('bar').value = 1;
+    const what = out.target.kind === 'dlc' ? 'DLC' : 'game';
+    const warn = out.target.version != null && !out.title.ncsd && out.title.version !== out.target.version
+      ? '\nThis CIA is version ' + out.title.version + ' of the ' + what + '; the patch was made from version '
+        + out.target.version + '.' : '';
+    const next = out.title.ncsd ? 'play it in Citra, or have GodMode9 build a CIA from it' : 'install it in place of the ' + what;
+    status('Rebuilt the ' + what + ' with ' + out.files + ' patched files. Save the patched ' + out.kind + ', then ' + next + '.'
+      + warn, warn ? '' : 'good');
+    save.click();
+  } catch (e) {
+    $('bar').hidden = true;
+    status(e.message, 'bad');
+  } finally {
+    $('build').disabled = !picked;
+  }
+});
+</script>
+</body>
+</html>

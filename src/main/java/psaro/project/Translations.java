@@ -39,6 +39,10 @@ public final class Translations {
 	private static final String FOLDER_SUFFIX = ".psaro";
 	private static final String ENGLISH = "english";
 	private static final String NOTES = "notes";
+	/** The folder in a game's project that holds the project of the DLC attached to it. */
+	public static final String DLC = "DLC";
+	/** A DLC's folder (of content romfs folders) to the game's romfs it is attached to. */
+	private static final Map<Path, Path> DLC_GAMES = new java.util.concurrent.ConcurrentHashMap<>();
 
 	private final RomfsIndex index;
 	private final Path folder;
@@ -60,15 +64,41 @@ public final class Translations {
 		this.folder = folder;
 	}
 
-	/** {@code <romfs>.psaro} beside the romfs folder. */
+	/**
+	 * {@code <romfs>.psaro} beside the romfs folder; for a DLC attached to a game ({@link #attachDlc}),
+	 * the game's project's {@link #DLC} folder.
+	 */
 	public static Path folderFor(Path romfs) {
 		Path abs = romfs.toAbsolutePath().normalize();
+		Path game = DLC_GAMES.get(abs);
+		if (game != null) {
+			return folderFor(game).resolve(DLC);
+		}
 		Path parent = abs.getParent();
 		if (parent == null || abs.getFileName() == null) {
 			// a drive root has no folder beside it
 			return Path.of(System.getProperty("user.home"), "romfs" + FOLDER_SUFFIX);
 		}
 		return parent.resolve(abs.getFileName() + FOLDER_SUFFIX);
+	}
+
+	/**
+	 * Keeps the project of the DLC whose content romfs folders are in {@code dlc} inside the
+	 * project of the game whose romfs is {@code game}, in its {@link #DLC} folder, rather than
+	 * beside the DLC: every file {@link #folderFor} places for {@code dlc} goes there from now on.
+	 */
+	public static void attachDlc(Path dlc, Path game) {
+		DLC_GAMES.put(dlc.toAbsolutePath().normalize(), game.toAbsolutePath().normalize());
+	}
+
+	/** Forgets that {@code dlc} is attached to a game, so its project is beside it again. */
+	public static void detachDlc(Path dlc) {
+		DLC_GAMES.remove(dlc.toAbsolutePath().normalize());
+	}
+
+	/** The game's romfs {@code romfs} is attached to as its DLC, or null when it is not a DLC. */
+	public static Path gameOf(Path romfs) {
+		return DLC_GAMES.get(romfs.toAbsolutePath().normalize());
 	}
 
 	/** Loads whatever has been saved for {@code index}'s romfs; nothing yet is not an error. */
