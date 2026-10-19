@@ -11,7 +11,7 @@ No game data is included or distributed. You need your own extracted romfs.
 <img width="1393" height="973" alt="Psaro2" src="https://github.com/user-attachments/assets/aefb4c9c-a433-4ff2-a04c-05b2a3030bdd" />
 
 ## How to Use:
-* Open an existing romFS directory and it will scan for .tdt, .mdt, .csv, .bclyt files, layout archives (.arc, .arc.lz), and .dat record files and event scripts.
+* Open an existing romFS directory and it will scan for .tdt, .mdt, .mbb, .csv, .bclyt files, layout archives (.arc, .arc.lz), and .dat record files and event scripts.
 * Games that pack their whole romFS into a CRI archive (.cpk) are read from inside it: record tables, help texts, map script dialogue, and THSS databases (.dat with its .ofs). Their English goes in when you Patch, which rebuilds the .cpk in the patch folder.
 * Any changes made will be saved to a separate folder at the same level, leaving the existing romFS as-is.
 * Navigate through string tables on the left, and through strings inside of those tables on the right.
