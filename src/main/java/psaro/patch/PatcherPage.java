@@ -19,8 +19,9 @@ import org.json.JSONObject;
  * player's own decrypted copy of whichever they pick (a CIA, or the game's .3ds) and hands back
  * the patched copy. It tells which title a copy is by its title id. The player's copy is read in
  * the page a piece at a time and never leaves their machine; the page holds nothing of the title
- * but the files the patch changes. Export patch puts it in the zip beside a readme, in
- * {@link #FOLDER}.
+ * but the files the patch changes. Export patch writes it as a download of its own, the patcher
+ * zip, beside the Luma3DS one; a DLC's page also goes in the Luma3DS zip, in {@link #FOLDER},
+ * as a DLC has no other way to be patched.
  */
 public final class PatcherPage {
 
@@ -71,22 +72,34 @@ public final class PatcherPage {
 		return template().replace(SLOT, patch.toString());
 	}
 
+	/** The page written, and the readme that goes with it. */
+	public record Written(Path page, String readme) {
+	}
+
 	/**
-	 * Writes the page and its readme for {@code titles} (those with nothing patched left out) into
-	 * {@code into}, and returns them as files to add to the zip, in {@link #FOLDER}; none when no
-	 * title has anything patched.
+	 * Writes the page for {@code titles} (those with nothing patched left out) into {@code into},
+	 * returning it with its readme; null when no title has anything patched.
 	 */
-	public static List<PatchExport.Extra> write(Path into, String name, List<Title> titles) throws IOException {
+	public static Written write(Path into, String name, List<Title> titles) throws IOException {
 		List<Title> patched = titles.stream().filter(t -> !t.contents().isEmpty()).toList();
 		if (patched.isEmpty()) {
-			return List.of();
+			return null;
 		}
 		Files.createDirectories(into);
 		Path page = into.resolve(PAGE);
 		Files.writeString(page, html(name, patched), StandardCharsets.UTF_8);
-		Path readme = into.resolve("README.txt");
-		Files.writeString(readme, PatchExport.fill(readme(patched), ""), StandardCharsets.UTF_8);
-		return List.of(new PatchExport.Extra(page, FOLDER + "/" + PAGE), new PatchExport.Extra(readme, FOLDER + "/README.txt"));
+		return new Written(page, readme(patched));
+	}
+
+	/**
+	 * {@code written} as files to add to another zip, in {@link #FOLDER}: the page, and its readme,
+	 * written beside it.
+	 */
+	public static List<PatchExport.Extra> inFolder(Written written) throws IOException {
+		Path readme = written.page().resolveSibling("README.txt");
+		Files.writeString(readme, PatchExport.fill(written.readme(), ""), StandardCharsets.UTF_8);
+		return List.of(new PatchExport.Extra(written.page(), FOLDER + "/" + PAGE),
+				new PatchExport.Extra(readme, FOLDER + "/README.txt"));
 	}
 
 	/** How a player builds their patched copies with the page. */
@@ -101,8 +114,9 @@ public final class PatcherPage {
 		if (game) {
 			titles.stream().filter(t -> t.kind() == Kind.GAME).findFirst()
 					.ifPresent(t -> lines.add("The game (title id " + t.titleId() + ")"));
-			lines.add("  This is instead of the luma folder in this zip: use one or the other. A patched game needs no Luma3DS");
-			lines.add("  game patching, so if you used the luma folder before, delete luma/titles/<title id>/romfs.");
+			lines.add("  This is instead of the Luma3DS patch (the download with the luma folder): use one or the other. A");
+			lines.add("  patched game needs no Luma3DS game patching, so if you used that patch before, delete");
+			lines.add("  luma/titles/<title id>/romfs from your SD card.");
 			lines.add("  - A decrypted CIA of the game (GodMode9 can build one from the game installed on a 3DS) gives a CIA:");
 			lines.add("    install it with FBI on a 3DS with Luma3DS, or in Citra (or Azahar) with File > Install CIA.");
 			lines.add("  - A decrypted .3ds of the game card (GodMode9 can dump one) gives a .3ds: play it in Citra, or have");

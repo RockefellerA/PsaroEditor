@@ -17,8 +17,8 @@ import psaro.project.Translations;
  * What Export patch packs besides the patch folder, per project: the readme, kept in
  * {@code <romfs>.psaro/patch-readme.txt} so it can be edited anywhere (the default readme while
  * there is none), and the files added to the zip, in {@code <romfs>.psaro/export.json}, each by
- * the path it is read from and its path in the zip, with whether the zip's patcher page holds the
- * game's files too. A file is read when the zip is written, so the zip always has it as it is then.
+ * the path it is read from and its path in the zip, with whether a patcher download is written
+ * beside it. A file is read when the zip is written, so the zip always has it as it is then.
  */
 public final class ExportSettings {
 
@@ -107,9 +107,9 @@ public final class ExportSettings {
 	}
 
 	/**
-	 * Whether the zip's patcher page ({@link PatcherPage}) holds the game's patched files, so players
-	 * can build a patched copy of the game instead of using Luma3DS's game patching. A DLC's files
-	 * are always in it; the game's make it as large again as the patch.
+	 * Whether Export patch also writes the patcher download beside the Luma3DS zip: the patcher page
+	 * ({@link PatcherPage}) with the game's patched files (and its DLC's), so players can build a
+	 * patched copy of the game instead of using Luma3DS's game patching. About as large as the patch.
 	 */
 	public synchronized boolean gamePatcher() {
 		return gamePatcher;

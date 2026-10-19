@@ -140,10 +140,11 @@ public final class ExportPatchDialog extends JDialog {
 		content.add(idRow);
 		content.add(Box.createVerticalStrut(6));
 		gamePatcher.setSelected(settings.gamePatcher());
-		gamePatcher.setText(String.format(Locale.ROOT, "Add the game to the patcher page (about %.0f MB more): players can build a "
-				+ "patched copy of the game instead of using Luma3DS's game patching", folderSize(patchFolder) * 4 / 3.0 / 1048576));
-		gamePatcher.setToolTipText("<html>Patcher/" + psaro.patch.PatcherPage.PAGE + " rebuilds a player's decrypted CIA or .3ds of the game "
-				+ "with this patch in it.<br>An attached DLC's patched files always go in it.</html>");
+		gamePatcher.setText(String.format(Locale.ROOT, "Also export a patcher download beside the zip (about %.0f MB): players "
+				+ "build a patched copy of the game instead of using Luma3DS's game patching", folderSize(patchFolder) / 1048576.0));
+		gamePatcher.setToolTipText("<html>A second zip, &lt;name&gt; patcher.zip, holding " + psaro.patch.PatcherPage.PAGE
+				+ ", which rebuilds a player's decrypted CIA or .3ds of the game (or of its DLC) with this patch in it.<br>Players "
+				+ "take one download or the other. An attached DLC's page goes in the Luma3DS zip either way.</html>");
 		gamePatcher.setAlignmentX(LEFT_ALIGNMENT);
 		content.add(gamePatcher);
 		content.add(Box.createVerticalStrut(8));

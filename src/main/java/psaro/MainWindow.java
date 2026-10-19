@@ -1229,6 +1229,14 @@ public final class MainWindow {
 			return;
 		}
 		Path target = zip;
+		// the patcher download beside it: "<name> patch.zip" gives "<name> patcher.zip"
+		String stem = zip.getFileName().toString().replaceFirst("(?i)\\.zip$", "").replaceFirst("(?i)\\s*patch$", "");
+		Path patcherZip = withGame ? zip.resolveSibling(stem + " patcher.zip") : null;
+		if (patcherZip != null && Files.exists(patcherZip) && !same(patcherZip, zip)
+				&& JOptionPane.showConfirmDialog(frame, patcherZip.getFileName() + " exists. Replace it?", "Export patch",
+						JOptionPane.YES_NO_OPTION) != JOptionPane.YES_OPTION) {
+			return;
+		}
 		String titleId = id.toUpperCase(java.util.Locale.ROOT);
 		// the game's, whichever tab is in view by the time it runs
 		Path patchFolder = patcher.output();
@@ -1236,45 +1244,64 @@ public final class MainWindow {
 		exporting = true;
 		refresh();
 		status.setText("Exporting " + target.getFileName() + "…");
-		boolean[] page = {false};
+		boolean[] dlcPage = {false};
+		long[] patcherBytes = {0};
 		new SwingWorker<PatchExport.Result, Void>() {
 			@Override
 			protected PatchExport.Result doInBackground() throws IOException {
-				List<PatcherPage.Title> titles = new ArrayList<>();
-				if (withGame) {
-					titles.add(new PatcherPage.Title(PatcherPage.Kind.GAME, titleId, versionOf(gameBase),
-							TitleBuild.gameFiles(patchFolder)));
-				}
-				if (dlcPatch != null) {
-					String dlcId = "0004008C" + titleId.substring(8);
-					titles.add(new PatcherPage.Title(PatcherPage.Kind.DLC, dlcId, versionOf(dlcBase), TitleBuild.dlcFiles(dlcPatch)));
-				}
-				List<PatchExport.Extra> pageFiles = PatcherPage.write(pageFolder, pageName, titles);
+				PatcherPage.Title dlcTitle = dlcPatch == null ? null : new PatcherPage.Title(PatcherPage.Kind.DLC,
+						"0004008C" + titleId.substring(8), versionOf(dlcBase), TitleBuild.dlcFiles(dlcPatch));
+				// the Luma3DS download, with the DLC's page, the DLC having no other way to be patched
 				List<PatchExport.Extra> all = new ArrayList<>(extras);
-				all.addAll(pageFiles);
-				page[0] = !pageFiles.isEmpty();
-				String text = page[0] ? PatchExport.withoutFooter(readme).stripTrailing() + "\n\nOr build a patched copy instead: see "
-						+ PatcherPage.FOLDER + "/README.txt.\n" : readme;
-				return PatchExport.write(patchFolder, titleId, text, all, target, step -> { });
+				PatcherPage.Written forDlc = dlcTitle == null ? null
+						: PatcherPage.write(pageFolder.resolve("luma"), pageName, List.of(dlcTitle));
+				if (forDlc != null) {
+					all.addAll(PatcherPage.inFolder(forDlc));
+					dlcPage[0] = true;
+				}
+				String text = PatchExport.withoutFooter(readme).stripTrailing();
+				if (patcherZip != null) {
+					text += "\n\nThere is also a patcher download, " + patcherZip.getFileName() + ", for building a patched copy of "
+							+ "the game to install or play instead of using Luma3DS game patching.";
+				}
+				if (forDlc != null) {
+					text += "\n\nThe DLC is patched by building a patched copy of it: see " + PatcherPage.FOLDER + "/README.txt.";
+				}
+				PatchExport.Result r = PatchExport.write(patchFolder, titleId, text + "\n", all, target, step -> { });
+				// the patcher download: the page, for the game and the DLC, and its readme
+				if (patcherZip != null) {
+					List<PatcherPage.Title> titles = new ArrayList<>();
+					titles.add(new PatcherPage.Title(PatcherPage.Kind.GAME, titleId, versionOf(gameBase), TitleBuild.gameFiles(patchFolder)));
+					if (dlcTitle != null) {
+						titles.add(dlcTitle);
+					}
+					PatcherPage.Written page = PatcherPage.write(pageFolder.resolve("patcher"), pageName, titles);
+					if (page != null) {
+						PatchExport.writeFiles(titleId, page.readme(), List.of(new PatchExport.Extra(page.page(), PatcherPage.PAGE)),
+								patcherZip);
+						patcherBytes[0] = Files.size(patcherZip);
+					}
+				}
+				return r;
 			}
 
 			@Override
 			protected void done() {
 				exporting = false;
 				refresh();
-				boolean withPage = page[0];
 				try {
 					PatchExport.Result r = get();
+					String also = (patcherBytes[0] > 0 ? String.format(java.util.Locale.ROOT,
+							"%n%nAnd the patcher download, %s (%.1f MB): players open its %s in a browser to build a patched copy of "
+									+ "%s from their own.", patcherZip.getFileName(), patcherBytes[0] / 1048576.0, PatcherPage.PAGE,
+							dlcPatch != null ? "the game or its DLC" : "the game") : "")
+							+ (dlcPage[0] ? "\n\nThe DLC's page is in the Luma3DS zip too, in " + PatcherPage.FOLDER + "/." : "");
 					JOptionPane.showMessageDialog(frame, String.format(java.util.Locale.ROOT,
 							"Packed %,d files%s (%.1f MB) into %s,%nlaid out for Luma3DS under luma/titles/%s/romfs/, "
 									+ "with the readme.", r.files(),
 							r.extras() == 0 ? "" : String.format(java.util.Locale.ROOT, " and %,d added %s", r.extras(),
 									r.extras() == 1 ? "file" : "files"),
-							r.bytes() / 1048576.0, target, titleId)
-							+ (withPage ? "\n\nWith " + PatcherPage.FOLDER + "/" + PatcherPage.PAGE + ": players open it in a browser "
-									+ "to build a patched copy of " + (withGame && dlcPatch != null ? "the game or its DLC"
-									: withGame ? "the game" : "the DLC") + " from their own." : ""),
-							"Export patch", JOptionPane.INFORMATION_MESSAGE);
+							r.bytes() / 1048576.0, target, titleId) + also, "Export patch", JOptionPane.INFORMATION_MESSAGE);
 				} catch (java.util.concurrent.ExecutionException e) {
 					error("Could not export the patch:\n" + e.getCause().getMessage());
 				} catch (InterruptedException e) {

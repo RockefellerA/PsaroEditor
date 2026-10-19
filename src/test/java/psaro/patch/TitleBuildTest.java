@@ -195,10 +195,11 @@ class TitleBuildTest {
 	 */
 	@Test
 	void thePlayersPageHoldsEachTitle() throws IOException {
-		List<PatchExport.Extra> extras = PatcherPage.write(dir.resolve("export"), "Songs </script> patcher", List.of(
+		PatcherPage.Written written = PatcherPage.write(dir.resolve("export"), "Songs </script> patcher", List.of(
 				new PatcherPage.Title(PatcherPage.Kind.GAME, "0004000000140000", null, Map.of()),
 				new PatcherPage.Title(PatcherPage.Kind.DLC, "0004008C00140000", 48,
 						Map.of("009a", Map.of("contents.csv.lz", "Royal Trumpet".getBytes(StandardCharsets.UTF_16LE))))));
+		List<PatchExport.Extra> extras = PatcherPage.inFolder(written);
 		assertEquals(List.of("Patcher/Patcher.html", "Patcher/README.txt"), extras.stream().map(PatchExport.Extra::destination).toList());
 		String html = Files.readString(extras.get(0).source());
 		String data = html.substring(html.indexOf("id=\"patch\">") + "id=\"patch\">".length());
@@ -217,8 +218,32 @@ class TitleBuildTest {
 		assertTrue(readme.contains("The DLC (title id 0004008C00140000)"), readme);
 		assertFalse(readme.contains("The game (title id"), readme);
 
-		assertEquals(List.of(), PatcherPage.write(dir.resolve("export2"), "x",
+		assertNull(PatcherPage.write(dir.resolve("export2"), "x",
 				List.of(new PatcherPage.Title(PatcherPage.Kind.GAME, "0004000000140000", null, Map.of()))));
-		assertNull(null);
+	}
+
+	/**
+	 * The patcher download holds the page and its readme, and nothing of the Luma3DS patch; its readme
+	 * tells the game's patched copy from the Luma3DS patch.
+	 */
+	@Test
+	void thePatcherDownloadHoldsOnlyThePage() throws IOException {
+		PatcherPage.Written written = PatcherPage.write(dir.resolve("export"), "Songs patcher", List.of(
+				new PatcherPage.Title(PatcherPage.Kind.GAME, "0004000000140000", null,
+						Map.of(TitleBuild.GAME, Map.of("text/a.tdt", new byte[] {1})))));
+		Path zip = dir.resolve("Songs patcher.zip");
+		PatchExport.Result r = PatchExport.writeFiles("0004000000140000", written.readme(),
+				List.of(new PatchExport.Extra(written.page(), PatcherPage.PAGE)), zip);
+		assertEquals(1, r.extras());
+		List<String> names = new java.util.ArrayList<>();
+		String readme;
+		try (java.util.zip.ZipFile z = new java.util.zip.ZipFile(zip.toFile())) {
+			z.stream().forEach(e -> names.add(e.getName()));
+			readme = new String(z.getInputStream(z.getEntry("README.txt")).readAllBytes(), StandardCharsets.UTF_8);
+		}
+		assertEquals(List.of("README.txt", "Patcher.html"), names);
+		assertTrue(readme.contains("The game (title id 0004000000140000)"), readme);
+		assertTrue(readme.contains("instead of the Luma3DS patch"), readme);
+		assertTrue(readme.endsWith(PatchExport.FOOTER + "\r\n"), readme);
 	}
 }

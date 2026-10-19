@@ -130,6 +130,40 @@ public final class PatchExport {
 	}
 
 	/**
+	 * Writes a zip of {@code readme} ({@link #TITLE_ID} filled in, {@link #FOOTER} after it) and
+	 * {@code files} at their paths in it, and nothing of the patch folder: the patcher download,
+	 * which players take instead of the Luma3DS one. Written beside its place, then moved there.
+	 */
+	public static Result writeFiles(String titleId, String readme, List<Extra> files, Path zip) throws IOException {
+		List<String> problems = problems(null, titleId, files);
+		if (!problems.isEmpty()) {
+			throw new IOException(String.join("\n", problems));
+		}
+		String id = titleId.toUpperCase(Locale.ROOT);
+		Path tmp = zip.resolveSibling(zip.getFileName() + ".tmp");
+		long bytes = 0;
+		try (OutputStream out = Files.newOutputStream(tmp); ZipOutputStream z = new ZipOutputStream(out)) {
+			z.putNextEntry(new ZipEntry(README));
+			z.write(fill(withFooter(readme), id).getBytes(StandardCharsets.UTF_8));
+			z.closeEntry();
+			for (Extra e : files) {
+				z.putNextEntry(new ZipEntry(destination(e.destination(), id)));
+				bytes += Files.copy(e.source(), z);
+				z.closeEntry();
+			}
+		} catch (IOException | RuntimeException e) {
+			Files.deleteIfExists(tmp);
+			throw e;
+		}
+		try {
+			Files.move(tmp, zip, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+		} catch (AtomicMoveNotSupportedException e) {
+			Files.move(tmp, zip, StandardCopyOption.REPLACE_EXISTING);
+		}
+		return new Result(0, bytes, files.size());
+	}
+
+	/**
 	 * What stands in the way of adding {@code extras} to a zip for {@code titleId}, one line each:
 	 * a title id that is none, a file that is not there, or a path in the zip that is not plain
 	 * (empty, absolute, climbing out with {@code ..}), is the readme's, is another's, or is one of
