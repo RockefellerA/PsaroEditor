@@ -130,6 +130,11 @@ public final class PatcherPage {
 			lines.add("  decrypted CIA of it (GodMode9 can build one from the DLC installed on a 3DS), and install the patched");
 			lines.add("  CIA with FBI, or in Citra with File > Install CIA. Its text is drawn with the game's patched fonts,");
 			lines.add("  so patch the game too, either way.");
+			lines.add("  If the DLC was installed before and the game still shows its old text, the game is showing its own");
+			lines.add("  copy of that text, kept in its Ext Save Data. Back up the game's save data and Ext Save Data with");
+			lines.add("  Checkpoint, then delete the game's Ext Save Data with FBI (Ext Save Data > the game > Delete). The");
+			lines.add("  game makes it again from the patched DLC. Its save data is not touched; if the game kept anything");
+			lines.add("  else in its Ext Save Data and you miss it, restore that with Checkpoint.");
 			lines.add("");
 		}
 		lines.add("Keep your decrypted copies: installing one puts the original back.");

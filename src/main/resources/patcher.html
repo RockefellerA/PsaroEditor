@@ -60,6 +60,11 @@ details p { margin: 8px 0; }
       <p>Install a patched CIA in place of the original: with FBI on a 3DS with Luma3DS, or in Citra (or Azahar) with
         File → Install CIA. Play a patched .3ds in Citra, or have GodMode9 build a CIA from it to install on a 3DS.
         A patched game needs no Luma3DS game patching: if you used the patch's luma folder before, delete its romfs folder.</p>
+      <p id="dlcNote" hidden>If the DLC was installed before and the game still shows its old text, the game is showing its own
+        copy of that text, kept in its Ext Save Data. Back up the game's save data and Ext Save Data with Checkpoint, then
+        delete the game's Ext Save Data with FBI (Ext Save Data → the game → Delete). The game makes it again from the
+        patched DLC. Its save data is not touched; if the game kept anything else in its Ext Save Data and you miss it,
+        restore that with Checkpoint.</p>
       <p>Keep your decrypted copy: installing it puts the original back.</p>
     </details>
   </div>
@@ -518,6 +523,7 @@ if (patch.name) {
   const game = patch.titles.some(t => t.kind === 'game'), dlc = patch.titles.some(t => t.kind === 'dlc');
   $('what').textContent = game && dlc ? 'the game or its DLC' : game ? 'the game' : 'the DLC';
   $('kinds').textContent = game ? 'a .cia or the game\'s .3ds' : 'a .cia';
+  $('dlcNote').hidden = !dlc;
 }
 
 function status(text, kind) {

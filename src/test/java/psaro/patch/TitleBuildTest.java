@@ -214,8 +214,10 @@ class TitleBuildTest {
 		byte[] file = java.util.Base64.getDecoder().decode(title.getJSONObject("contents").getJSONObject("009a").getString("contents.csv.lz"));
 		assertEquals("Royal Trumpet", text(file));
 		assertFalse(html.contains("{{PATCH}}"));
+		assertTrue(html.contains("delete the game's Ext Save Data with FBI"), "the page's DLC note");
 		String readme = Files.readString(extras.get(1).source());
 		assertTrue(readme.contains("The DLC (title id 0004008C00140000)"), readme);
+		assertTrue(readme.contains("delete the game's Ext Save Data with FBI"), readme);
 		assertFalse(readme.contains("The game (title id"), readme);
 
 		assertNull(PatcherPage.write(dir.resolve("export2"), "x",
