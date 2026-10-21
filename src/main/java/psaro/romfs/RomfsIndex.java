@@ -660,14 +660,20 @@ public final class RomfsIndex {
 			Map<String, Bclyt.Pane> tops) {
 		List<Bclyt.Pane> text = panes.textPanes();
 		Map<String, Bclyt.Pane> byName = new HashMap<>();
-		panes.panes().forEach(p -> byName.putIfAbsent(p.name(), p));
+		Map<String, Integer> children = new HashMap<>();
+		for (Bclyt.Pane p : panes.panes()) {
+			byName.putIfAbsent(p.name(), p);
+			if (p.parent() != null) {
+				children.merge(p.parent(), 1, Integer::sum);
+			}
+		}
 		for (int i = 0; i < text.size(); i++) {
 			Bclyt.Pane under = text.get(i);
 			Bclyt.Pane top = null;
 			String body = null;
 			for (int j = i + 1; j < text.size(); j++) {
 				Bclyt.Pane over = text.get(j);
-				if (sameText(under, over) && stacked(under, over, byName)
+				if (sameText(under, over) && stacked(under, over, byName, children)
 						&& under.text().boxWidth() == over.text().boxWidth()
 						&& under.text().boxHeight() == over.text().boxHeight()
 						&& !under.text().font().equals(over.text().font())) {
@@ -684,29 +690,41 @@ public final class RomfsIndex {
 
 	/**
 	 * Whether two panes sit at one place, give or take a drop shadow's offset: under the same parent
-	 * ({@link Bclyt.Pane#stacksOn}), or each under a parent of its own where the two parents sit at
-	 * one place (the song title's glow and its letters on the music standby screen, each in a null
-	 * pane of its own).
+	 * ({@link Bclyt.Pane#stacksOn}), or under the same parent once the null panes holding each alone
+	 * are seen through (the song title's glow and its letters on the music standby screen, each in a
+	 * null pane of its own). Panes in parents holding more, such as windows the game shows one at a
+	 * time, are not one text's layers wherever they sit.
 	 */
-	private static boolean stacked(Bclyt.Pane a, Bclyt.Pane b, Map<String, Bclyt.Pane> byName) {
+	private static boolean stacked(Bclyt.Pane a, Bclyt.Pane b, Map<String, Bclyt.Pane> byName, Map<String, Integer> children) {
 		if (a.stacksOn(b)) {
 			return true;
 		}
-		float[] at = fromRoot(a, byName);
-		float[] other = fromRoot(b, byName);
-		return Math.abs(at[0] - other[0]) <= 4 && Math.abs(at[1] - other[1]) <= 4;
+		Placed at = unwrapped(a, byName, children);
+		Placed other = unwrapped(b, byName, children);
+		return Objects.equals(at.parent(), other.parent()) && Math.abs(at.x() - other.x()) <= 4
+				&& Math.abs(at.y() - other.y()) <= 4;
 	}
 
-	/** Where {@code pane} sits from the layout's root: its place from its parent, plus each parent's. */
-	private static float[] fromRoot(Bclyt.Pane pane, Map<String, Bclyt.Pane> byName) {
-		float x = 0;
-		float y = 0;
+	/** Where a pane sits from {@code parent}. */
+	private record Placed(String parent, float x, float y) {
+	}
+
+	/**
+	 * Where {@code pane} sits from its first parent that holds more than the pane alone: through
+	 * each null pane (pan1) that holds only it, its place from that one added to the null pane's own.
+	 */
+	private static Placed unwrapped(Bclyt.Pane pane, Map<String, Bclyt.Pane> byName, Map<String, Integer> children) {
+		float x = pane.x();
+		float y = pane.y();
+		String parent = pane.parent();
 		Set<String> seen = new HashSet<>();
-		for (Bclyt.Pane p = pane; p != null && seen.add(p.name()); p = p.parent() == null ? null : byName.get(p.parent())) {
+		for (Bclyt.Pane p = parent == null ? null : byName.get(parent); p != null && p.kind().equals("pan1")
+				&& children.getOrDefault(p.name(), 0) == 1 && seen.add(p.name()); p = parent == null ? null : byName.get(parent)) {
 			x += p.x();
 			y += p.y();
+			parent = p.parent();
 		}
-		return new float[] { x, y };
+		return new Placed(parent, x, y);
 	}
 
 	/**

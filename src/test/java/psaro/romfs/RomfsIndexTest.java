@@ -201,6 +201,24 @@ class RomfsIndexTest {
 		assertNull(index.layeredUnder("c.bcfnt"), "its null pane elsewhere");
 	}
 
+	/**
+	 * One string in a pane of each of two windows at one place, the game showing one window at a
+	 * time (as the card result screen's character names are), is not one text's layers: each window
+	 * holds more than the pane.
+	 */
+	@Test
+	void panesInWindowsAtOnePlaceAreNotOneTextsLayers() throws IOException {
+		table("menu", Map.of("menu_0001", "はい"));
+		byte[] other = pane("Txt_Name_Lvup", "menu_0001");
+		other[0x52] = 1;
+		archive("scene/card/result.arc.lz", "blyt/result.bclyt", List.of("a.bcfnt", "b.bcfnt"),
+				SampleRomfs.group("NL_Win_Skup", pane("Txt_Name_Skup", "menu_0001"), SampleRomfs.picture("Pic_Win", 0, 0, 200, 80)),
+				SampleRomfs.group("NL_Win_Lvup", other, SampleRomfs.picture("Pic_Win", 0, 0, 200, 80)));
+		RomfsIndex index = RomfsIndex.scan(romfs);
+		assertNull(index.layeredUnder("a.bcfnt"));
+		assertNull(index.paneOnTop("blyt/result.bclyt", "Txt_Name_Skup"));
+	}
+
 	/** {@code group}, a null pane from {@link SampleRomfs#group}, moved to {@code x}, {@code y} from its parent. */
 	private static byte[] at(byte[] group, float x, float y) {
 		java.nio.ByteBuffer.wrap(group).order(java.nio.ByteOrder.LITTLE_ENDIAN).putFloat(0x24, x).putFloat(0x28, y);
