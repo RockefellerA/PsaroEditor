@@ -1014,7 +1014,7 @@ public final class MainWindow {
 			return;
 		}
 		if (wizard.mode() == ExportSettings.Mode.LAYERED_FS) {
-			exportLayeredFs(id, wizard.readme(), wizard.extras());
+			exportLayeredFs(id, wizard.readme(), wizard.patcherReadme(), wizard.extras());
 		} else {
 			exportCia(id, wizard.patcherDownload(), wizard.builds());
 		}
@@ -1035,9 +1035,10 @@ public final class MainWindow {
 	/**
 	 * Packs the game's patch folder into a zip for players ({@link PatchExport}), laid out for
 	 * Luma3DS's game patching, with {@code readme} and the {@code extras} added; and, the DLC having
-	 * no other way to be patched, the DLC's patcher page ({@link PatcherPage}) when it has English.
+	 * no other way to be patched, the DLC's patcher page ({@link PatcherPage}) when it has English,
+	 * with {@code patcherReadme} beside it.
 	 */
-	private void exportLayeredFs(String titleId, String readme, List<PatchExport.Extra> extras) {
+	private void exportLayeredFs(String titleId, String readme, String patcherReadme, List<PatchExport.Extra> extras) {
 		Path root = game.index.root();
 		JFileChooser chooser = new JFileChooser(Translations.folderFor(root).getParent().toFile());
 		chooser.setDialogTitle("Export patch");
@@ -1064,11 +1065,12 @@ public final class MainWindow {
 			@Override
 			protected PatchExport.Result doInBackground() throws IOException {
 				List<PatchExport.Extra> all = new ArrayList<>(extras);
-				PatcherPage.Written forDlc = dlcPatch == null ? null : PatcherPage.write(pageFolder.resolve("luma"), pageName,
-						List.of(dlcTitle(titleId, dlcPatch, dlcBase)));
+				PatcherPage.Title dlcTitle = dlcPatch == null ? null : dlcTitle(titleId, dlcPatch, dlcBase);
+				PatcherPage.Written forDlc = dlcTitle == null ? null : PatcherPage.write(pageFolder.resolve("luma"), pageName,
+						List.of(dlcTitle));
 				String text = PatchExport.withoutFooter(readme).stripTrailing();
 				if (forDlc != null) {
-					all.addAll(PatcherPage.inFolder(forDlc));
+					all.addAll(PatcherPage.inFolder(forDlc, patcherReadme, dlcTitle.titleId()));
 					dlcPage[0] = true;
 					text += "\n\nThe DLC is patched by building a patched copy of it: see " + PatcherPage.FOLDER + "/README.txt.";
 				}

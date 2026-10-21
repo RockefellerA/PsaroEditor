@@ -186,6 +186,30 @@ class PatchExportTest {
 		assertFalse(ExportSettings.open(romfs).ownReadme());
 	}
 
+	/**
+	 * The DLC's patcher page's readme is kept per project beside the game's, apart from it; the
+	 * default's text is no readme of its own, and the game's readme is left as it was.
+	 */
+	@Test
+	void thePatcherReadmeIsKeptForTheProject() throws IOException {
+		Path romfs = dir.resolve("game");
+		ExportSettings s = ExportSettings.open(romfs);
+		assertEquals(PatcherPage.defaultDlcReadme(), s.patcherReadme());
+		assertTrue(s.patcherReadme().contains("The DLC (title id {titleId})"), s.patcherReadme());
+		assertFalse(s.ownPatcherReadme());
+
+		s.setPatcherReadme("The DLC {titleId}\r\n  NOTE: switch the region.\r\n");
+		ExportSettings again = ExportSettings.open(romfs);
+		assertEquals("The DLC {titleId}\n  NOTE: switch the region.\n", again.patcherReadme());
+		assertTrue(again.ownPatcherReadme());
+		assertTrue(Files.isRegularFile(dir.resolve("game.psaro/" + ExportSettings.PATCHER_README_FILE)), "editable on its own");
+		assertFalse(again.ownReadme(), "the game's readme is its own");
+
+		again.setPatcherReadme(PatcherPage.defaultDlcReadme().replace("\n", "\r\n"));
+		assertFalse(again.ownPatcherReadme());
+		assertFalse(Files.exists(dir.resolve("game.psaro/" + ExportSettings.PATCHER_README_FILE)));
+	}
+
 	/** How the patch is applied, and for a patched CIA what is made, are kept per project, with the added files. */
 	@Test
 	void theWayThePatchIsAppliedIsKeptForTheProject() throws IOException {

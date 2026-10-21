@@ -96,10 +96,26 @@ public final class PatcherPage {
 	 * written beside it.
 	 */
 	public static List<PatchExport.Extra> inFolder(Written written) throws IOException {
+		return inFolder(written, written.readme(), "");
+	}
+
+	/**
+	 * As {@link #inFolder(Written)}, with {@code text} for the readme in place of the page's own,
+	 * {@link PatchExport#TITLE_ID} in it becoming {@code titleId}.
+	 */
+	public static List<PatchExport.Extra> inFolder(Written written, String text, String titleId) throws IOException {
 		Path readme = written.page().resolveSibling("README.txt");
-		Files.writeString(readme, PatchExport.fill(written.readme(), ""), StandardCharsets.UTF_8);
+		Files.writeString(readme, PatchExport.fill(text, titleId), StandardCharsets.UTF_8);
 		return List.of(new PatchExport.Extra(written.page(), FOLDER + "/" + PAGE),
 				new PatchExport.Extra(readme, FOLDER + "/README.txt"));
+	}
+
+	/**
+	 * The readme of the DLC's page in a LayeredFS zip until a project writes its own
+	 * ({@link ExportSettings#patcherReadme}), {@link PatchExport#TITLE_ID} standing for the DLC's title id.
+	 */
+	public static String defaultDlcReadme() {
+		return readme(List.of(new Title(Kind.DLC, PatchExport.TITLE_ID, null, Map.of())));
 	}
 
 	/** How a player builds their patched copies with the page. */

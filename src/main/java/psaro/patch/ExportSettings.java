@@ -16,9 +16,10 @@ import psaro.project.Translations;
 /**
  * What Export patch was last told, per project: how the patch is applied ({@link Mode}); for
  * LayeredFS, the readme, kept in {@code <romfs>.psaro/patch-readme.txt} so it can be edited
- * anywhere (the default readme while there is none), and the files added to the zip, each by the
- * path it is read from and its path in the zip; for a patched CIA, whether the patcher download is
- * written and whether patched copies are built. All but the readme are in
+ * anywhere (the default readme while there is none), the DLC's patcher page's readme the same way
+ * in {@code patcher-readme.txt}, and the files added to the zip, each by the path it is read from
+ * and its path in the zip; for a patched CIA, whether the patcher download is written and whether
+ * patched copies are built. All but the readmes are in
  * {@code <romfs>.psaro/export.json}. An added file is read when the zip is written, so the zip
  * always has it as it is then.
  */
@@ -34,11 +35,15 @@ public final class ExportSettings {
 
 	/** The readme's file in the project folder. */
 	public static final String README_FILE = "patch-readme.txt";
+	/** The DLC's patcher page's readme's file in the project folder. */
+	public static final String PATCHER_README_FILE = "patcher-readme.txt";
 	private static final String FILE = "export.json";
 
 	private final Path readmeFile;
+	private final Path patcherReadmeFile;
 	private final Path file;
 	private String readme;
+	private String patcherReadme;
 	private List<Extra> extras = List.of();
 	private Mode mode = Mode.LAYERED_FS;
 	/** For a patched CIA: whether the patcher download is written ({@link PatcherPage}). */
@@ -48,6 +53,7 @@ public final class ExportSettings {
 
 	private ExportSettings(Path folder) {
 		this.readmeFile = folder.resolve(README_FILE);
+		this.patcherReadmeFile = folder.resolve(PATCHER_README_FILE);
 		this.file = folder.resolve(FILE);
 	}
 
@@ -57,6 +63,9 @@ public final class ExportSettings {
 		if (Files.isRegularFile(s.readmeFile)) {
 			// the footer is added at export; a readme written with it keeps it once
 			s.readme = PatchExport.withoutFooter(Files.readString(s.readmeFile, StandardCharsets.UTF_8));
+		}
+		if (Files.isRegularFile(s.patcherReadmeFile)) {
+			s.patcherReadme = PatchExport.withoutFooter(Files.readString(s.patcherReadmeFile, StandardCharsets.UTF_8));
 		}
 		if (Files.isRegularFile(s.file)) {
 			try {
@@ -93,18 +102,42 @@ public final class ExportSettings {
 
 	/** Saves {@code text} as the project's readme; the default readme's text (or none) goes back to the default. */
 	public synchronized void setReadme(String text) throws IOException {
+		readme = keep(text, PatchExport.defaultReadme(), readme, readmeFile);
+	}
+
+	/**
+	 * The readme of the DLC's patcher page in a LayeredFS zip ({@link PatcherPage#FOLDER}/README.txt),
+	 * {@link PatchExport#TITLE_ID} standing for the DLC's title id: the project's own, or the default.
+	 */
+	public synchronized String patcherReadme() {
+		return patcherReadme != null ? patcherReadme : PatcherPage.defaultDlcReadme();
+	}
+
+	/** Whether the project has a patcher readme of its own. */
+	public synchronized boolean ownPatcherReadme() {
+		return patcherReadme != null;
+	}
+
+	/** Saves {@code text} as the project's patcher readme; the default's text (or none) goes back to the default. */
+	public synchronized void setPatcherReadme(String text) throws IOException {
+		patcherReadme = keep(text, PatcherPage.defaultDlcReadme(), patcherReadme, patcherReadmeFile);
+	}
+
+	/**
+	 * Saves {@code text} in {@code file}, which {@code had} was read from, and returns it; when it is
+	 * {@code byDefault}'s text (or none), removes the file instead and returns null.
+	 */
+	private static String keep(String text, String byDefault, String had, Path file) throws IOException {
 		String clean = text == null ? null : PatchExport.withoutFooter(text);
-		if (clean == null || clean.equals(PatchExport.defaultReadme())) {
-			readme = null;
-			Files.deleteIfExists(readmeFile);
-			return;
+		if (clean == null || clean.equals(byDefault)) {
+			Files.deleteIfExists(file);
+			return null;
 		}
-		if (clean.equals(readme)) {
-			return;
+		if (!clean.equals(had)) {
+			Files.createDirectories(file.getParent());
+			Files.writeString(file, clean, StandardCharsets.UTF_8);
 		}
-		readme = clean;
-		Files.createDirectories(readmeFile.getParent());
-		Files.writeString(readmeFile, clean, StandardCharsets.UTF_8);
+		return clean;
 	}
 
 	/** The files added to the zip, in order. */

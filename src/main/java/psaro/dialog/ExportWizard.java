@@ -34,6 +34,7 @@ import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JRadioButton;
 import javax.swing.JScrollPane;
+import javax.swing.JTabbedPane;
 import javax.swing.JTable;
 import javax.swing.JTextArea;
 import javax.swing.JTextField;
@@ -80,6 +81,7 @@ public final class ExportWizard extends JDialog {
 	private final JRadioButton layeredFs = new JRadioButton("LayeredFS: a zip of the patched files");
 	private final JRadioButton cia = new JRadioButton("Patched CIA: the game rebuilt with the patch in it");
 	private final JTextArea readme = new JTextArea(16, 86);
+	private final JTextArea patcherReadme = new JTextArea(16, 86);
 	private final Model model = new Model();
 	private final JTable table = new JTable(model);
 	private final JButton remove = new JButton("Remove");
@@ -190,29 +192,28 @@ public final class ExportWizard extends JDialog {
 		return top(page);
 	}
 
-	/** LayeredFS: the readme and the files added to the zip. */
+	/** LayeredFS: the readme, the DLC's patcher page's readme when it has one, and the files added to the zip. */
 	private JPanel layeredFsPage() {
-		readme.setText(settings.readme());
-		readme.setCaretPosition(0);
-		readme.setFont(new Font(Font.MONOSPACED, Font.PLAIN, readme.getFont().getSize()));
-		readme.setTabSize(4);
-		JButton reset = new JButton("Reset to default");
-		reset.setToolTipText("Put back the readme PsaroEditor writes for any game");
-		reset.addActionListener(e -> {
-			if (readme.getText().replace("\r\n", "\n").equals(PatchExport.defaultReadme())
-					|| JOptionPane.showConfirmDialog(this, "Replace this project's readme with the default one?", "Export patch",
-							JOptionPane.OK_CANCEL_OPTION) == JOptionPane.OK_OPTION) {
-				readme.setText(PatchExport.defaultReadme());
-				readme.setCaretPosition(0);
-			}
-		});
-		JPanel readmeTools = new JPanel(new BorderLayout());
-		readmeTools.add(new JLabel(PatchExport.TITLE_ID + " becomes the title id. Saved as " + ExportSettings.README_FILE
-				+ " in the project folder, which can be edited elsewhere too."), BorderLayout.CENTER);
-		readmeTools.add(reset, BorderLayout.EAST);
-		JPanel readmePanel = section("README.txt in the zip");
-		readmePanel.add(new JScrollPane(readme), BorderLayout.CENTER);
-		readmePanel.add(readmeTools, BorderLayout.SOUTH);
+		JPanel gameReadme = readmeEditor(readme, settings.readme(), PatchExport.defaultReadme(),
+				"Put back the readme PsaroEditor writes for any game", "Replace this project's readme with the default one?",
+				PatchExport.TITLE_ID + " becomes the title id. Saved as " + ExportSettings.README_FILE
+						+ " in the project folder, which can be edited elsewhere too.");
+		JPanel readmePanel;
+		if (hasDlc) {
+			JPanel dlcReadme = readmeEditor(patcherReadme, settings.patcherReadme(), PatcherPage.defaultDlcReadme(),
+					"Put back the readme PsaroEditor writes for any DLC's patcher page",
+					"Replace this project's patcher readme with the default one?",
+					PatchExport.TITLE_ID + " becomes the DLC's title id. Saved as " + ExportSettings.PATCHER_README_FILE
+							+ " in the project folder, which can be edited elsewhere too.");
+			JTabbedPane tabs = new JTabbedPane();
+			tabs.addTab("README.txt", gameReadme);
+			tabs.addTab(PatcherPage.FOLDER + "/README.txt (the DLC's patcher page)", dlcReadme);
+			readmePanel = section("Readmes in the zip");
+			readmePanel.add(tabs, BorderLayout.CENTER);
+		} else {
+			readmePanel = section("README.txt in the zip");
+			readmePanel.add(gameReadme, BorderLayout.CENTER);
+		}
 
 		model.rows = new ArrayList<>(settings.extras());
 		table.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
@@ -240,13 +241,41 @@ public final class ExportWizard extends JDialog {
 		JPanel page = column();
 		page.add(heading("LayeredFS"));
 		if (hasDlc) {
-			page.add(note("The DLC's patcher page goes in the zip too, in " + PatcherPage.FOLDER + "/, with a readme of its own."));
+			page.add(note("The DLC's patcher page goes in the zip too, in " + PatcherPage.FOLDER + "/, with a readme of its own "
+					+ "(the second tab)."));
 		}
 		page.add(Box.createVerticalStrut(6));
 		page.add(readmePanel);
 		page.add(Box.createVerticalStrut(8));
 		page.add(filesPanel);
 		return page;
+	}
+
+	/**
+	 * {@code area} holding {@code text}, with what {@code hint} says under it and a button putting
+	 * back {@code byDefault}, which asks {@code confirm} first unless the text is that already.
+	 */
+	private JPanel readmeEditor(JTextArea area, String text, String byDefault, String resetTip, String confirm, String hint) {
+		area.setText(text);
+		area.setCaretPosition(0);
+		area.setFont(new Font(Font.MONOSPACED, Font.PLAIN, area.getFont().getSize()));
+		area.setTabSize(4);
+		JButton reset = new JButton("Reset to default");
+		reset.setToolTipText(resetTip);
+		reset.addActionListener(e -> {
+			if (area.getText().replace("\r\n", "\n").equals(byDefault)
+					|| JOptionPane.showConfirmDialog(this, confirm, "Export patch", JOptionPane.OK_CANCEL_OPTION) == JOptionPane.OK_OPTION) {
+				area.setText(byDefault);
+				area.setCaretPosition(0);
+			}
+		});
+		JPanel tools = new JPanel(new BorderLayout());
+		tools.add(new JLabel(hint), BorderLayout.CENTER);
+		tools.add(reset, BorderLayout.EAST);
+		JPanel p = new JPanel(new BorderLayout(0, 4));
+		p.add(new JScrollPane(area), BorderLayout.CENTER);
+		p.add(tools, BorderLayout.SOUTH);
+		return p;
 	}
 
 	/** Patched CIA: the patcher download, and patched copies built here. */
@@ -394,6 +423,11 @@ public final class ExportWizard extends JDialog {
 		return settings.readme();
 	}
 
+	/** LayeredFS: the DLC's patcher page's readme as it stands. */
+	public String patcherReadme() {
+		return settings.patcherReadme();
+	}
+
 	/** LayeredFS: the files added to the zip as they stand. */
 	public List<Extra> extras() {
 		return settings.extras();
@@ -423,6 +457,9 @@ public final class ExportWizard extends JDialog {
 		}
 		try {
 			settings.setReadme(readme.getText());
+			if (hasDlc) {
+				settings.setPatcherReadme(patcherReadme.getText());
+			}
 			settings.setExtras(model.rows);
 			settings.setMode(mode(), patcherDownload.isSelected(), buildCopies.isSelected());
 			return true;
