@@ -73,6 +73,23 @@ public final class RomfsImage {
 		}
 	}
 
+	/** A file of a romfs image: its path ({@code dir/name}), and where its data is in the source the image was read from. */
+	public record Stored(String path, long offset, long size) {
+	}
+
+	/**
+	 * Every file of the image at {@code at} in {@code source}, in level 3's order, read from its
+	 * tables alone: the data is left where it is, so an image of a gigabyte is listed without
+	 * reading it.
+	 */
+	public static List<Stored> list(Source source, long at) throws IOException {
+		int[] blockLog = blockLog(source, at);
+		long lv3 = lv3(source, at, blockLog);
+		byte[] tables = tables(source, lv3);
+		long dataStart = lv3 + Bytes.u32(tables, 0x24);
+		return entries(tables).stream().map(e -> new Stored(e.path(), dataStart + e.offset(), e.size())).toList();
+	}
+
 	/** {@code image} rebuilt with each file {@code replace} names (by path) holding its bytes there; see {@link #rebuild}. */
 	public static byte[] replace(byte[] image, Map<String, byte[]> replace) {
 		try {

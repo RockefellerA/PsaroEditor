@@ -56,6 +56,14 @@ public final class Ncch {
 		return HEADER << (ncch[0x18E] & 0xFF);
 	}
 
+	/** Where the romfs of the NCCH {@code header} starts, from the NCCH's start, and its size, in bytes; both 0 when it has none. */
+	public static long[] romfsPlace(byte[] header) {
+		check(header);
+		int unit = mediaUnit(header);
+		long size = (Bytes.u32(header, 0x1B4) & 0xFFFFFFFFL) * unit;
+		return size == 0 ? new long[] {0, 0} : new long[] {(Bytes.u32(header, 0x1B0) & 0xFFFFFFFFL) * unit, size};
+	}
+
 	/** The romfs's image, which a decrypted NCCH holds as it is. */
 	public static byte[] romfs(byte[] ncch) {
 		check(ncch);

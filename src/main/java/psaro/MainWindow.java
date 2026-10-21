@@ -71,11 +71,13 @@ import psaro.project.DlcInherit;
 import psaro.project.DlcLink;
 import psaro.project.DlcPanes;
 import psaro.project.PaneLinks;
+import psaro.project.RecentProjects;
 import psaro.project.StringSearch;
 import psaro.project.Translations;
 import psaro.project.UnusedTables;
 import psaro.romfs.RomfsIndex;
 import psaro.romfs.RomfsIndex.StringTable;
+import psaro.romfs.TitleExtract;
 import psaro.ui.EditorPanel;
 import psaro.ui.LoadingSpinner;
 import psaro.ui.SearchBox;
@@ -86,6 +88,7 @@ public final class MainWindow {
 	private static final String TITLE = "PsaroEditor";
 	private static final String PREF_ROMFS = "romfs";
 	private static final String PREF_DUMPS = "crashDumps";
+	private static final String PREF_TITLES = "titles";
 	/** Save's and Patch's look while they have something to do: filled with the theme's accent. */
 	private static final String HIGHLIGHT = "background: $Component.accentColor;"
 			+ " foreground: $List.selectionForeground;"
@@ -113,6 +116,12 @@ public final class MainWindow {
 	private final JMenuItem fillFromGame = new JMenuItem("Fill DLC from game");
 	/** Set while a patch is being packed, one at a time. */
 	private boolean exporting;
+	/** Closes the game and its DLC; while a game is open. */
+	private final JMenuItem closeProject = new JMenuItem("Close project");
+	/** The games opened last ({@link RecentProjects}), filled in each time it opens. */
+	private final JMenu recent = new JMenu("Recent");
+	/** Extracts a decrypted title's romfs; off while one is being extracted. */
+	private final JMenuItem extractTitle = new JMenuItem("Extract romfs from title…");
 	private final JButton imagesButton = new JButton("Images…");
 	/** The images window while it is open; one at a time, for the romfs that is open. */
 	private ImagesWindow imagesWindow;
@@ -225,6 +234,32 @@ public final class MainWindow {
 		open.setToolTipText("Open a game's extracted romfs, or a DLC's content romfs folders beside the game open");
 		open.addActionListener(e -> chooseRomfs(OpenRomfsDialog.Kind.GAME));
 
+		recent.setMnemonic(KeyEvent.VK_C);
+		recent.addMenuListener(new javax.swing.event.MenuListener() {
+			@Override
+			public void menuSelected(javax.swing.event.MenuEvent e) {
+				fillRecent();
+			}
+
+			@Override
+			public void menuDeselected(javax.swing.event.MenuEvent e) {
+			}
+
+			@Override
+			public void menuCanceled(javax.swing.event.MenuEvent e) {
+			}
+		});
+
+		closeProject.setMnemonic(KeyEvent.VK_L);
+		closeProject.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_W, shortcut));
+		closeProject.setEnabled(false);
+		closeProject.setToolTipText("Close the game and its DLC, back to the empty window");
+		closeProject.addActionListener(e -> closeProject());
+
+		extractTitle.setMnemonic(KeyEvent.VK_R);
+		extractTitle.setToolTipText("Extract the romfs of a decrypted .3ds, .cia or .cxi into folders beside it, to open here");
+		extractTitle.addActionListener(e -> extractTitle());
+
 		fillFromGame.setMnemonic(KeyEvent.VK_I);
 		fillFromGame.setEnabled(false);
 		fillFromGame.setToolTipText("Give the DLC's strings without English the game's English for the same Japanese");
@@ -262,6 +297,10 @@ public final class MainWindow {
 		JMenu file = new JMenu("File");
 		file.setMnemonic(KeyEvent.VK_F);
 		file.add(open);
+		file.add(recent);
+		file.add(extractTitle);
+		file.add(closeProject);
+		file.addSeparator();
 		file.add(save);
 		file.add(exportPatch);
 		file.addSeparator();
@@ -345,6 +384,99 @@ public final class MainWindow {
 	}
 
 	/**
+	 * File → Extract romfs from title: extracts the romfs of a decrypted .3ds, CIA or .cxi into
+	 * folders beside it ({@link TitleExtract}), asking first when any of them holds something
+	 * already. A game's is then offered to open, the file remembered as the one its patched copy
+	 * builds from; a DLC's is opened beside its game from Open romfs.
+	 */
+	private void extractTitle() {
+		JFileChooser chooser = new JFileChooser();
+		chooser.setDialogTitle("Extract romfs from a decrypted title");
+		chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter(
+				"Decrypted 3DS titles (*.3ds, *.cci, *.cia, *.cxi)", "3ds", "cci", "cia", "cxi"));
+		String last = prefs.get(PREF_TITLES, null);
+		if (last != null && Files.isDirectory(Path.of(last))) {
+			chooser.setCurrentDirectory(Path.of(last).toFile());
+		}
+		if (chooser.showOpenDialog(frame) != JFileChooser.APPROVE_OPTION) {
+			return;
+		}
+		Path file = chooser.getSelectedFile().toPath();
+		if (file.getParent() != null) {
+			prefs.put(PREF_TITLES, file.getParent().toString());
+		}
+		TitleExtract.Plan plan;
+		List<Path> occupied;
+		try {
+			plan = TitleExtract.plan(file);
+			occupied = plan.occupied();
+		} catch (IOException e) {
+			error("Could not extract the romfs of " + e.getMessage());
+			return;
+		}
+		if (!occupied.isEmpty() && JOptionPane.showConfirmDialog(frame, "These folders hold something already:\n\n  "
+				+ String.join("\n  ", occupied.stream().map(Path::toString).toList())
+				+ "\n\nExtract into them anyway? Files of the same name are replaced; nothing else is removed.",
+				"Extract romfs", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE) != JOptionPane.YES_OPTION) {
+			return;
+		}
+		extractTitle.setEnabled(false);
+		status.setText("Extracting " + file.getFileName() + "…");
+		new SwingWorker<TitleExtract.Result, Integer>() {
+			@Override
+			protected TitleExtract.Result doInBackground() throws IOException {
+				int[] shown = {-1};
+				return TitleExtract.extract(plan, share -> {
+					int percent = (int) (share * 100);
+					if (percent != shown[0]) {
+						shown[0] = percent;
+						publish(percent);
+					}
+				});
+			}
+
+			@Override
+			protected void process(List<Integer> percents) {
+				status.setText("Extracting " + file.getFileName() + "… " + percents.get(percents.size() - 1) + "%");
+			}
+
+			@Override
+			protected void done() {
+				extractTitle.setEnabled(true);
+				refresh();
+				TitleExtract.Result r;
+				try {
+					r = get();
+				} catch (ExecutionException e) {
+					error("Could not extract the romfs of " + file.getFileName() + ":\n" + e.getCause().getMessage());
+					return;
+				} catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+					return;
+				}
+				String summary = String.format(java.util.Locale.ROOT, "Extracted %,d files (%.1f MB) from %s into:%n%n  %s",
+						r.files(), r.bytes() / 1048576.0, file.getFileName(), String.join("\n  ",
+								plan.pieces().stream().map(p -> p.folder().toString()).toList()));
+				if (plan.kind() == TitleExtract.Kind.DLC) {
+					JOptionPane.showMessageDialog(frame, summary + "\n\nOpen it beside its game with File → Open romfs…, DLC, "
+							+ "choosing " + plan.opens() + " as the DLC folder.", "Extract romfs", JOptionPane.INFORMATION_MESSAGE);
+					return;
+				}
+				try {
+					BuildBase.set(plan.opens(), file);
+				} catch (IOException e) {
+					// chosen in Export patch instead
+				}
+				if (JOptionPane.showConfirmDialog(frame, summary + "\n\nOpen the game's romfs now?", "Extract romfs",
+						JOptionPane.YES_NO_OPTION, JOptionPane.INFORMATION_MESSAGE) == JOptionPane.YES_OPTION
+						&& confirmUnsaved(projects())) {
+					open(plan.opens(), true);
+				}
+			}
+		}.execute();
+	}
+
+	/**
 	 * File → Open romfs: asks whether it is a game's or a DLC's ({@link OpenRomfsDialog}), starting
 	 * on {@code start}. A game is then chosen as before. A DLC is attached to the game chosen with
 	 * it, which is opened first when it is not the one open.
@@ -381,6 +513,82 @@ public final class MainWindow {
 
 	private static boolean same(Path a, Path b) {
 		return a.toAbsolutePath().normalize().equals(b.toAbsolutePath().normalize());
+	}
+
+	/** File → Recent: the games opened last, newest first; one whose folder is gone is listed but cannot be chosen. */
+	private void fillRecent() {
+		recent.removeAll();
+		List<Path> dirs = RecentProjects.read(prefs);
+		for (int i = 0; i < dirs.size(); i++) {
+			Path dir = dirs.get(i);
+			String name = dir.getFileName() == null ? dir.toString() : dir.getFileName() + "  —  " + dir.getParent();
+			JMenuItem item = new JMenuItem((i + 1) + "  " + name);
+			item.setMnemonic(KeyEvent.VK_1 + i);
+			boolean there = Files.isDirectory(dir);
+			item.setEnabled(there);
+			item.setToolTipText(there ? dir.toString() : "Not found: " + dir);
+			item.addActionListener(e -> openRecent(dir));
+			recent.add(item);
+		}
+		if (dirs.isEmpty()) {
+			JMenuItem none = new JMenuItem("No recent projects");
+			none.setEnabled(false);
+			recent.add(none);
+			return;
+		}
+		recent.addSeparator();
+		JMenuItem clear = new JMenuItem("Clear recent");
+		clear.addActionListener(e -> RecentProjects.clear(prefs));
+		recent.add(clear);
+	}
+
+	/** Opens the game whose romfs is {@code dir}, in place of the game and DLC open; the game open is only shown again. */
+	private void openRecent(Path dir) {
+		if (game != null && same(game.dir, dir)) {
+			showProject(game);
+			return;
+		}
+		if (confirmUnsaved(projects())) {
+			open(dir, true);
+		}
+	}
+
+	/**
+	 * File → Close project: closes the game and its DLC, their English saved or let go first, back
+	 * to the empty window; nothing is opened at the next start.
+	 */
+	private void closeProject() {
+		commitTyping();
+		if (game == null || !confirmUnsaved(projects())) {
+			return;
+		}
+		if (imagesWindow != null) {
+			imagesWindow.dispose();
+			imagesWindow = null;
+		}
+		if (dlc != null) {
+			Translations.detachDlc(dlc.dir);
+		}
+		// a game or DLC still being read is dropped when it is done
+		opening++;
+		dlcOpening++;
+		dlcLoading = false;
+		game = null;
+		dlc = null;
+		active = null;
+		index = null;
+		translations = null;
+		unused = null;
+		patcher = null;
+		editor = null;
+		plan = null;
+		planTimer.stop();
+		search.setSource(null, null, null);
+		showPlan();
+		selectTab();
+		prefs.remove(PREF_ROMFS);
+		setBody(empty);
+		refresh();
 	}
 
 	/** Chooses a game's romfs and opens it, in place of the game and DLC open. */
@@ -574,6 +782,7 @@ public final class MainWindow {
 		dlcOpening++;
 		dlcLoading = false;
 		prefs.put(PREF_ROMFS, o.dir().toString());
+		RecentProjects.add(prefs, o.dir());
 		game = project(o);
 		active = null;
 		showProject(game);
@@ -1260,6 +1469,7 @@ public final class MainWindow {
 		save.setEnabled(dirty);
 		saveButton.setEnabled(dirty);
 		exportPatch.setEnabled(game != null && !exporting);
+		closeProject.setEnabled(game != null);
 		fontsItem.setEnabled(patcher != null);
 		fillFromGame.setEnabled(dlc != null && active == dlc);
 		saveButton.putClientProperty(FlatClientProperties.STYLE, dirty ? HIGHLIGHT : null);
