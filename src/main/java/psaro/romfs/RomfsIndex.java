@@ -13,6 +13,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -565,7 +566,7 @@ public final class RomfsIndex {
 				layoutHomes.computeIfAbsent(file.getKey(), k -> new ArrayList<>()).add(archive);
 				Bclyt.Layout layout = Bclyt.read(file.getValue().data);
 				List<String> layoutFonts = List.copyOf(layout.fonts());
-				addBodies(file.getKey(), layout.textPanes(), bodies, tops);
+				addBodies(file.getKey(), layout, bodies, tops);
 				for (Bclyt.Pane pane : layout.textPanes()) {
 					Usage usage = new Usage(archive, file.getKey(), pane, layoutFonts);
 					textPanes.add(usage);
@@ -655,15 +656,18 @@ public final class RomfsIndex {
 	 * of them, the one drawn on top, and its font. A font seen first keeps what it was first seen
 	 * under.
 	 */
-	private static void addBodies(String layout, List<Bclyt.Pane> text, Map<String, String> bodies,
+	private static void addBodies(String layout, Bclyt.Layout panes, Map<String, String> bodies,
 			Map<String, Bclyt.Pane> tops) {
+		List<Bclyt.Pane> text = panes.textPanes();
+		Map<String, Bclyt.Pane> byName = new HashMap<>();
+		panes.panes().forEach(p -> byName.putIfAbsent(p.name(), p));
 		for (int i = 0; i < text.size(); i++) {
 			Bclyt.Pane under = text.get(i);
 			Bclyt.Pane top = null;
 			String body = null;
 			for (int j = i + 1; j < text.size(); j++) {
 				Bclyt.Pane over = text.get(j);
-				if (sameText(under, over) && under.stacksOn(over)
+				if (sameText(under, over) && stacked(under, over, byName)
 						&& under.text().boxWidth() == over.text().boxWidth()
 						&& under.text().boxHeight() == over.text().boxHeight()
 						&& !under.text().font().equals(over.text().font())) {
@@ -676,6 +680,33 @@ public final class RomfsIndex {
 				tops.put(layout + "!" + under.name(), top);
 			}
 		}
+	}
+
+	/**
+	 * Whether two panes sit at one place, give or take a drop shadow's offset: under the same parent
+	 * ({@link Bclyt.Pane#stacksOn}), or each under a parent of its own where the two parents sit at
+	 * one place (the song title's glow and its letters on the music standby screen, each in a null
+	 * pane of its own).
+	 */
+	private static boolean stacked(Bclyt.Pane a, Bclyt.Pane b, Map<String, Bclyt.Pane> byName) {
+		if (a.stacksOn(b)) {
+			return true;
+		}
+		float[] at = fromRoot(a, byName);
+		float[] other = fromRoot(b, byName);
+		return Math.abs(at[0] - other[0]) <= 4 && Math.abs(at[1] - other[1]) <= 4;
+	}
+
+	/** Where {@code pane} sits from the layout's root: its place from its parent, plus each parent's. */
+	private static float[] fromRoot(Bclyt.Pane pane, Map<String, Bclyt.Pane> byName) {
+		float x = 0;
+		float y = 0;
+		Set<String> seen = new HashSet<>();
+		for (Bclyt.Pane p = pane; p != null && seen.add(p.name()); p = p.parent() == null ? null : byName.get(p.parent())) {
+			x += p.x();
+			y += p.y();
+		}
+		return new float[] { x, y };
 	}
 
 	/**

@@ -180,6 +180,34 @@ class RomfsIndexTest {
 	}
 
 	/**
+	 * A text's layers each in a null pane of its own, the null panes at one place, as the song
+	 * title's glow and letters on the music standby screen are, are one text's layers; a layer
+	 * whose null pane sits elsewhere is not.
+	 */
+	@Test
+	void panesUnderParentsAtOnePlaceAreOneTextsLayers() throws IOException {
+		table("menu", Map.of("menu_0001", "はい"));
+		byte[] elsewhere = SampleRomfs.pane("Txt_Name_Mult", null, "*");
+		elsewhere[0x52] = 2;
+		byte[] top = SampleRomfs.pane("Txt_Name_02", null, "*");
+		top[0x52] = 1;
+		archive("scene/music/standby.arc.lz", "blyt/standby.bclyt", List.of("a.bcfnt", "b.bcfnt", "c.bcfnt"),
+				at(SampleRomfs.group("NL_Name_Mult", elsewhere), 0, -40),
+				at(SampleRomfs.group("NL_Name_01", SampleRomfs.pane("Txt_Name_01", null, "*")), 0, -81),
+				at(SampleRomfs.group("NL_Name_02", top), 0, -81));
+		RomfsIndex index = RomfsIndex.scan(romfs);
+		assertEquals("b.bcfnt", index.layeredUnder("a.bcfnt"));
+		assertEquals("Txt_Name_02", index.paneOnTop("blyt/standby.bclyt", "Txt_Name_01").name());
+		assertNull(index.layeredUnder("c.bcfnt"), "its null pane elsewhere");
+	}
+
+	/** {@code group}, a null pane from {@link SampleRomfs#group}, moved to {@code x}, {@code y} from its parent. */
+	private static byte[] at(byte[] group, float x, float y) {
+		java.nio.ByteBuffer.wrap(group).order(java.nio.ByteOrder.LITTLE_ENDIAN).putFloat(0x24, x).putFloat(0x28, y);
+		return group;
+	}
+
+	/**
 	 * A message file is a table of numbered strings no layout names; a pane the game fills from
 	 * code (its key in no table) can be linked to one, and then shows it.
 	 */
