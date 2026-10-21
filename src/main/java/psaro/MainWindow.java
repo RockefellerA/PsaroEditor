@@ -50,6 +50,7 @@ import psaro.dialog.ImagesWindow;
 import psaro.dialog.OpenRomfsDialog;
 import psaro.patch.ImageEdits;
 import psaro.dialog.ExportWizard;
+import psaro.dialog.FileSurveyDialog;
 import psaro.dialog.FontsDialog;
 import psaro.dialog.PreferencesDialog;
 import psaro.format.Csv;
@@ -76,6 +77,7 @@ import psaro.project.StringSearch;
 import psaro.project.Translations;
 import psaro.project.UnusedTables;
 import psaro.romfs.RomfsIndex;
+import psaro.romfs.FileSurvey;
 import psaro.romfs.RomfsIndex.StringTable;
 import psaro.romfs.TitleExtract;
 import psaro.ui.EditorPanel;
@@ -120,6 +122,8 @@ public final class MainWindow {
 	private final JMenuItem closeProject = new JMenuItem("Close project");
 	/** The games opened last ({@link RecentProjects}), filled in each time it opens. */
 	private final JMenu recent = new JMenu("Recent");
+	/** Tells the formats of a romfs's files; off while it is at work. */
+	private final JMenuItem identifyFiles = new JMenuItem("Identify romfs files…");
 	/** Extracts a decrypted title's romfs; off while one is being extracted. */
 	private final JMenuItem extractTitle = new JMenuItem("Extract romfs from title…");
 	private final JButton imagesButton = new JButton("Images…");
@@ -347,8 +351,13 @@ public final class MainWindow {
 		searchHead.add(tabRow, BorderLayout.NORTH);
 		searchHead.add(search, BorderLayout.CENTER);
 
+		identifyFiles.setMnemonic(KeyEvent.VK_I);
+		identifyFiles.setToolTipText("List the formats of an extracted romfs's files, and which of them PsaroEditor reads");
+		identifyFiles.addActionListener(e -> identifyFiles());
+
 		JMenu tools = new JMenu("Tools");
 		tools.setMnemonic(KeyEvent.VK_T);
+		tools.add(identifyFiles);
 		tools.add(crashDump);
 
 		JMenuBar bar = new JMenuBar();
@@ -357,6 +366,67 @@ public final class MainWindow {
 		bar.add(Box.createHorizontalStrut(6));
 		bar.add(new HelpMenu(frame));
 		return bar;
+	}
+
+	/**
+	 * Tools → Identify romfs files: tells the format of every file of a romfs chosen (the one in view
+	 * offered first) in the background, then shows them ({@link FileSurveyDialog}). Any folder will
+	 * do, so a game PsaroEditor cannot open yet can be looked into.
+	 */
+	private void identifyFiles() {
+		JFileChooser chooser = new JFileChooser();
+		chooser.setDialogTitle("Identify the files of an extracted romfs");
+		chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+		Path start = index != null ? index.root() : prefs.get(PREF_ROMFS, null) != null ? Path.of(prefs.get(PREF_ROMFS, null)) : null;
+		if (start != null && Files.isDirectory(start)) {
+			if (start.getParent() != null) {
+				chooser.setCurrentDirectory(start.getParent().toFile());
+			}
+			chooser.setSelectedFile(start.toFile());
+		}
+		if (chooser.showOpenDialog(frame) != JFileChooser.APPROVE_OPTION) {
+			return;
+		}
+		Path root = chooser.getSelectedFile().toPath();
+		identifyFiles.setEnabled(false);
+		status.setText("Identifying the files of " + root.getFileName() + "…");
+		new SwingWorker<List<FileSurvey.Item>, Integer>() {
+			@Override
+			protected List<FileSurvey.Item> doInBackground() throws IOException {
+				int[] shown = {-1};
+				return FileSurvey.scan(root, share -> {
+					int percent = (int) (share * 100);
+					if (percent != shown[0]) {
+						shown[0] = percent;
+						publish(percent);
+					}
+				});
+			}
+
+			@Override
+			protected void process(List<Integer> percents) {
+				status.setText("Identifying the files of " + root.getFileName() + "… " + percents.get(percents.size() - 1) + "%");
+			}
+
+			@Override
+			protected void done() {
+				identifyFiles.setEnabled(true);
+				refresh();
+				try {
+					List<FileSurvey.Item> items = get();
+					if (items.isEmpty()) {
+						JOptionPane.showMessageDialog(frame, root + " holds no files.", "Identify romfs files",
+								JOptionPane.INFORMATION_MESSAGE);
+						return;
+					}
+					new FileSurveyDialog(frame, root, items).setVisible(true);
+				} catch (ExecutionException e) {
+					error("Could not identify the files of " + root + ":\n" + e.getCause().getMessage());
+				} catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+				}
+			}
+		}.execute();
 	}
 
 	private void openCrashDump() {
