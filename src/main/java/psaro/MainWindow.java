@@ -624,12 +624,19 @@ public final class MainWindow {
 	}
 
 	/**
-	 * File → Close project: closes the game and its DLC, their English saved or let go first, back
-	 * to the empty window; nothing is opened at the next start.
+	 * File → Close project: closes the game and its DLC, back to the empty window; nothing is opened
+	 * at the next start. With English unsaved, asking what to do with it is the confirmation;
+	 * otherwise closing is confirmed first.
 	 */
 	private void closeProject() {
 		commitTyping();
-		if (game == null || !confirmUnsaved(projects())) {
+		if (game == null) {
+			return;
+		}
+		boolean unsaved = projects().stream().anyMatch(p -> p.translations.isDirty());
+		if (unsaved ? !confirmUnsaved(projects()) : JOptionPane.showConfirmDialog(frame, "Close " + game.dir.getFileName()
+				+ (dlc != null ? " and its DLC" : "") + "?\n\nIt will not open again at the next start; File → Recent opens it.",
+				"Close project", JOptionPane.OK_CANCEL_OPTION, JOptionPane.QUESTION_MESSAGE) != JOptionPane.OK_OPTION) {
 			return;
 		}
 		if (imagesWindow != null) {
