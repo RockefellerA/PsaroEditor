@@ -375,7 +375,10 @@ final class PreviewPanel extends JPanel {
 		describeMixedLayers(stack, lines);
 		if (font == null) {
 			lines.add(fonts.fontName(u) + " is not in this archive (the 3DS system font is not part of the romfs), "
-					+ "so this pane is drawn with a stand-in typeface and its fit is approximate.");
+					+ "so this pane is drawn with a stand-in typeface and its fit is approximate."
+					+ (face.bundled() ? " " + face.label() + " is drawn only beside a game font the archive carries, so the "
+							+ "game draws this pane with " + fonts.fontName(u) + "; set its font to one of the layout's "
+							+ "others to draw it from " + face.label() + "." : ""));
 		}
 		if (englishRaw == null) {
 			english.setIcon(null);

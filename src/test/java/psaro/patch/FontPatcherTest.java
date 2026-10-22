@@ -452,6 +452,40 @@ class FontPatcherTest {
 	}
 
 	/**
+	 * A pane switched to the system font and drawn from a typeface: no archive carries the system
+	 * font, so nothing is drawn from it, and the layout keeps the pane on the system font rather
+	 * than naming a drawn font the archive never gets, which the game would draw nothing with.
+	 */
+	@Test
+	void aPaneOnTheSystemFontIsNotPointedAtADrawnFontNeverMade() throws IOException {
+		String system = "cbf_std.bcfnt";
+		Path other = dir.resolve("system");
+		SampleRomfs.table(other, "menu", Map.of("menu_0001", "はい", "menu_0002", "いいえ"));
+		SampleRomfs.archive(other, "scene/menu/menu.arc.lz", "blyt/menu.bclyt", List.of(system, FONT),
+				Map.of(FONT, SampleRomfs.font("はいえ", 10)), SampleRomfs.pane("Txt_Yes", "menu_0001"),
+				SampleRomfs.pane("Txt_No", "menu_0002"));
+		RomfsIndex idx = RomfsIndex.scan(other);
+		FontPatcher p = new FontPatcher(idx, PatchSettings.open(other), LayoutOverrides.open(other));
+		p.overrides().set("blyt/menu.bclyt", List.of("Txt_Yes"),
+				TextOverride.NONE.withFont(system).withDrawWith(Typeface.M_PLUS_ROUNDED.id()));
+		p.overrides().set("blyt/menu.bclyt", List.of("Txt_No"), TextOverride.NONE.withFont(FONT));
+		Usage yes = idx.usages(idx.table("menu"), "menu_0001").get(0);
+		assertTrue(p.freeFont(yes) == null, "nothing to draw beside");
+
+		List<Text> english = List.of(new Text(idx.table("menu"), "menu_0001", "Yes"), new Text(idx.table("menu"), "menu_0002", "No"));
+		Plan plan = p.plan(english);
+		String drawn = FreeFont.name(system, Typeface.M_PLUS_ROUNDED);
+		assertTrue(plan.fonts().stream().noneMatch(f -> f.font().equals(drawn)));
+
+		p.write(plan, step -> { });
+		Map<String, Darc.Node> files = Darc.files(Archive.load(p.outputPath(other.resolve("scene/menu/menu.arc.lz"))));
+		Bclyt.Layout layout = Bclyt.read(files.get("blyt/menu.bclyt").data);
+		assertFalse(layout.fonts().contains(drawn), "fonts: " + layout.fonts());
+		assertEquals(system, layout.textPanes().get(0).text().font());
+		assertFalse(p.plan(english).hasWork());
+	}
+
+	/**
 	 * One text in two layers of two fonts, the outline's font set to a typeface for every pane:
 	 * the outline here follows the letters on top, which keep the game font, so the layout points
 	 * it back at its game font; with the letters drawn anew, it follows them, unless it has a

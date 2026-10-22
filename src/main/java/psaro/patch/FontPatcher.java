@@ -946,8 +946,8 @@ public final class FontPatcher {
 				if (original == null) {
 					continue;
 				}
-				for (PaneFont pf : paneFonts(layout, original, panes)) {
-					if (pf.face().bundled() && carries(archive, pf.gameFont())) {
+				for (PaneFont pf : paneFonts(archive, layout, original, panes)) {
+					if (pf.drawn()) {
 						out.add(new FreeUse(archive, pf.gameFont(), pf.face()));
 					}
 				}
@@ -956,21 +956,25 @@ public final class FontPatcher {
 		return List.copyOf(out);
 	}
 
-	/** A pane that draws with {@code face} rather than what its font is set to; {@code gameFont} is its font. */
-	private record PaneFont(String pane, String gameFont, Typeface face) {
+	/**
+	 * A pane that draws with {@code face} rather than what its font is set to; {@code gameFont} is
+	 * its font. {@code drawn} when a font is drawn from {@code face} for it: only beside a copy of
+	 * the game font in the pane's archive, so never for the system font, which no archive carries.
+	 */
+	private record PaneFont(String pane, String gameFont, Typeface face, boolean drawn) {
 
 		/** The font the layout should name for the pane: the drawn one, or the game font itself. */
 		String fontFile() {
-			return face.bundled() ? FreeFont.name(gameFont, face) : gameFont;
+			return drawn ? FreeFont.name(gameFont, face) : gameFont;
 		}
 	}
 
 	/**
-	 * The panes of {@code layout} (as {@code original}) that draw with other than what their font
-	 * is set to: those with a draw-with of their own in {@code panes}, and lower layers of one
-	 * text following a pane on top that draws otherwise ({@link #drawnWith}).
+	 * The panes of {@code layout} (as {@code original}) in {@code archive} that draw with other
+	 * than what their font is set to: those with a draw-with of their own in {@code panes}, and
+	 * lower layers of one text following a pane on top that draws otherwise ({@link #drawnWith}).
 	 */
-	private List<PaneFont> paneFonts(String layout, byte[] original, Map<String, TextOverride> panes) {
+	private List<PaneFont> paneFonts(Path archive, String layout, byte[] original, Map<String, TextOverride> panes) {
 		List<PaneFont> out = new ArrayList<>();
 		if (panes.values().stream().allMatch(t -> t.drawWith() == null) && !index.layeredLayouts().contains(layout)) {
 			return out;
@@ -983,7 +987,7 @@ public final class FontPatcher {
 			}
 			Typeface face = faceOf(layout, p, panes);
 			if (t.drawWith() != null || !face.equals(settings.lettersFrom(gameFont))) {
-				out.add(new PaneFont(p.name(), gameFont, face));
+				out.add(new PaneFont(p.name(), gameFont, face, face.bundled() && carries(archive, gameFont)));
 			}
 		}
 		return out;
@@ -1149,7 +1153,7 @@ public final class FontPatcher {
 		}
 		Map<String, TextOverride> panes = overrides.forLayout(layout);
 		Map<String, String> names = freeNames(archive);
-		byte[] expected = expected(layout, original, panes, names, heldIn(archive, layout, held, fallbacks));
+		byte[] expected = expected(archive, layout, original, panes, names, heldIn(archive, layout, held, fallbacks));
 		Map<String, String> renamed = new TreeMap<>(names);
 		renamed.keySet().retainAll(Bclyt.read(original).fonts());
 		boolean changed = !Arrays.equals(expected, original);
@@ -1162,19 +1166,19 @@ public final class FontPatcher {
 	}
 
 	/**
-	 * Layout {@code original} with {@code panes}' changes, naming fonts by {@code names} (each game
-	 * font set to a typeface, for every pane), then pointing each pane with a draw-with of its own
-	 * at the font for it, added to the font list when need be, and holding {@code texts}, pane to
-	 * the text it holds itself. Every pane moved or sized ({@link LayoutOverrides#placesForLayout})
-	 * sits and measures as changed.
+	 * Layout {@code original} in {@code archive} with {@code panes}' changes, naming fonts by
+	 * {@code names} (each game font set to a typeface, for every pane), then pointing each pane
+	 * with a draw-with of its own at the font for it, added to the font list when need be, and
+	 * holding {@code texts}, pane to the text it holds itself. Every pane moved or sized
+	 * ({@link LayoutOverrides#placesForLayout}) sits and measures as changed.
 	 */
-	private byte[] expected(String layout, byte[] original, Map<String, TextOverride> panes, Map<String, String> names,
-			Map<String, String> texts) {
+	private byte[] expected(Path archive, String layout, byte[] original, Map<String, TextOverride> panes,
+			Map<String, String> names, Map<String, String> texts) {
 		byte[] out = panes.isEmpty() ? original : Bclyt.withText(original, panes);
 		out = Bclyt.withPanes(out, overrides.placesForLayout(layout));
 		out = names.isEmpty() ? out : Bclyt.withFontNames(out, names);
 		Map<String, String> own = new TreeMap<>();
-		for (PaneFont pf : paneFonts(layout, original, panes)) {
+		for (PaneFont pf : paneFonts(archive, layout, original, panes)) {
 			own.put(pf.pane(), pf.fontFile());
 		}
 		return Bclyt.withPaneText(Bclyt.withPaneFonts(out, own), texts);
@@ -1455,7 +1459,7 @@ public final class FontPatcher {
 					file.getValue().data = font.toBytes();
 				}
 				if (path.endsWith(".bclyt")) {
-					file.getValue().data = expected(path, file.getValue().data, overrides.forLayout(path), names,
+					file.getValue().data = expected(archive, path, file.getValue().data, overrides.forLayout(path), names,
 							heldIn(archive, path, plan.texts(), plan.fallbacks()));
 				}
 				if (replaced.contains(path)) {
