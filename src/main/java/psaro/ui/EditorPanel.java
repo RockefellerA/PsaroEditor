@@ -71,6 +71,8 @@ import psaro.translate.GoogleTranslate;
 public final class EditorPanel extends JPanel {
 
 	private static final Color PROBLEM = new Color(0xE0, 0x55, 0x55);
+	/** The Fits and Glyphs columns while the game's fonts are still being read. */
+	private static final String PENDING = "…";
 	/** A complete table's name: light blue on the dark theme, a deeper blue that reads on white. */
 	private static final Color COMPLETE_DARK = new Color(0x7F, 0xC4, 0xFF);
 	private static final Color COMPLETE_LIGHT = new Color(0x1E, 0x78, 0xC8);
@@ -566,6 +568,12 @@ public final class EditorPanel extends JPanel {
 		english.requestFocusInWindow();
 	}
 
+	/** Measures every string and the preview, once the game's fonts are read ({@link FontPatcher#warmUp}). */
+	public void fontsRead() {
+		strings.remeasure();
+		preview.fontsRead();
+	}
+
 	/** Measures every string again, after the font patch settings change. */
 	public void fontsChanged() {
 		preview.fontsChanged();
@@ -732,12 +740,19 @@ public final class EditorPanel extends JPanel {
 			};
 		}
 
+		/** How the English fares, or null while the game's fonts are still being read, when measuring would read them here. */
 		private Fit fit(String k, String en) {
+			if (!fonts.ready()) {
+				return null;
+			}
 			return fits.computeIfAbsent(k, x -> Fit.check(fonts, index.panes(table, k), en, table.strings().get(k)));
 		}
 
-		/** "~" marks an estimate: some characters were measured with the stand-in typeface. */
+		/** "~" marks an estimate: some characters were measured with the stand-in typeface; "…" not measured yet. */
 		private static String fitsText(Fit f) {
+			if (f == null) {
+				return PENDING;
+			}
 			if (!f.shown()) {
 				return "—";
 			}
@@ -747,7 +762,8 @@ public final class EditorPanel extends JPanel {
 
 		/** "+N": the font lacks N characters Patch can add; "N missing": no donor has them. */
 		private static String glyphsText(Fit f) {
-			return !f.shown() ? "—"
+			return f == null ? PENDING
+					: !f.shown() ? "—"
 					: f.missing().isEmpty() ? "✓"
 					: f.unpatchable().isEmpty() ? "+" + f.missing().size()
 					: f.unpatchable().size() + " missing";
@@ -762,13 +778,15 @@ public final class EditorPanel extends JPanel {
 			super.getTableCellRendererComponent(t, value, selected, focus, row, column);
 			String s = String.valueOf(value);
 			String verdict = s.startsWith("~") ? s.substring(1) : s;
-			boolean problem = !verdict.isEmpty() && !verdict.equals("✓") && !verdict.equals("—") && !verdict.startsWith("+");
+			boolean problem = !verdict.isEmpty() && !verdict.equals("✓") && !verdict.equals("—") && !verdict.startsWith("+")
+					&& !verdict.equals(PENDING);
 			if (problem && !selected) {
 				setForeground(PROBLEM);
 			} else if (!selected) {
 				setForeground(t.getForeground());
 			}
-			setToolTipText(s.equals("—") ? "No layout shows this string; the game draws it from code."
+			setToolTipText(s.equals(PENDING) ? "Measured once the game's fonts are read, a few seconds after opening."
+					: s.equals("—") ? "No layout shows this string; the game draws it from code."
 					: s.startsWith("~") ? "An estimate: characters the font lacks were measured with a stand-in typeface."
 					: s.startsWith("+") ? "The game's font lacks these characters; Patch adds them."
 					: s.endsWith(" missing") ? "No font in the romfs has these characters, so Patch cannot add them."

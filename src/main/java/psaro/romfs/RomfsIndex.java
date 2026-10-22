@@ -23,6 +23,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
@@ -275,7 +276,15 @@ public final class RomfsIndex {
 	/** Keyed by {@code table + "/" + key}: the panes linked to a string no layout names ({@link #link}). */
 	private final Map<String, List<Usage>> linked = new HashMap<>();
 	/** Keyed by archive path + "!" + font name; empty when the archive does not carry the font. */
-	private final Map<String, Optional<Bcfnt>> fonts = new HashMap<>();
+	private final Map<String, Optional<Bcfnt>> fonts = new ConcurrentHashMap<>();
+	/** The archives whose fonts are read into {@link #fonts}. */
+	private final Set<Path> fontsRead = ConcurrentHashMap.newKeySet();
+	/** One lock per archive, held while its fonts are read, so reading one waits for no other. */
+	private final Map<Path, Object> fontLocks = new ConcurrentHashMap<>();
+	/** Held while the loose images are first read ({@link #looseImages}). */
+	private final Object looseLock = new Object();
+	/** Where loose images' hashes are kept between runs; null for nowhere. */
+	private volatile ImageHashCache imageCache;
 	/** Keyed by font name. */
 	private final Map<String, List<Donor>> donors = new HashMap<>();
 
@@ -806,13 +815,25 @@ public final class RomfsIndex {
 		return name.endsWith(".bclim") || name.endsWith(".bclim.lz");
 	}
 
+	/** Keeps loose images' hashes in {@code cache} between runs, so unchanged ones are not read again. */
+	public void cacheImagesIn(ImageHashCache cache) {
+		imageCache = cache;
+	}
+
 	/**
 	 * Every loose image under the folders read ({@link #folders}, {@link #isLooseImage}), outside
 	 * any other romfs nested in them, by path; each an {@link Image} whose archive is the file itself and whose path is the
-	 * file's from the root. Read on first use, which decompresses every one (some games have
-	 * thousands), so ask from a background thread; a file that is no BCLIM is left out.
+	 * file's from the root. Read on first use, which decompresses every one not in the image
+	 * cache (some games have thousands), several at once; so ask from a background thread. A file
+	 * that is no BCLIM is left out.
 	 */
-	public synchronized List<Image> looseImages() throws IOException {
+	public List<Image> looseImages() throws IOException {
+		synchronized (looseLock) {
+			return readLooseImages();
+		}
+	}
+
+	private List<Image> readLooseImages() throws IOException {
 		if (looseImages == null) {
 			List<Path> files = new ArrayList<>();
 			for (Path folder : folders) {
@@ -832,26 +853,34 @@ public final class RomfsIndex {
 				});
 			}
 			Collections.sort(files);
-			List<Image> out = new ArrayList<>();
-			for (Path f : files) {
-				Image i = looseImage(f);
-				if (i != null) {
-					out.add(i);
-				}
-			}
-			looseImages = List.copyOf(out);
+			// in file order, read side by side
+			looseImages = files.parallelStream().map(this::looseImage).filter(Objects::nonNull).toList();
 		}
 		return looseImages;
 	}
 
-	/** The loose image {@code file} ({@link #looseImages}), or null when it is not a BCLIM this can read. */
+	/**
+	 * The loose image {@code file} ({@link #looseImages}), or null when it is not a BCLIM this can
+	 * read; from the image cache when the file is as it was.
+	 */
 	public Image looseImage(Path file) {
+		try {
+			ImageHashCache cache = imageCache;
+			ImageHashCache.Entry e = cache != null ? cache.entry(file, RomfsIndex::readLooseImage) : readLooseImage(file);
+			return e == null ? null : new Image(file, root.relativize(file).toString().replace('\\', '/'), e.hash(), e.width(),
+					e.height(), e.format());
+		} catch (IOException | RuntimeException unreadable) {
+			return null;
+		}
+	}
+
+	/** What the loose image {@code file} holds, read and hashed; null when it is not a BCLIM this can read. */
+	public static ImageHashCache.Entry readLooseImage(Path file) throws IOException {
 		try {
 			byte[] d = looseBytes(file);
 			Bclim b = Bclim.read(d);
-			return new Image(file, root.relativize(file).toString().replace('\\', '/'), Bclim.hash(d), b.width(), b.height(),
-					b.format());
-		} catch (IOException | IllegalArgumentException | IndexOutOfBoundsException unreadable) {
+			return new ImageHashCache.Entry(Bclim.hash(d), b.width(), b.height(), b.format());
+		} catch (IllegalArgumentException | IndexOutOfBoundsException unreadable) {
 			return null;
 		}
 	}
@@ -1006,24 +1035,51 @@ public final class RomfsIndex {
 
 	/**
 	 * The font {@code name} in {@code archive}, or null when the archive does not carry it. Loads
-	 * every font of that archive on first use. The font is shared: copy it before changing it.
+	 * every font of that archive on first use, holding only that archive's lock, so a font already
+	 * read is never kept waiting. The font is shared: copy it before changing it.
 	 */
-	public synchronized Bcfnt font(Path archive, String name) throws IOException {
+	public Bcfnt font(Path archive, String name) throws IOException {
 		String id = archive + "!" + name;
-		if (!fonts.containsKey(id)) {
-			Map<String, Bcfnt> found = new LinkedHashMap<>();
-			for (Map.Entry<String, Darc.Node> file : Darc.files(Archive.load(archive)).entrySet()) {
-				String path = file.getKey();
-				if (path.endsWith(".bcfnt")) {
-					found.put(fileName(path), Bcfnt.parse(file.getValue().data));
+		Optional<Bcfnt> known = fonts.get(id);
+		if (known == null) {
+			synchronized (fontLocks.computeIfAbsent(archive, a -> new Object())) {
+				if (!fontsRead.contains(archive)) {
+					readFonts(archive, Darc.files(Archive.load(archive)));
 				}
 			}
-			for (Map.Entry<String, Bcfnt> f : found.entrySet()) {
-				fonts.put(archive + "!" + f.getKey(), Optional.of(f.getValue()));
-			}
-			fonts.putIfAbsent(id, Optional.empty());
+			known = fonts.getOrDefault(id, Optional.empty());
 		}
-		return fonts.get(id).orElse(null);
+		return known.orElse(null);
+	}
+
+	/** Reads the fonts of {@code archive} from its {@code files}, unless they are read already. */
+	public void readFonts(Path archive, Map<String, Darc.Node> files) {
+		synchronized (fontLocks.computeIfAbsent(archive, a -> new Object())) {
+			if (fontsRead.contains(archive)) {
+				return;
+			}
+			for (Map.Entry<String, Darc.Node> file : files.entrySet()) {
+				String path = file.getKey();
+				if (path.endsWith(".bcfnt")) {
+					fonts.put(archive + "!" + fileName(path), Optional.of(Bcfnt.parse(file.getValue().data)));
+				}
+			}
+			fontsRead.add(archive);
+		}
+	}
+
+	/** Every archive that carries a font. */
+	public Set<Path> fontArchives() {
+		Set<Path> out = new TreeSet<>();
+		fontHomes.values().forEach(out::addAll);
+		return out;
+	}
+
+	/** Every archive that carries a layout. */
+	public Set<Path> layoutArchives() {
+		Set<Path> out = new TreeSet<>();
+		layoutHomes.values().forEach(out::addAll);
+		return out;
 	}
 
 	/**

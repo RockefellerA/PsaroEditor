@@ -64,6 +64,13 @@ class PreviewPanelTest {
 		JComboBox<?> picker = all(preview, JComboBox.class, new ArrayList<>()).get(0);
 		JSpinner boxWidth = all(preview, JSpinner.class, new ArrayList<>()).get(0);
 
+		// until the fonts are read, nothing is measured, so no pane is marked
+		preview.showString(table, "menu_0001", usages, japanese, english, null);
+		assertTrue(java.util.stream.IntStream.range(0, picker.getItemCount())
+				.noneMatch(i -> picker.getItemAt(i).toString().startsWith("⚠")), "nothing measured before the fonts are read");
+		// as the window does once a project opens
+		fonts.warmUp();
+
 		preview.showString(table, "menu_0001", usages, japanese, english, null);
 		assertEquals(2, picker.getItemCount());
 		assertTrue(picker.getSelectedItem().toString().startsWith("⚠"), "opens on a pane the English overflows");

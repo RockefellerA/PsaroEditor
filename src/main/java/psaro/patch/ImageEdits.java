@@ -6,10 +6,10 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
-import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.concurrent.ConcurrentHashMap;
 import javax.imageio.ImageIO;
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -32,7 +32,9 @@ public final class ImageEdits {
 	private final Path file;
 	private final Map<String, Edit> edits = new TreeMap<>();
 	/** Encoded replacements, by original hash, as of the PNG's modification time. */
-	private final Map<String, Encoded> encoded = new HashMap<>();
+	private final Map<String, Encoded> encoded = new ConcurrentHashMap<>();
+	/** One lock per original hash, held while its replacement is encoded, so several encode at once. */
+	private final Map<String, Object> encoding = new ConcurrentHashMap<>();
 
 	private record Encoded(FileTime time, byte[] bytes) {
 	}
@@ -115,26 +117,28 @@ public final class ImageEdits {
 	 * As {@link #replacement(byte[])} for the original with {@code hash}, which {@code original}
 	 * reads only when the replacement must be encoded again.
 	 */
-	public synchronized byte[] replacement(String hash, java.util.function.Supplier<byte[]> original) {
+	public byte[] replacement(String hash, java.util.function.Supplier<byte[]> original) {
 		Path png = png(hash);
 		if (png == null || !Files.isRegularFile(png)) {
 			return null;
 		}
-		try {
-			FileTime time = Files.getLastModifiedTime(png);
-			Encoded known = encoded.get(hash);
-			if (known == null || !known.time().equals(time)) {
-				BufferedImage image = ImageIO.read(png.toFile());
-				byte[] file = original.get();
-				if (image == null || file == null) {
-					return null;
+		synchronized (encoding.computeIfAbsent(hash, h -> new Object())) {
+			try {
+				FileTime time = Files.getLastModifiedTime(png);
+				Encoded known = encoded.get(hash);
+				if (known == null || !known.time().equals(time)) {
+					BufferedImage image = ImageIO.read(png.toFile());
+					byte[] file = original.get();
+					if (image == null || file == null) {
+						return null;
+					}
+					known = new Encoded(time, Bclim.read(file).with(image));
+					encoded.put(hash, known);
 				}
-				known = new Encoded(time, Bclim.read(file).with(image));
-				encoded.put(hash, known);
+				return known.bytes();
+			} catch (IOException | RuntimeException unusable) {
+				return null;
 			}
-			return known.bytes();
-		} catch (IOException | RuntimeException unusable) {
-			return null;
 		}
 	}
 

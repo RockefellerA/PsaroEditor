@@ -21,6 +21,10 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 import psaro.format.Archive;
@@ -33,6 +37,7 @@ import psaro.format.Cgfx;
 import psaro.format.Darc;
 import psaro.format.Lz11;
 import psaro.project.Translations;
+import psaro.romfs.ImageHashCache;
 import psaro.romfs.RomfsIndex;
 import psaro.romfs.RomfsIndex.Donor;
 import psaro.romfs.RomfsIndex.Image;
@@ -219,9 +224,26 @@ public final class FontPatcher {
 	private final ImageEdits images;
 	/** The romfs's images by archive + "!" + path, made when first asked for. */
 	private Map<String, Image> imagesByPlace;
-	private final Map<Path, Written> written = new HashMap<>();
+	private final Map<Path, Written> written = new ConcurrentHashMap<>();
 	/** Each romfs archive's layouts by path, as read; they never change. */
-	private final Map<Path, Map<String, byte[]>> originalLayouts = new HashMap<>();
+	private final Map<Path, Map<String, byte[]>> originalLayouts = new ConcurrentHashMap<>();
+	/** One lock per file, held while it is read into {@link #written} or {@link #originalLayouts}, so reading one waits for no other. */
+	private final Map<Path, Object> fileLocks = new ConcurrentHashMap<>();
+	/** Loose images' hashes, kept between runs in the project. */
+	private final ImageHashCache imageCache;
+	/** Set once {@link #warmUp} has read what the romfs and the last patch hold. */
+	private volatile boolean ready;
+	/**
+	 * Reads archives and images side by side for {@link #warmUp}; one thread fewer than the
+	 * processors, so the window keeps one, at low priority.
+	 */
+	private static final ExecutorService WARM = Executors.newFixedThreadPool(
+			Math.max(1, Runtime.getRuntime().availableProcessors() - 1), r -> {
+				Thread t = new Thread(r, "PsaroEditor warm-up");
+				t.setDaemon(true);
+				t.setPriority(Thread.MIN_PRIORITY);
+				return t;
+			});
 	/** By archive, its textures (BCLIM files) by file name, read once ({@link #pictureImage}). */
 	private final Map<Path, Map<String, byte[]>> textures = new HashMap<>();
 	/** Keyed by archive path + "!" + layout path: each picture's image file name ({@link Bclyt#pictureImages}), read once. */
@@ -241,7 +263,86 @@ public final class FontPatcher {
 		this.overrides = overrides;
 		this.images = images;
 		this.output = outputFor(index.root());
+		this.imageCache = ImageHashCache.open(Translations.folderFor(index.root()).resolve("cache").resolve("loose-images.tsv"));
+		index.cacheImagesIn(imageCache);
 		handOutLegacyExtraSpace();
+	}
+
+	/**
+	 * Reads, several at once, what the patch check and the preview would otherwise each read on
+	 * first use, one at a time: every archive's fonts and layouts (each archive decompressed
+	 * once), the last patch's archives and images, the loose images when any edit could touch
+	 * them, and the edited images' replacements. Until it is done, {@link #ready} is false and the
+	 * window measures nothing, so it never does this reading itself. Safe to run once only.
+	 */
+	public void warmUp() {
+		try {
+			Set<String> edited = images.edited();
+			Map<Path, List<Image>> editedIn = new TreeMap<>();
+			for (Image i : index.images()) {
+				if (edited.contains(i.hash())) {
+					editedIn.computeIfAbsent(i.archive(), a -> new ArrayList<>()).add(i);
+				}
+			}
+			Set<Path> archives = new TreeSet<>(index.fontArchives());
+			archives.addAll(index.layoutArchives());
+			archives.addAll(editedIn.keySet());
+			List<Callable<Void>> jobs = new ArrayList<>();
+			for (Path a : archives) {
+				jobs.add(() -> {
+					warmArchive(a, editedIn.getOrDefault(a, List.of()));
+					return null;
+				});
+			}
+			for (Path out : outputFiles(".arc.lz", ".arc", ".bcmdl", ".bcmdl.lz", ".bclim", ".bclim.lz")) {
+				jobs.add(() -> {
+					written(out);
+					return null;
+				});
+			}
+			if (!edited.isEmpty()) {
+				// the loose images are read side by side by the index itself, then their edits encoded
+				jobs.add(() -> {
+					for (Image i : index.looseImages()) {
+						if (edited.contains(i.hash())) {
+							images.replacement(i.hash(), () -> imageBytes(i));
+						}
+					}
+					return null;
+				});
+			}
+			WARM.invokeAll(jobs);
+			imageCache.save();
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+		} catch (IOException | RuntimeException e) {
+			// what was not read is read when first asked for, as before
+		} finally {
+			ready = true;
+		}
+	}
+
+	/**
+	 * Decompresses {@code archive} once for its fonts, its layouts, and the replacements of its
+	 * {@code edited} images; a model, whose images are its textures, only for those.
+	 */
+	private void warmArchive(Path archive, List<Image> edited) throws IOException {
+		if (Cgfx.isModel(archive.getFileName().toString())) {
+			edited.forEach(i -> images.replacement(i.hash(), () -> imageBytes(i)));
+			return;
+		}
+		Map<String, Darc.Node> files = Darc.files(Archive.load(archive));
+		index.readFonts(archive, files);
+		originalLayouts.putIfAbsent(archive, layoutsOf(files));
+		for (Image i : edited) {
+			Darc.Node node = files.get(i.path());
+			images.replacement(i.hash(), () -> node == null ? null : node.data);
+		}
+	}
+
+	/** Whether {@link #warmUp} has run, so measuring reads nothing more from the romfs. */
+	public boolean ready() {
+		return ready;
 	}
 
 	/** With the image edits saved for the romfs, none if they cannot be read. */
@@ -1150,14 +1251,20 @@ public final class FontPatcher {
 	}
 
 	/** {@code archive}'s layouts by path, read once; empty when it cannot be read. */
-	private synchronized Map<String, byte[]> originalLayouts(Path archive) {
-		return originalLayouts.computeIfAbsent(archive, a -> {
-			try {
-				return layoutsOf(Darc.files(Archive.load(a)));
-			} catch (IOException | RuntimeException unreadable) {
-				return Map.of();
-			}
-		});
+	private Map<String, byte[]> originalLayouts(Path archive) {
+		Map<String, byte[]> known = originalLayouts.get(archive);
+		if (known != null) {
+			return known;
+		}
+		synchronized (fileLocks.computeIfAbsent(archive, a -> new Object())) {
+			return originalLayouts.computeIfAbsent(archive, a -> {
+				try {
+					return layoutsOf(Darc.files(Archive.load(a)));
+				} catch (IOException | RuntimeException unreadable) {
+					return Map.of();
+				}
+			});
+		}
 	}
 
 	private static Map<String, byte[]> layoutsOf(Map<String, Darc.Node> files) {
@@ -1491,9 +1598,15 @@ public final class FontPatcher {
 
 	/**
 	 * The fonts (by name) and layouts (by path) in a written archive; none when there is no such
-	 * archive or it cannot be read.
+	 * archive or it cannot be read. Holds only that file's lock while it is read.
 	 */
-	private synchronized Written written(Path out) {
+	private Written written(Path out) {
+		synchronized (fileLocks.computeIfAbsent(out, o -> new Object())) {
+			return readWritten(out);
+		}
+	}
+
+	private Written readWritten(Path out) {
 		try {
 			if (!Files.isRegularFile(out)) {
 				written.remove(out);
@@ -1502,10 +1615,12 @@ public final class FontPatcher {
 			FileTime time = Files.getLastModifiedTime(out);
 			Written w = written.get(out);
 			if ((w == null || !w.time().equals(time)) && RomfsIndex.isLooseImage(out)) {
-				// a loose image is its one image, by its path from the romfs
-				byte[] d = Files.readAllBytes(out);
-				byte[] bclim = Lz11.isCompressed(d) ? Lz11.decompress(d) : d;
-				w = new Written(time, Map.of(), Map.of(), Map.of(output.relativize(out).toString().replace('\\', '/'), Bclim.hash(bclim)));
+				// a loose image is its one image, by its path from the romfs; its hash kept between runs
+				ImageHashCache.Entry e = imageCache.entry(out, RomfsIndex::readLooseImage);
+				if (e == null) {
+					return NOTHING;
+				}
+				w = new Written(time, Map.of(), Map.of(), Map.of(output.relativize(out).toString().replace('\\', '/'), e.hash()));
 				written.put(out, w);
 			}
 			if ((w == null || !w.time().equals(time)) && Cgfx.isModel(out.getFileName().toString())) {

@@ -772,6 +772,45 @@ class FontPatcherTest {
 		assertFalse(patcher.plan(List.of()).hasWork());
 	}
 
+	/**
+	 * Warmed up, as the window does on opening, a patcher plans just as one that reads everything
+	 * on first use; the loose images' hashes are kept in the project, and a loose image changed
+	 * since is read again rather than taken from them.
+	 */
+	@Test
+	void aWarmedUpPatcherPlansTheSameAndKeepsLooseImageHashes() throws IOException {
+		int[] red = new int[16 * 8];
+		java.util.Arrays.fill(red, 0xFFFF0000);
+		byte[] help = SampleRomfs.bclim(16, 8, 9, red);
+		Path file = romfs.resolve("common/dialog/texture/help_e_6405.bclim.lz");
+		Files.createDirectories(file.getParent());
+		Files.write(file, psaro.format.Lz11.compress(help));
+		SampleRomfs.images(romfs, "scene/menu/menu.arc.lz", Map.of("help_e_6405.bclim", help));
+		ImageEdits edits = ImageEdits.open(romfs);
+		java.awt.image.BufferedImage english = new java.awt.image.BufferedImage(16, 8, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+		english.setRGB(2, 2, 0xFFFFFFFF);
+		edits.set(help, "common/dialog/texture/help_e_6405.bclim.lz", english);
+
+		FontPatcher cold = new FontPatcher(RomfsIndex.scan(romfs), settings, LayoutOverrides.open(romfs), edits);
+		FontPatcher warm = new FontPatcher(RomfsIndex.scan(romfs), settings, LayoutOverrides.open(romfs), ImageEdits.open(romfs));
+		assertFalse(warm.ready());
+		warm.warmUp();
+		assertTrue(warm.ready());
+		assertEquals(2, cold.plan(List.of()).imagesToWrite());
+		assertEquals(2, warm.plan(List.of()).imagesToWrite(), "the loose file and the archive with the same image");
+
+		Path cache = psaro.project.Translations.folderFor(romfs).resolve("cache/loose-images.tsv");
+		assertTrue(Files.readString(cache).contains("help_e_6405.bclim.lz"), "kept for the next run");
+		int[] blue = new int[16 * 8];
+		java.util.Arrays.fill(blue, 0xFF0000FF);
+		byte[] changed = SampleRomfs.bclim(16, 8, 9, blue);
+		Files.write(file, psaro.format.Lz11.compress(changed));
+		Files.setLastModifiedTime(file, java.nio.file.attribute.FileTime.fromMillis(System.currentTimeMillis() + 5000));
+		RomfsIndex again = RomfsIndex.scan(romfs);
+		new FontPatcher(again, settings, LayoutOverrides.open(romfs), ImageEdits.open(romfs));
+		assertEquals(ImageEdits.hash(changed), again.looseImages().get(0).hash());
+	}
+
 	@Test
 	void aReplacedImageIsWrittenWhereverItIsAndPutBackWhenUndone() throws IOException {
 		int[] red = new int[16 * 8];

@@ -877,12 +877,40 @@ public final class MainWindow {
 		refresh();
 	}
 
-	/** A project of what {@code o} read, with its own editor. */
+	/**
+	 * A project of what {@code o} read, with its own editor; its fonts and archives are then read
+	 * in the background ({@link #warmUp}).
+	 */
 	private Project project(Opened o) {
 		FontPatcher p = new FontPatcher(o.index(), o.patchSettings(), o.layoutOverrides(), o.imageEdits());
 		EditorPanel e = new EditorPanel(p, o.translations(), o.colors(), o.unused(), o.links(), actions, searchHead,
 				this::refresh);
-		return new Project(o.dir(), o.index(), o.translations(), o.unused(), p, o.colors(), e);
+		Project project = new Project(o.dir(), o.index(), o.translations(), o.unused(), p, o.colors(), e);
+		warmUp(project);
+		return project;
+	}
+
+	/**
+	 * Reads what {@code p}'s fit checks, preview and patch check need, several archives at once
+	 * ({@link FontPatcher#warmUp}); until then its editor measures nothing and the patch check
+	 * waits, so neither reads them on the window's thread. Then measures and checks.
+	 */
+	private void warmUp(Project p) {
+		new SwingWorker<Void, Void>() {
+			@Override
+			protected Void doInBackground() {
+				p.patcher.warmUp();
+				return null;
+			}
+
+			@Override
+			protected void done() {
+				p.editor.fontsRead();
+				if (p == game || p == dlc) {
+					startPlan();
+				}
+			}
+		}.execute();
 	}
 
 	/**
@@ -1097,9 +1125,12 @@ public final class MainWindow {
 		return active == dlc && dlc != null && dlc.index.layoutCount() == 0 ? game : active;
 	}
 
-	/** Checks the fonts and layouts against what was written, in the background, then lights Patch if needed. */
+	/**
+	 * Checks the fonts and layouts against what was written, in the background, then lights Patch
+	 * if needed; once the project's fonts are read ({@link #warmUp}), which starts it then.
+	 */
 	private void startPlan() {
-		if (patcher == null) {
+		if (patcher == null || !fontProject().patcher.ready()) {
 			return;
 		}
 		if (planning) {

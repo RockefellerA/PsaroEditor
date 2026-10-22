@@ -247,10 +247,19 @@ final class PreviewPanel extends JPanel {
 		redraw();
 	}
 
-	/** Works out which panes the English does not fit. */
+	/** Shows the string again, measured, once the game's fonts are read ({@link FontPatcher#warmUp}). */
+	void fontsRead() {
+		if (table != null) {
+			measure();
+			pane.repaint();
+			redraw();
+		}
+	}
+
+	/** Works out which panes the English does not fit; none while the game's fonts are still being read. */
 	private void measure() {
 		Set<Usage> out = new LinkedHashSet<>();
-		if (englishRaw != null) {
+		if (englishRaw != null && fonts.ready()) {
 			for (Usage u : Fit.previewable(usages)) {
 				if (Fit.judge(fonts, u, englishRaw, japaneseRaw).overflows()) {
 					out.add(u);
@@ -318,6 +327,16 @@ final class PreviewPanel extends JPanel {
 							+ "link its panes under Panes… to preview it and check its fit; the patch then gives their "
 							+ "fonts its letters.</html>"
 					: "Select a string to preview it.");
+			english.setText(" ");
+			notes.setText("");
+			settings.clear();
+			return;
+		}
+		if (!fonts.ready()) {
+			// drawn once they are read, rather than reading them here and holding up the window
+			japanese.setIcon(null);
+			japanese.setText("Reading the game's fonts…");
+			english.setIcon(null);
 			english.setText(" ");
 			notes.setText("");
 			settings.clear();
