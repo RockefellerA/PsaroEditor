@@ -1395,7 +1395,7 @@ public final class MainWindow {
 					dlcPage[0] = true;
 					text += "\n\nThe DLC is patched by building a patched copy of it: see " + PatcherPage.FOLDER + "/README.txt.";
 				}
-				return PatchExport.write(patchFolder, titleId, text + "\n", all, target, toBar(this::publish));
+				return PatchExport.write(patchFolder, titleId, text + "\n", all, target, toBar(s -> publish(s)));
 			}
 
 			@Override
@@ -1479,7 +1479,7 @@ public final class MainWindow {
 						throw new IOException("There is nothing patched to put in the patcher download yet: save some English first.");
 					}
 					PatchExport.writeFiles(titleId, page.readme(), List.of(new PatchExport.Extra(page.page(), PatcherPage.PAGE)),
-							zip, toBar(this::publish));
+							zip, toBar(s -> publish(s)));
 					wrote.add(String.format(java.util.Locale.ROOT, "The patcher download, %s (%.1f MB): players open its %s in "
 							+ "a browser to build a patched copy of %s from their own.", zip, Files.size(zip) / 1048576.0,
 							PatcherPage.PAGE, dlcPatch != null ? "the game or its DLC" : "the game"));
@@ -1489,7 +1489,7 @@ public final class MainWindow {
 					String building = "Building " + b.out().getFileName() + "…";
 					publish(ProgressDialog.Step.unknown(building));
 					var files = b.dlc() ? TitleBuild.dlcFiles(dlcPatch) : TitleBuild.gameFiles(gameFolder);
-					PatchExport.Progress bar = toBar(this::publish);
+					PatchExport.Progress bar = toBar(s -> publish(s));
 					TitleBuild.Result r = TitleBuild.build(b.base(), files, b.out(), share -> bar.at(building, share));
 					String use = r.format() == TitleBuild.Format.THREE_DS
 							? "Play it in Citra, or have GodMode9 build a CIA from it to install on a 3DS."
