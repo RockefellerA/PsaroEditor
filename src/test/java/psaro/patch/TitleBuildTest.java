@@ -26,6 +26,7 @@ import psaro.format.Ncch;
 import psaro.format.Ncsd;
 import psaro.format.RomfsImage;
 import psaro.format.SampleCia;
+import psaro.format.Smdh;
 
 /** A patched copy of a title built from a decrypted one ({@link TitleBuild}), and the players' page for it ({@link PatcherPage}). */
 class TitleBuildTest {
@@ -178,6 +179,106 @@ class TitleBuildTest {
 		assertArrayEquals(manual, cia.read(cia.content(1)));
 	}
 
+	/** A game's NCCH with an ExeFS of code and its SMDH, as a game has. */
+	private static byte[] gameWithExefs() {
+		Map<String, byte[]> exefs = new LinkedHashMap<>();
+		byte[] code = new byte[0x300];
+		Arrays.fill(code, (byte) 7);
+		exefs.put(".code", code);
+		exefs.put("icon", SampleCia.smdh("シアトリズム ドラゴンクエスト", "SQUARE ENIX"));
+		return SampleCia.ncch(GAME, SampleCia.romfs(gameFiles()), false, exefs);
+	}
+
+	/** The ExeFS of {@code ncch}: its file {@code name}'s hash, and the header's in the NCCH's, are those of what it holds. */
+	private static void assertExefsHashed(byte[] ncch, int index, String name) throws IOException {
+		byte[] file = Ncch.exefsFile(psaro.format.Source.of(ncch), 0, name);
+		assertArrayEquals(sha(file), Arrays.copyOfRange(ncch, 0x200 + 0x1E0 - 0x20 * index, 0x200 + 0x200 - 0x20 * index), name);
+		assertArrayEquals(sha(Arrays.copyOfRange(ncch, 0x200, 0x400)), Arrays.copyOfRange(ncch, 0x1C0, 0x1E0), "the ExeFS header");
+	}
+
+	private static byte[] sha(byte[] d) throws IOException {
+		try {
+			return java.security.MessageDigest.getInstance("SHA-256").digest(d);
+		} catch (java.security.NoSuchAlgorithmException e) {
+			throw new IOException(e);
+		}
+	}
+
+	/**
+	 * A game's CIA given a HOME Menu title has it in every language of its SMDH but Japanese, its
+	 * ExeFS's hashes following, its code and icons kept; with no files of its own patched, its
+	 * content 0 is rebuilt for the title alone.
+	 */
+	@Test
+	void aGamesCiaIsGivenItsHomeMenuTitle() throws IOException {
+		byte[] game = gameWithExefs();
+		Path base = dir.resolve("game.cia");
+		Files.write(base, SampleCia.cia(GAME, List.of(new SampleCia.Content(0, 0, 0, game)), new byte[0]));
+		byte[] own = TitleBuild.smdh(base);
+		assertEquals(new Smdh.Title("シアトリズム ドラゴンクエスト", "シアトリズム ドラゴンクエスト", "SQUARE ENIX"), Smdh.title(own, 1));
+
+		Path out = dir.resolve("game patched.cia");
+		TitleBuild.Result r = TitleBuild.build(base, Map.of(), new Smdh.Title("Theatrhythm DQ", "Theatrhythm Dragon Quest", ""),
+				out, s -> { });
+		assertEquals(1, r.contents());
+		assertEquals(0, r.files());
+		Cia cia = Cia.read(out);
+		byte[] after = cia.read(cia.content(0));
+		byte[] smdh = TitleBuild.smdh(out);
+		for (int language = Smdh.ENGLISH; language < Smdh.LANGUAGES; language++) {
+			assertEquals("Theatrhythm Dragon Quest", Smdh.title(smdh, language).longTitle());
+		}
+		assertEquals(Smdh.title(own, Smdh.JAPANESE), Smdh.title(smdh, Smdh.JAPANESE), "Japanese keeps the game's");
+		assertEquals("SQUARE ENIX", Smdh.title(smdh, Smdh.ENGLISH).publisher(), "a blank publisher keeps the game's");
+		assertArrayEquals(Arrays.copyOfRange(own, 0x2040, Smdh.SIZE), Arrays.copyOfRange(smdh, 0x2040, Smdh.SIZE));
+		assertArrayEquals(Ncch.exefsFile(psaro.format.Source.of(game), 0, ".code"),
+				Ncch.exefsFile(psaro.format.Source.of(after), 0, ".code"));
+		assertExefsHashed(after, 1, "icon");
+		assertExefsHashed(after, 0, ".code");
+		assertArrayEquals(new byte[9000], RomfsImage.files(Ncch.romfs(after)).get("movie/opening.moflex"));
+
+		// none, or a blank one, leaves the SMDH as it was
+		TitleBuild.build(base, Map.of(TitleBuild.GAME, Map.of("font/main.arc.lz", new byte[1])), new Smdh.Title("", null, " "),
+				out, s -> { });
+		assertArrayEquals(own, TitleBuild.smdh(out));
+	}
+
+	/** A game card's image is given its HOME Menu title in its game partition, with its files. */
+	@Test
+	void aGameCardsImageIsGivenItsHomeMenuTitle() throws IOException {
+		Path base = dir.resolve("game.3ds");
+		Files.write(base, SampleCia.ncsd(Map.of(0, gameWithExefs()), 0, 1 << 20));
+		Path out = dir.resolve("game patched.3ds");
+		TitleBuild.build(base, Map.of(TitleBuild.GAME, Map.of("font/main.arc.lz", new byte[20000])),
+				new Smdh.Title("Theatrhythm DQ", null, null), out, s -> { });
+		assertEquals("Theatrhythm DQ", Smdh.title(TitleBuild.smdh(out), 1).shortTitle());
+		Ncsd.Partition p = Ncsd.read(out).partition(0);
+		byte[] d = Files.readAllBytes(out);
+		byte[] after = Arrays.copyOfRange(d, (int) p.offset(), (int) (p.offset() + p.size()));
+		assertExefsHashed(after, 1, "icon");
+		assertArrayEquals(new byte[20000], RomfsImage.files(Ncch.romfs(after)).get("font/main.arc.lz"));
+	}
+
+	/** A title too long for the SMDH, or a game with no SMDH, stops the build before anything is written. */
+	@Test
+	void aHomeMenuTitleThatCannotBeWrittenStopsTheBuild() throws IOException {
+		Path base = dir.resolve("game.cia");
+		Files.write(base, SampleCia.cia(GAME, List.of(new SampleCia.Content(0, 0, 0, gameWithExefs())), new byte[0]));
+		Path out = dir.resolve("out.cia");
+		IOException tooLong = assertThrows(IOException.class,
+				() -> TitleBuild.build(base, Map.of(), new Smdh.Title("x".repeat(64), null, null), out, s -> { }));
+		assertTrue(tooLong.getMessage().contains("room for 63"), tooLong.getMessage());
+
+		Path bare = dir.resolve("bare.cia");
+		Files.write(bare, SampleCia.cia(GAME, List.of(new SampleCia.Content(0, 0, 0, SampleCia.ncch(GAME,
+				SampleCia.romfs(gameFiles()), false))), new byte[0]));
+		assertNull(TitleBuild.smdh(bare));
+		IOException none = assertThrows(IOException.class,
+				() -> TitleBuild.build(bare, Map.of(), new Smdh.Title("TDQ", null, null), out, s -> { }));
+		assertTrue(none.getMessage().contains("the ExeFS has no icon"), none.getMessage());
+		assertFalse(Files.exists(out));
+	}
+
 	/** Nothing patched for a game, no files; a game's patch folder is its content 0's. */
 	@Test
 	void aGamesFilesAreItsContentZeros() throws IOException {
@@ -234,6 +335,23 @@ class TitleBuildTest {
 
 		assertNull(PatcherPage.write(dir.resolve("export2"), "x",
 				List.of(new PatcherPage.Title(PatcherPage.Kind.GAME, "0004000000140000", null, Map.of()))));
+	}
+
+	/** A game with only its HOME Menu title to give still has a page, its blank parts left out; its readme says so. */
+	@Test
+	void thePlayersPageHoldsTheHomeMenuTitle() throws IOException {
+		PatcherPage.Written written = PatcherPage.write(dir.resolve("export"), "TDQ patcher", List.of(
+				new PatcherPage.Title(PatcherPage.Kind.GAME, "0004000000140000", null, Map.of(),
+						new Smdh.Title("Theatrhythm DQ", "Theatrhythm Dragon Quest", " "))));
+		String html = Files.readString(written.page());
+		String data = html.substring(html.indexOf("id=\"patch\">") + "id=\"patch\">".length());
+		org.json.JSONObject title = new org.json.JSONObject(data.substring(0, data.indexOf("</script>")))
+				.getJSONArray("titles").getJSONObject(0);
+		org.json.JSONObject home = title.getJSONObject("homeTitle");
+		assertEquals("Theatrhythm DQ", home.getString("short"));
+		assertEquals("Theatrhythm Dragon Quest", home.getString("long"));
+		assertFalse(home.has("publisher"));
+		assertTrue(written.readme().contains("its English title on the HOME Menu"), written.readme());
 	}
 
 	/**

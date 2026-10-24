@@ -162,7 +162,35 @@ public final class SampleCia {
 	 * NoCrypto unless {@code encrypted}), padded to 0x1000, then the romfs.
 	 */
 	public static byte[] ncch(long programId, byte[] romfs, boolean encrypted) {
-		byte[] out = new byte[0x1000 + romfs.length];
+		return ncch(programId, romfs, encrypted, Map.of());
+	}
+
+	/**
+	 * As {@link #ncch(long, byte[], boolean)}, with an ExeFS of {@code exefs} (by name, ten at most)
+	 * from 0x200, its files each padded to 0x200 and hashed, the romfs after it on the next 0x1000.
+	 */
+	public static byte[] ncch(long programId, byte[] romfs, boolean encrypted, Map<String, byte[]> exefs) {
+		ByteArrayOutputStream fs = new ByteArrayOutputStream();
+		if (!exefs.isEmpty()) {
+			ByteBuffer e = ByteBuffer.allocate(0x200).order(ByteOrder.LITTLE_ENDIAN);
+			int i = 0;
+			int at = 0;
+			for (Map.Entry<String, byte[]> f : exefs.entrySet()) {
+				e.put(i * 0x10, f.getKey().getBytes(StandardCharsets.US_ASCII));
+				e.putInt(i * 0x10 + 8, at).putInt(i * 0x10 + 12, f.getValue().length);
+				e.put(0x1E0 - 0x20 * i, sha(f.getValue()));
+				at = align(at + f.getValue().length, 0x200);
+				i++;
+			}
+			fs.writeBytes(e.array());
+			for (byte[] f : exefs.values()) {
+				fs.writeBytes(f);
+				fs.writeBytes(new byte[align(f.length, 0x200) - f.length]);
+			}
+		}
+		byte[] exefsBytes = fs.toByteArray();
+		int romfsAt = exefs.isEmpty() ? 0x1000 : align(0x200 + exefsBytes.length, 0x1000);
+		byte[] out = new byte[romfsAt + romfs.length];
 		ByteBuffer h = ByteBuffer.wrap(out).order(ByteOrder.LITTLE_ENDIAN);
 		h.put(0x100, "NCCH".getBytes(StandardCharsets.US_ASCII));
 		h.putInt(0x104, out.length / 0x200);
@@ -171,11 +199,34 @@ public final class SampleCia {
 		out[0x18C] = 1;
 		out[0x18D] = 1;
 		out[0x18F] = (byte) (encrypted ? 0 : 4);
-		h.putInt(0x1B0, 8);
+		if (!exefs.isEmpty()) {
+			h.putInt(0x1A0, 1);
+			h.putInt(0x1A4, exefsBytes.length / 0x200);
+			h.putInt(0x1A8, 1);
+			System.arraycopy(exefsBytes, 0, out, 0x200, exefsBytes.length);
+			System.arraycopy(sha(java.util.Arrays.copyOf(exefsBytes, 0x200)), 0, out, 0x1C0, 32);
+		}
+		h.putInt(0x1B0, romfsAt / 0x200);
 		h.putInt(0x1B4, romfs.length / 0x200);
 		h.putInt(0x1B8, RomfsImage.hashRegionSize(romfs) / 0x200);
-		System.arraycopy(romfs, 0, out, 0x1000, romfs.length);
+		System.arraycopy(romfs, 0, out, romfsAt, romfs.length);
 		System.arraycopy(sha(java.util.Arrays.copyOf(romfs, RomfsImage.hashRegionSize(romfs))), 0, out, 0x1E0, 32);
+		return out;
+	}
+
+	/** An SMDH naming the title {@code shortTitle} (long title the same) by {@code publisher} in Japanese and English only. */
+	public static byte[] smdh(String shortTitle, String publisher) {
+		byte[] out = new byte[Smdh.SIZE];
+		ByteBuffer b = ByteBuffer.wrap(out).order(ByteOrder.LITTLE_ENDIAN);
+		b.put(0, "SMDH".getBytes(StandardCharsets.US_ASCII));
+		for (int language = 0; language < 2; language++) {
+			int slot = 8 + language * 0x200;
+			b.put(slot, utf16(shortTitle));
+			b.put(slot + 0x80, utf16(shortTitle));
+			b.put(slot + 0x180, utf16(publisher));
+		}
+		// the icons, so they can be seen to be kept
+		java.util.Arrays.fill(out, 0x2040, Smdh.SIZE, (byte) 0x5A);
 		return out;
 	}
 

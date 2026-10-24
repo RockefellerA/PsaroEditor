@@ -18,10 +18,12 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.TreeMap;
 import java.util.function.DoubleConsumer;
+import java.util.function.UnaryOperator;
 import java.util.stream.Stream;
 import psaro.format.Cia;
 import psaro.format.Ncch;
 import psaro.format.Ncsd;
+import psaro.format.Smdh;
 import psaro.format.Source;
 
 /**
@@ -67,6 +69,8 @@ public final class TitleBuild {
 
 	/** The content of a game: its first, the one with its romfs. */
 	public static final String GAME = "0000";
+	/** The ExeFS file holding a game's SMDH. */
+	private static final String ICON = "icon";
 
 	private TitleBuild() {
 	}
@@ -97,6 +101,37 @@ public final class TitleBuild {
 	}
 
 	/**
+	 * The SMDH of the game in {@code base} (a decrypted CIA or .3ds): the ExeFS {@code icon} of its
+	 * content or partition 0, which holds the title the HOME Menu shows ({@link Smdh}); null when it
+	 * has none.
+	 */
+	public static byte[] smdh(Path base) throws IOException {
+		long at;
+		if (isNcsd(base)) {
+			Ncsd.Partition p = Ncsd.read(base).partition(0);
+			if (p == null) {
+				return null;
+			}
+			at = p.offset();
+		} else {
+			Cia.Content c = Cia.read(base).content(0);
+			if (c == null || c.encrypted()) {
+				return null;
+			}
+			at = c.offset();
+		}
+		try (FileChannel ch = FileChannel.open(base, StandardOpenOption.READ)) {
+			Source s = Source.of(ch);
+			byte[] header = s.read(at, 0x200);
+			if (!Ncch.decrypted(header)) {
+				return null;
+			}
+			byte[] icon = Ncch.exefsFile(s, at, ICON);
+			return Smdh.is(icon) ? icon : null;
+		}
+	}
+
+	/**
 	 * Writes {@code base} with {@code patched} (by content, each file by its path in the content's
 	 * romfs) in it to {@code out}, beside its place first and then moved there; {@code progress}
 	 * hears how far along it is, 0 to 1. Nothing is written when any content cannot take its files;
@@ -104,9 +139,40 @@ public final class TitleBuild {
 	 */
 	public static Result build(Path base, Map<String, Map<String, byte[]>> patched, Path out, DoubleConsumer progress)
 			throws IOException {
+		return build(base, patched, null, out, progress);
+	}
+
+	/**
+	 * As {@link #build(Path, Map, Path, DoubleConsumer)}, a game's content {@link #GAME} given
+	 * {@code homeTitle} for the HOME Menu as well, in its SMDH ({@link Smdh#withTitle}); none when
+	 * null or blank.
+	 */
+	public static Result build(Path base, Map<String, Map<String, byte[]>> patched, Smdh.Title homeTitle, Path out,
+			DoubleConsumer progress) throws IOException {
+		if (homeTitle != null && homeTitle.isBlank()) {
+			homeTitle = null;
+		}
+		if (homeTitle != null) {
+			String problem = homeTitle.problem();
+			if (problem != null) {
+				throw new IOException("The HOME Menu title cannot be written: " + problem);
+			}
+			if (!patched.containsKey(GAME)) {
+				patched = new TreeMap<>(patched);
+				patched.put(GAME, Map.of());
+			}
+		}
 		if (patched.isEmpty()) {
 			throw new IOException("There is nothing patched to build with yet: save some English first.");
 		}
+		Smdh.Title title = homeTitle;
+		UnaryOperator<byte[]> retitleIcon = smdh -> {
+			if (!Smdh.is(smdh)) {
+				throw new IllegalArgumentException("the ExeFS's " + ICON + " is not an SMDH");
+			}
+			return Smdh.withTitle(smdh, title);
+		};
+		Map<String, UnaryOperator<byte[]>> retitle = title == null ? Map.of() : Map.of(ICON, retitleIcon);
 		boolean ncsd = isNcsd(base);
 		Cia cia = ncsd ? null : Cia.read(base);
 		Ncsd card = ncsd ? Ncsd.read(base) : null;
@@ -171,7 +237,8 @@ public final class TitleBuild {
 					continue;
 				}
 				try {
-					rebuilt.put(index, Ncch.rebuild(s, e.getValue()[0], e.getValue()[1], files.get(index), read));
+					rebuilt.put(index, Ncch.rebuild(s, e.getValue()[0], e.getValue()[1], files.get(index),
+							index == 0 ? retitle : Map.of(), read));
 					count += files.get(index).size();
 				} catch (IllegalArgumentException ex) {
 					problems.add(what + ": " + ex.getMessage() + " (is this the title the patch was made for?)");

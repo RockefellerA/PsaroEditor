@@ -52,10 +52,12 @@ import psaro.patch.ImageEdits;
 import psaro.dialog.ExportWizard;
 import psaro.dialog.FileSurveyDialog;
 import psaro.dialog.FontsDialog;
+import psaro.dialog.HomeTitleDialog;
 import psaro.dialog.PreferencesDialog;
 import psaro.dialog.ProgressDialog;
 import psaro.format.Csv;
 import psaro.format.LumaDump;
+import psaro.format.Smdh;
 import psaro.menu.HelpMenu;
 import psaro.patch.FontPatcher;
 import psaro.patch.FontPatcher.Plan;
@@ -72,6 +74,7 @@ import psaro.project.CodeColors;
 import psaro.project.DlcInherit;
 import psaro.project.DlcLink;
 import psaro.project.DlcPanes;
+import psaro.project.HomeTitle;
 import psaro.project.PaneLinks;
 import psaro.project.RecentProjects;
 import psaro.project.StringSearch;
@@ -115,6 +118,8 @@ public final class MainWindow {
 	/** Exports the game and its DLC for players, as LayeredFS files or patched CIAs; once a romfs is open. */
 	private final JMenuItem exportPatch = new JMenuItem("Export patch…");
 	private final JMenuItem fontsItem = new JMenuItem("Fonts…");
+	/** The title the HOME Menu shows for the game, which a patched copy carries; while a game is open. */
+	private final JMenuItem homeTitleItem = new JMenuItem("HOME Menu title…");
 	/** Gives the DLC the game's English for its strings with the same Japanese; while the DLC is in view. */
 	private final JMenuItem fillFromGame = new JMenuItem("Fill DLC from game");
 	/** Set while a patch is being packed, one at a time. */
@@ -285,6 +290,11 @@ public final class MainWindow {
 		fontsItem.setToolTipText("The typefaces this project's text can be drawn with: import .ttf or .otf files");
 		fontsItem.addActionListener(e -> openFonts());
 
+		homeTitleItem.setMnemonic(KeyEvent.VK_H);
+		homeTitleItem.setEnabled(false);
+		homeTitleItem.setToolTipText("The title the HOME Menu shows for the game, which a patched CIA or .3ds carries");
+		homeTitleItem.addActionListener(e -> openHomeTitle());
+
 		JMenuItem crashDump = new JMenuItem("Open Luma crash dump…");
 		crashDump.setMnemonic(KeyEvent.VK_L);
 		crashDump.setToolTipText("Read a crash_dump_*.dmp written by Luma3DS after a game crash");
@@ -310,6 +320,7 @@ public final class MainWindow {
 		file.add(exportPatch);
 		file.addSeparator();
 		file.add(fontsItem);
+		file.add(homeTitleItem);
 		file.add(fillFromGame);
 		file.addSeparator();
 		file.add(preferences);
@@ -1186,6 +1197,69 @@ public final class MainWindow {
 		}).setVisible(true);
 	}
 
+	/**
+	 * File → HOME Menu title: the game's title for the HOME Menu, its own shown in the boxes when the
+	 * decrypted copy it builds from is known, or once one is chosen there (then remembered for Export
+	 * patch); saved in the project as it closes.
+	 */
+	private void openHomeTitle() {
+		if (game == null) {
+			return;
+		}
+		Smdh.Title current;
+		try {
+			current = HomeTitle.of(game.dir);
+		} catch (IOException e) {
+			error("Could not read the HOME Menu title:\n" + e.getMessage());
+			return;
+		}
+		Project p = game;
+		HomeTitleDialog dialog = new HomeTitleDialog(frame, ownHomeTitle(BuildBase.of(p.dir)), current, copy -> {
+			String id = p.patcher.settings().titleId();
+			TitleBuild.Info info = TitleBuild.info(copy);
+			if (PatchExport.isTitleId(id) && !info.id().equalsIgnoreCase(id)) {
+				throw new IOException(copy.getFileName() + " is title " + info.id() + ", but this game is " + id + ".");
+			}
+			Smdh.Title own = ownHomeTitle(copy);
+			if (own == null) {
+				throw new IOException("No HOME Menu title could be read from " + copy.getFileName()
+						+ ": it needs to be a decrypted .3ds or CIA of the game.");
+			}
+			// the copy a patched one is built from, which Export patch offers next
+			remember(p, copy);
+			return own;
+		});
+		dialog.setVisible(true);
+		if (!dialog.saved()) {
+			return;
+		}
+		try {
+			HomeTitle.set(game.dir, dialog.title());
+		} catch (IOException e) {
+			error("Could not save the HOME Menu title:\n" + e.getMessage());
+		}
+	}
+
+	/**
+	 * The title the game in {@code base} gives the HOME Menu, its English (else its Japanese); null
+	 * for no base, or one that cannot be read.
+	 */
+	private static Smdh.Title ownHomeTitle(Path base) {
+		if (base == null || !Files.isRegularFile(base)) {
+			return null;
+		}
+		try {
+			byte[] smdh = TitleBuild.smdh(base);
+			if (smdh == null) {
+				return null;
+			}
+			Smdh.Title english = Smdh.title(smdh, Smdh.ENGLISH);
+			return english.isBlank() ? Smdh.title(smdh, Smdh.JAPANESE) : english;
+		} catch (IOException | RuntimeException unreadable) {
+			return null;
+		}
+	}
+
 	/** Says which typefaces the project names that are not imported here, if any. */
 	private void warnMissingTypefaces() {
 		java.util.SortedSet<String> missing = patcher.missingTypefaces();
@@ -1452,6 +1526,13 @@ public final class MainWindow {
 			}
 		}
 		Path zip = patcherZip;
+		Smdh.Title homeTitle;
+		try {
+			homeTitle = HomeTitle.of(game.dir);
+		} catch (IOException e) {
+			error("Could not read the HOME Menu title:\n" + e.getMessage());
+			return;
+		}
 		Path gameFolder = game.patcher.output();
 		Path dlcPatch = dlc == null ? null : dlc.patcher.output();
 		Path gameBase = BuildBase.of(game.dir);
@@ -1470,7 +1551,7 @@ public final class MainWindow {
 					publish(ProgressDialog.Step.unknown("Writing the patcher page for " + zip.getFileName() + "…"));
 					List<PatcherPage.Title> titles = new ArrayList<>();
 					titles.add(new PatcherPage.Title(PatcherPage.Kind.GAME, titleId, versionOf(gameBase),
-							TitleBuild.gameFiles(gameFolder)));
+							TitleBuild.gameFiles(gameFolder), homeTitle));
 					if (dlcPatch != null) {
 						titles.add(dlcTitle(titleId, dlcPatch, dlcBase));
 					}
@@ -1490,13 +1571,15 @@ public final class MainWindow {
 					publish(ProgressDialog.Step.unknown(building));
 					var files = b.dlc() ? TitleBuild.dlcFiles(dlcPatch) : TitleBuild.gameFiles(gameFolder);
 					PatchExport.Progress bar = toBar(s -> publish(s));
-					TitleBuild.Result r = TitleBuild.build(b.base(), files, b.out(), share -> bar.at(building, share));
+					Smdh.Title retitle = b.dlc() ? null : homeTitle;
+					TitleBuild.Result r = TitleBuild.build(b.base(), files, retitle, b.out(), share -> bar.at(building, share));
 					String use = r.format() == TitleBuild.Format.THREE_DS
 							? "Play it in Citra, or have GodMode9 build a CIA from it to install on a 3DS."
 							: "Install it in place of the " + what + ": with FBI on a 3DS with Luma3DS, or in Citra with File → Install CIA.";
 					wrote.add(String.format(java.util.Locale.ROOT, "The patched %s, %s (%.1f MB): %,d %s rebuilt with %,d patched "
-							+ "%s. %s %s", what, b.out(), r.bytes() / 1048576.0, r.contents(),
-							r.contents() == 1 ? "content" : "contents", r.files(), r.files() == 1 ? "file" : "files", use,
+							+ "%s%s. %s %s", what, b.out(), r.bytes() / 1048576.0, r.contents(),
+							r.contents() == 1 ? "content" : "contents", r.files(), r.files() == 1 ? "file" : "files",
+							retitle == null ? "" : " and its HOME Menu title", use,
 							b.dlc() ? "Keep the decrypted CIA to put the DLC back as it was."
 									: "It needs no Luma3DS game patching: remove the game's luma/titles romfs folder when you use it."));
 				}
@@ -1607,6 +1690,7 @@ public final class MainWindow {
 		exportPatch.setEnabled(game != null && !exporting);
 		closeProject.setEnabled(game != null);
 		fontsItem.setEnabled(patcher != null);
+		homeTitleItem.setEnabled(game != null);
 		fillFromGame.setEnabled(dlc != null && active == dlc);
 		saveButton.putClientProperty(FlatClientProperties.STYLE, dirty ? HIGHLIGHT : null);
 		if (index != null) {

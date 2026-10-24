@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Map;
 import org.json.JSONArray;
 import org.json.JSONObject;
+import psaro.format.Smdh;
 
 /**
  * The page a patch's players build a patched copy with ({@link TitleBuild}), the other way to
@@ -37,10 +38,25 @@ public final class PatcherPage {
 	}
 
 	/**
-	 * A title the page patches: its kind, its title id, its version when known (or null), and its
-	 * patched files, by content ({@link TitleBuild#build}).
+	 * A title the page patches: its kind, its title id, its version when known (or null), its
+	 * patched files, by content ({@link TitleBuild#build}), and for a game the title the HOME Menu is
+	 * to show, or null.
 	 */
-	public record Title(Kind kind, String titleId, Integer version, Map<String, Map<String, byte[]>> contents) {
+	public record Title(Kind kind, String titleId, Integer version, Map<String, Map<String, byte[]>> contents,
+			Smdh.Title homeTitle) {
+
+		public Title(Kind kind, String titleId, Integer version, Map<String, Map<String, byte[]>> contents) {
+			this(kind, titleId, version, contents, null);
+		}
+
+		/** Whether the page has anything to do for it. */
+		boolean patched() {
+			return !contents.isEmpty() || hasHomeTitle();
+		}
+
+		boolean hasHomeTitle() {
+			return homeTitle != null && !homeTitle.isBlank();
+		}
 	}
 
 	private PatcherPage() {
@@ -65,6 +81,17 @@ public final class PatcherPage {
 				contents.put(content, f);
 			});
 			title.put("contents", contents);
+			if (t.hasHomeTitle()) {
+				Smdh.Title home = t.homeTitle();
+				JSONObject names = new JSONObject();
+				for (String[] part : new String[][] {{"short", home.shortTitle()}, {"long", home.longTitle()},
+						{"publisher", home.publisher()}}) {
+					if (part[1] != null && !part[1].isBlank()) {
+						names.put(part[0], part[1]);
+					}
+				}
+				title.put("homeTitle", names);
+			}
 			list.put(title);
 		}
 		patch.put("titles", list);
@@ -81,7 +108,7 @@ public final class PatcherPage {
 	 * returning it with its readme; null when no title has anything patched.
 	 */
 	public static Written write(Path into, String name, List<Title> titles) throws IOException {
-		List<Title> patched = titles.stream().filter(t -> !t.contents().isEmpty()).toList();
+		List<Title> patched = titles.stream().filter(Title::patched).toList();
 		if (patched.isEmpty()) {
 			return null;
 		}
@@ -137,6 +164,9 @@ public final class PatcherPage {
 			lines.add("    install it with FBI on a 3DS with Luma3DS, or in Citra (or Azahar) with File > Install CIA.");
 			lines.add("  - A decrypted .3ds of the game card (GodMode9 can dump one) gives a .3ds: play it in Citra, or have");
 			lines.add("    GodMode9 build a CIA from it to install on a 3DS.");
+			if (titles.stream().anyMatch(t -> t.kind() == Kind.GAME && t.hasHomeTitle())) {
+				lines.add("  The patched copy also gives the game its English title on the HOME Menu.");
+			}
 			lines.add("");
 		}
 		if (dlc) {

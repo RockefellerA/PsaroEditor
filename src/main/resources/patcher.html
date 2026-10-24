@@ -279,10 +279,53 @@ function entries(tables) {
 }
 
 /**
- * Rebuilds {@code content} (a decrypted NCCH) with {@code files} (path to bytes) in place of its romfs's
- * own, its tree, names and tables kept: the parts to write, their size and the SHA-256 of them all.
+ * Puts {@code title} (short, long, publisher) in every language but Japanese of the SMDH that is the ExeFS's
+ * icon in {@code pre} (an NCCH up to its romfs): the title the HOME Menu shows, a Japanese 3DS keeping the
+ * game's own. A part left out keeps each language's own, a language with none taking the English's, else the
+ * Japanese's. The icon's hash and the ExeFS header's follow.
  */
-async function rebuildContent(file, content, files, tick) {
+function setHomeTitle(pre, unit, title) {
+  const v = view(pre);
+  const exefs = v.getUint32(0x1A0, true) * unit;
+  if (!v.getUint32(0x1A4, true) || exefs + 0x200 > pre.length) throw new Error('has no ExeFS to hold the HOME Menu title.');
+  for (let i = 0; i < 10; i++) {
+    const e = exefs + i * 0x10;
+    if (String.fromCharCode(...pre.subarray(e, e + 8)).replace(/\0[\s\S]*$/, '') !== 'icon' || !pre[e]) continue;
+    const at = exefs + 0x200 + v.getUint32(e + 8, true), size = v.getUint32(e + 12, true);
+    if (size < 0x36C0 || at + size > pre.length || String.fromCharCode(...pre.subarray(at, at + 4)) !== 'SMDH') {
+      throw new Error('has no SMDH in its ExeFS to hold the HOME Menu title.');
+    }
+    const parts = [['short', 0, 0x40], ['long', 0x80, 0x80], ['publisher', 0x180, 0x40]];
+    const blank = s => !s || !s.trim();
+    const own = lang => parts.map(([, off, units]) => {
+      let s = '';
+      for (let k = 0, c; k < units && (c = v.getUint16(at + 8 + lang * 0x200 + off + 2 * k, true)); k++) s += String.fromCharCode(c);
+      return s;
+    });
+    const english = own(1), japanese = own(0);
+    for (let lang = 1; lang < 16; lang++) {
+      const slot = at + 8 + lang * 0x200;
+      const mine = own(lang);
+      parts.forEach(([key, off, units], j) => {
+        const text = !blank(title[key]) ? title[key] : !blank(mine[j]) ? mine[j] : !blank(english[j]) ? english[j] : japanese[j];
+        if (blank(text)) return;
+        pre.fill(0, slot + off, slot + off + units * 2);
+        for (let k = 0; k < Math.min(text.length, units - 1); k++) v.setUint16(slot + off + 2 * k, text.charCodeAt(k), true);
+      });
+    }
+    pre.set(sha256(pre.subarray(at, at + size)), exefs + 0x1E0 - 0x20 * i);
+    pre.set(sha256(pre.subarray(exefs, Math.min(pre.length, exefs + v.getUint32(0x1A8, true) * unit))), 0x1C0);
+    return;
+  }
+  throw new Error('has no icon in its ExeFS to hold the HOME Menu title.');
+}
+
+/**
+ * Rebuilds {@code content} (a decrypted NCCH) with {@code files} (path to bytes) in place of its romfs's
+ * own, its tree, names and tables kept, and {@code homeTitle} for the HOME Menu when given: the parts to
+ * write, their size and the SHA-256 of them all.
+ */
+async function rebuildContent(file, content, files, tick, homeTitle) {
   if (content.type & 1) throw new Error('is encrypted: this page needs a decrypted copy.');
   const head = await read(file, content.offset, 0x200);
   const hv = view(head);
@@ -294,6 +337,7 @@ async function rebuildContent(file, content, files, tick) {
     throw new Error('has sections after its romfs, or no romfs.');
   }
   const pre = await read(file, content.offset, romfsOff);
+  if (homeTitle) setHomeTitle(pre, unit, homeTitle);
   const romfsAt = content.offset + romfsOff;
   const ivfc = await read(file, romfsAt, 0x60);
   const iv = view(ivfc);
@@ -409,7 +453,9 @@ async function patchTitle(file, patch, progress) {
   }
   const problems = [];
   const wanted = [];
-  for (const [name, files] of Object.entries(target.contents)) {
+  // a game's HOME Menu title is in its content 0, rebuilt for it even with no files of its own
+  const contents = target.homeTitle && !target.contents['0000'] ? { '0000': {}, ...target.contents } : target.contents;
+  for (const [name, files] of Object.entries(contents)) {
     const c = title.ncsd ? (/^[0-9a-f]{4}$/i.test(name) ? title.partitions.find(p => p.index === parseInt(name, 16)) : null)
       : contentFor(title, name);
     if (!c) problems.push((title.ncsd ? 'Partition ' : 'Content ') + name + ' is not in this ' + kind + '.');
@@ -428,7 +474,7 @@ async function patchTitle(file, patch, progress) {
     const bytes = {};
     for (const [path, b64] of Object.entries(files)) bytes[path] = base64(b64);
     try {
-      rebuilt.set(c.index, await rebuildContent(file, c, bytes, tick));
+      rebuilt.set(c.index, await rebuildContent(file, c, bytes, tick, c.index === 0 ? target.homeTitle : null));
     } catch (e) {
       throw new Error((title.ncsd ? 'Partition ' : 'Content ') + hex(c.index, 4) + ' ' + e.message);
     }
@@ -581,7 +627,8 @@ $('build').addEventListener('click', async () => {
       ? '\nThis CIA is version ' + out.title.version + ' of the ' + what + '; the patch was made from version '
         + out.target.version + '.' : '';
     const next = out.title.ncsd ? 'play it in Citra, or have GodMode9 build a CIA from it' : 'install it in place of the ' + what;
-    status('Rebuilt the ' + what + ' with ' + out.files + ' patched files. Save the patched ' + out.kind + ', then ' + next + '.'
+    status('Rebuilt the ' + what + ' with ' + out.files + ' patched files' + (out.target.homeTitle ? ' and its HOME Menu title' : '')
+      + '. Save the patched ' + out.kind + ', then ' + next + '.'
       + warn, warn ? '' : 'good');
     save.click();
   } catch (e) {
