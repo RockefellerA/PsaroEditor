@@ -1,6 +1,7 @@
 package psaro.patch;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
@@ -13,7 +14,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
-import java.util.function.Consumer;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
@@ -39,6 +39,12 @@ public final class PatchExport {
 
 	/** A file added to the zip: where it is read from, and its path in the zip, which may hold {@link #TITLE_ID}. */
 	public record Extra(Path source, String destination) {
+	}
+
+	/** Told what is being packed and how much of the zip is written, 0 to 1 by bytes. */
+	@FunctionalInterface
+	public interface Progress {
+		void at(String step, double share);
 	}
 
 	/** Stands for the title id in a readme or an added file's path in the zip. */
@@ -71,20 +77,20 @@ public final class PatchExport {
 	/**
 	 * Writes the files of {@code patchFolder} to {@code zip} under the Luma layout for
 	 * {@code titleId}, with the default readme; leftovers of an interrupted write ({@code .tmp})
-	 * are left out. The zip is written beside its place, then moved there. Reports each file to
-	 * {@code progress}.
+	 * are left out. The zip is written beside its place, then moved there. Reports each file, and
+	 * how far along it is, to {@code progress}.
 	 */
-	public static Result write(Path patchFolder, String titleId, Path zip, Consumer<String> progress) throws IOException {
+	public static Result write(Path patchFolder, String titleId, Path zip, Progress progress) throws IOException {
 		return write(patchFolder, titleId, defaultReadme(), List.of(), zip, progress);
 	}
 
 	/**
-	 * As {@link #write(Path, String, Path, Consumer)}, with {@code readme} (its {@link #TITLE_ID}
+	 * As {@link #write(Path, String, Path, Progress)}, with {@code readme} (its {@link #TITLE_ID}
 	 * filled in, {@link #FOOTER} after it) and {@code extras} added where they say. Nothing is
 	 * written when any of {@link #problems} stands in the way.
 	 */
 	public static Result write(Path patchFolder, String titleId, String readme, List<Extra> extras, Path zip,
-			Consumer<String> progress) throws IOException {
+			Progress progress) throws IOException {
 		if (!isTitleId(titleId)) {
 			throw new IllegalArgumentException(titleId + " is not a title id");
 		}
@@ -98,23 +104,22 @@ public final class PatchExport {
 			throw new IOException(String.join("\n", problems));
 		}
 		Path tmp = zip.resolveSibling(zip.getFileName() + ".tmp");
-		long bytes = 0;
+		long[] done = {0};
+		long whole = size(files) + size(extras.stream().map(Extra::source).toList());
 		try (OutputStream out = Files.newOutputStream(tmp); ZipOutputStream z = new ZipOutputStream(out)) {
 			z.putNextEntry(new ZipEntry(README));
 			z.write(fill(withFooter(readme), id).getBytes(StandardCharsets.UTF_8));
 			z.closeEntry();
 			for (Path f : files) {
 				String rel = relative(patchFolder, f);
-				progress.accept("Packing " + rel);
 				z.putNextEntry(new ZipEntry(romfsEntry(id, rel)));
-				bytes += Files.copy(f, z);
+				copy(f, z, "Packing " + rel, done, whole, progress);
 				z.closeEntry();
 			}
 			for (Extra e : extras) {
 				String name = destination(e.destination(), id);
-				progress.accept("Adding " + name);
 				z.putNextEntry(new ZipEntry(name));
-				bytes += Files.copy(e.source(), z);
+				copy(e.source(), z, "Adding " + name, done, whole, progress);
 				z.closeEntry();
 			}
 		} catch (IOException | RuntimeException e) {
@@ -126,29 +131,33 @@ public final class PatchExport {
 		} catch (AtomicMoveNotSupportedException e) {
 			Files.move(tmp, zip, StandardCopyOption.REPLACE_EXISTING);
 		}
-		return new Result(files.size(), bytes, extras.size());
+		return new Result(files.size(), done[0], extras.size());
 	}
 
 	/**
 	 * Writes a zip of {@code readme} ({@link #TITLE_ID} filled in, {@link #FOOTER} after it) and
 	 * {@code files} at their paths in it, and nothing of the patch folder: the patcher download,
-	 * which players take instead of the Luma3DS one. Written beside its place, then moved there.
+	 * which players take instead of the Luma3DS one. Written beside its place, then moved there;
+	 * how far along it is goes to {@code progress}.
 	 */
-	public static Result writeFiles(String titleId, String readme, List<Extra> files, Path zip) throws IOException {
+	public static Result writeFiles(String titleId, String readme, List<Extra> files, Path zip, Progress progress)
+			throws IOException {
 		List<String> problems = problems(null, titleId, files);
 		if (!problems.isEmpty()) {
 			throw new IOException(String.join("\n", problems));
 		}
 		String id = titleId.toUpperCase(Locale.ROOT);
 		Path tmp = zip.resolveSibling(zip.getFileName() + ".tmp");
-		long bytes = 0;
+		long[] done = {0};
+		long whole = size(files.stream().map(Extra::source).toList());
 		try (OutputStream out = Files.newOutputStream(tmp); ZipOutputStream z = new ZipOutputStream(out)) {
 			z.putNextEntry(new ZipEntry(README));
 			z.write(fill(withFooter(readme), id).getBytes(StandardCharsets.UTF_8));
 			z.closeEntry();
 			for (Extra e : files) {
-				z.putNextEntry(new ZipEntry(destination(e.destination(), id)));
-				bytes += Files.copy(e.source(), z);
+				String name = destination(e.destination(), id);
+				z.putNextEntry(new ZipEntry(name));
+				copy(e.source(), z, "Adding " + name, done, whole, progress);
 				z.closeEntry();
 			}
 		} catch (IOException | RuntimeException e) {
@@ -160,7 +169,7 @@ public final class PatchExport {
 		} catch (AtomicMoveNotSupportedException e) {
 			Files.move(tmp, zip, StandardCopyOption.REPLACE_EXISTING);
 		}
-		return new Result(0, bytes, files.size());
+		return new Result(0, done[0], files.size());
 	}
 
 	/**
@@ -270,6 +279,32 @@ public final class PatchExport {
 			}
 		}
 		return true;
+	}
+
+	/** The bytes of {@code files} together. */
+	private static long size(List<Path> files) throws IOException {
+		long n = 0;
+		for (Path f : files) {
+			n += Files.size(f);
+		}
+		return n;
+	}
+
+	/**
+	 * Copies {@code from} into {@code to}, adding its bytes to {@code done} and telling
+	 * {@code progress} the share of {@code whole} written as it goes, so a large file moves the bar too.
+	 */
+	private static void copy(Path from, OutputStream to, String step, long[] done, long whole, Progress progress)
+			throws IOException {
+		progress.at(step, whole == 0 ? 0 : (double) done[0] / whole);
+		byte[] buf = new byte[1 << 16];
+		try (InputStream in = Files.newInputStream(from)) {
+			for (int n; (n = in.read(buf)) > 0;) {
+				to.write(buf, 0, n);
+				done[0] += n;
+				progress.at(step, whole == 0 ? 1 : Math.min(1, (double) done[0] / whole));
+			}
+		}
 	}
 
 	private static String romfsEntry(String titleId, String rel) {

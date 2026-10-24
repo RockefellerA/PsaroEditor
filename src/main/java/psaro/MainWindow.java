@@ -53,6 +53,7 @@ import psaro.dialog.ExportWizard;
 import psaro.dialog.FileSurveyDialog;
 import psaro.dialog.FontsDialog;
 import psaro.dialog.PreferencesDialog;
+import psaro.dialog.ProgressDialog;
 import psaro.format.Csv;
 import psaro.format.LumaDump;
 import psaro.menu.HelpMenu;
@@ -1376,12 +1377,15 @@ public final class MainWindow {
 		String pageName = root.getFileName() + " patcher";
 		exporting = true;
 		refresh();
-		status.setText("Exporting " + target.getFileName() + "…");
+		ProgressDialog progress = new ProgressDialog(frame, "Exporting " + target.getFileName());
 		boolean[] dlcPage = {false};
-		new SwingWorker<PatchExport.Result, Void>() {
+		new SwingWorker<PatchExport.Result, ProgressDialog.Step>() {
 			@Override
 			protected PatchExport.Result doInBackground() throws IOException {
 				List<PatchExport.Extra> all = new ArrayList<>(extras);
+				if (dlcPatch != null) {
+					publish(ProgressDialog.Step.unknown("Writing the DLC's patcher page…"));
+				}
 				PatcherPage.Title dlcTitle = dlcPatch == null ? null : dlcTitle(titleId, dlcPatch, dlcBase);
 				PatcherPage.Written forDlc = dlcTitle == null ? null : PatcherPage.write(pageFolder.resolve("luma"), pageName,
 						List.of(dlcTitle));
@@ -1391,11 +1395,17 @@ public final class MainWindow {
 					dlcPage[0] = true;
 					text += "\n\nThe DLC is patched by building a patched copy of it: see " + PatcherPage.FOLDER + "/README.txt.";
 				}
-				return PatchExport.write(patchFolder, titleId, text + "\n", all, target, step -> { });
+				return PatchExport.write(patchFolder, titleId, text + "\n", all, target, toBar(this::publish));
+			}
+
+			@Override
+			protected void process(List<ProgressDialog.Step> steps) {
+				progress.step(steps.get(steps.size() - 1));
 			}
 
 			@Override
 			protected void done() {
+				progress.dispose();
 				exporting = false;
 				refresh();
 				try {
@@ -1415,6 +1425,8 @@ public final class MainWindow {
 				}
 			}
 		}.execute();
+		// modal: returns once done() disposes it
+		progress.setVisible(true);
 	}
 
 	/**
@@ -1448,14 +1460,14 @@ public final class MainWindow {
 		String pageName = root.getFileName() + " patcher";
 		exporting = true;
 		refresh();
-		status.setText("Exporting…");
+		ProgressDialog progress = new ProgressDialog(frame, "Exporting patch");
 		// what was written, a paragraph each, for the summary (or with what stopped it)
 		List<String> wrote = java.util.Collections.synchronizedList(new ArrayList<>());
-		new SwingWorker<Void, String>() {
+		new SwingWorker<Void, ProgressDialog.Step>() {
 			@Override
 			protected Void doInBackground() throws IOException {
 				if (zip != null) {
-					publish("Writing " + zip.getFileName() + "…");
+					publish(ProgressDialog.Step.unknown("Writing the patcher page for " + zip.getFileName() + "…"));
 					List<PatcherPage.Title> titles = new ArrayList<>();
 					titles.add(new PatcherPage.Title(PatcherPage.Kind.GAME, titleId, versionOf(gameBase),
 							TitleBuild.gameFiles(gameFolder)));
@@ -1467,22 +1479,18 @@ public final class MainWindow {
 						throw new IOException("There is nothing patched to put in the patcher download yet: save some English first.");
 					}
 					PatchExport.writeFiles(titleId, page.readme(), List.of(new PatchExport.Extra(page.page(), PatcherPage.PAGE)),
-							zip);
+							zip, toBar(this::publish));
 					wrote.add(String.format(java.util.Locale.ROOT, "The patcher download, %s (%.1f MB): players open its %s in "
 							+ "a browser to build a patched copy of %s from their own.", zip, Files.size(zip) / 1048576.0,
 							PatcherPage.PAGE, dlcPatch != null ? "the game or its DLC" : "the game"));
 				}
 				for (ExportWizard.Build b : builds) {
 					String what = b.dlc() ? "DLC" : "game";
+					String building = "Building " + b.out().getFileName() + "…";
+					publish(ProgressDialog.Step.unknown(building));
 					var files = b.dlc() ? TitleBuild.dlcFiles(dlcPatch) : TitleBuild.gameFiles(gameFolder);
-					int[] shown = {-1};
-					TitleBuild.Result r = TitleBuild.build(b.base(), files, b.out(), share -> {
-						int percent = (int) (share * 100);
-						if (percent != shown[0]) {
-							shown[0] = percent;
-							publish("Building " + b.out().getFileName() + "… " + percent + "%");
-						}
-					});
+					PatchExport.Progress bar = toBar(this::publish);
+					TitleBuild.Result r = TitleBuild.build(b.base(), files, b.out(), share -> bar.at(building, share));
 					String use = r.format() == TitleBuild.Format.THREE_DS
 							? "Play it in Citra, or have GodMode9 build a CIA from it to install on a 3DS."
 							: "Install it in place of the " + what + ": with FBI on a 3DS with Luma3DS, or in Citra with File → Install CIA.";
@@ -1496,12 +1504,13 @@ public final class MainWindow {
 			}
 
 			@Override
-			protected void process(List<String> steps) {
-				status.setText(steps.get(steps.size() - 1));
+			protected void process(List<ProgressDialog.Step> steps) {
+				progress.step(steps.get(steps.size() - 1));
 			}
 
 			@Override
 			protected void done() {
+				progress.dispose();
 				exporting = false;
 				refresh();
 				String summary = String.join("\n\n", wrote);
@@ -1517,6 +1526,25 @@ public final class MainWindow {
 				}
 			}
 		}.execute();
+		// modal: returns once done() disposes it
+		progress.setVisible(true);
+	}
+
+	/**
+	 * {@code publish}, told the steps of a zip or build being written as far as the bar can show
+	 * them: each new step, or another tenth of a percent, so a worker is not flooded.
+	 */
+	private static PatchExport.Progress toBar(java.util.function.Consumer<ProgressDialog.Step> publish) {
+		int[] shown = {-1};
+		String[] last = {null};
+		return (step, share) -> {
+			int at = (int) (share * 1000);
+			if (at != shown[0] || !step.equals(last[0])) {
+				shown[0] = at;
+				last[0] = step;
+				publish.accept(new ProgressDialog.Step(step, share));
+			}
+		};
 	}
 
 	/** The DLC as the patcher page takes it: its title id, from the game's, and its patched files. */

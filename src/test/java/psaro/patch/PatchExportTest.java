@@ -49,7 +49,7 @@ class PatchExportTest {
 		Path zip = dir.resolve("out/game patch.zip");
 		Files.createDirectories(zip.getParent());
 
-		PatchExport.Result r = PatchExport.write(patch, "0004000000140000", zip, step -> { });
+		PatchExport.Result r = PatchExport.write(patch, "0004000000140000", zip, (step, share) -> { });
 		assertEquals(3, r.files());
 		assertEquals(6, r.bytes());
 		Map<String, byte[]> entries = new TreeMap<>();
@@ -66,6 +66,29 @@ class PatchExportTest {
 		assertTrue(readme.contains("/luma/titles/0004000000140000/romfs/"));
 		assertTrue(readme.contains("https://github.com/RockefellerA/PsaroEditor"), "credits the editor");
 		assertFalse(Files.exists(zip.resolveSibling("game patch.zip.tmp")), "written beside it, then moved");
+	}
+
+	/** The share written climbs by bytes, a large file part way at a time, to all of it. */
+	@Test
+	void progressIsTheShareOfTheBytesWritten() throws IOException {
+		Path patch = dir.resolve("game.psaro/romfs");
+		Files.createDirectories(patch.resolve("text"));
+		Files.write(patch.resolve("text/big.tdt"), new byte[300_000]);
+		Files.write(patch.resolve("text/small.tdt"), new byte[] {1});
+		List<String> steps = new java.util.ArrayList<>();
+		List<Double> shares = new java.util.ArrayList<>();
+
+		PatchExport.write(patch, "0004000000140000", dir.resolve("p.zip"), (step, share) -> {
+			steps.add(step);
+			shares.add(share);
+		});
+		assertEquals(0, shares.get(0));
+		assertEquals(1, shares.get(shares.size() - 1));
+		for (int i = 1; i < shares.size(); i++) {
+			assertTrue(shares.get(i) >= shares.get(i - 1), "never goes back");
+		}
+		assertTrue(shares.stream().anyMatch(s -> s > 0.1 && s < 0.9), "the large file moves it as it is copied");
+		assertTrue(steps.contains("Packing text/small.tdt"));
 	}
 
 	private static Map<String, byte[]> entries(Path zip) throws IOException {
@@ -100,7 +123,7 @@ class PatchExportTest {
 				new PatchExport.Extra(notes, "docs\\notes.txt"));
 		Path zip = dir.resolve("p.zip");
 
-		PatchExport.Result r = PatchExport.write(patch, "0004000000140000", readme, extras, zip, step -> { });
+		PatchExport.Result r = PatchExport.write(patch, "0004000000140000", readme, extras, zip, (step, share) -> { });
 		assertEquals(1, r.files());
 		assertEquals(2, r.extras());
 		assertEquals(1 + 5 + 2, r.bytes());
@@ -137,7 +160,7 @@ class PatchExportTest {
 		assertEquals(List.of("No title id: it has sixteen hex digits, 0-9 and A-F."), PatchExport.problems(patch, "", extras));
 
 		Path zip = dir.resolve("p.zip");
-		assertThrows(IOException.class, () -> PatchExport.write(patch, "0004000000140000", "x", extras, zip, s -> { }));
+		assertThrows(IOException.class, () -> PatchExport.write(patch, "0004000000140000", "x", extras, zip, (s, share) -> { }));
 		assertFalse(Files.exists(zip));
 		assertFalse(Files.exists(dir.resolve("p.zip.tmp")));
 	}
@@ -236,8 +259,8 @@ class PatchExportTest {
 	@Test
 	void nothingPatchedYetIsNotExported() throws IOException {
 		Path patch = Files.createDirectories(dir.resolve("game.psaro/romfs"));
-		assertThrows(IOException.class, () -> PatchExport.write(patch, "0004000000140000", dir.resolve("p.zip"), s -> { }));
-		assertThrows(IllegalArgumentException.class, () -> PatchExport.write(patch, "nope", dir.resolve("p.zip"), s -> { }));
+		assertThrows(IOException.class, () -> PatchExport.write(patch, "0004000000140000", dir.resolve("p.zip"), (s, share) -> { }));
+		assertThrows(IllegalArgumentException.class, () -> PatchExport.write(patch, "nope", dir.resolve("p.zip"), (s, share) -> { }));
 	}
 
 	@Test

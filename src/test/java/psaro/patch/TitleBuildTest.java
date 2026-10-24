@@ -247,7 +247,7 @@ class TitleBuildTest {
 						Map.of(TitleBuild.GAME, Map.of("text/a.tdt", new byte[] {1})))));
 		Path zip = dir.resolve("Songs patcher.zip");
 		PatchExport.Result r = PatchExport.writeFiles("0004000000140000", written.readme(),
-				List.of(new PatchExport.Extra(written.page(), PatcherPage.PAGE)), zip);
+				List.of(new PatchExport.Extra(written.page(), PatcherPage.PAGE)), zip, (step, share) -> { });
 		assertEquals(1, r.extras());
 		List<String> names = new java.util.ArrayList<>();
 		String readme;
