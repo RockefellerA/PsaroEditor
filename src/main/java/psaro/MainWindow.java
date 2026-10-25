@@ -1387,7 +1387,14 @@ public final class MainWindow {
 			error("Could not read the export settings:\n" + e.getMessage());
 			return;
 		}
-		ExportWizard wizard = new ExportWizard(frame, exportSettings, game.patcher.output(), known, dlc != null,
+		boolean homeTitle;
+		try {
+			homeTitle = HomeTitle.of(game.dir) != null;
+		} catch (IOException e) {
+			// the export says so if it comes to it
+			homeTitle = false;
+		}
+		ExportWizard wizard = new ExportWizard(frame, exportSettings, game.patcher.output(), known, dlc != null, homeTitle,
 				BuildBase.of(game.dir), dlc == null ? null : BuildBase.of(dlc.dir));
 		wizard.setVisible(true);
 		String id = wizard.titleId();
@@ -1408,7 +1415,7 @@ public final class MainWindow {
 		if (wizard.mode() == ExportSettings.Mode.LAYERED_FS) {
 			exportLayeredFs(id, wizard.readme(), wizard.patcherReadme(), wizard.extras());
 		} else {
-			exportCia(id, wizard.patcherDownload(), wizard.builds());
+			exportCia(id, wizard.patcherDownload(), wizard.downloadReadme(), wizard.builds());
 		}
 	}
 
@@ -1506,9 +1513,10 @@ public final class MainWindow {
 	/**
 	 * Exports the patch as patched CIAs: with {@code patcherDownload}, the patcher download, the
 	 * patcher page ({@link PatcherPage}) with the game's patched files and its DLC's, for players to
-	 * build their own; and each of {@code builds}, a patched copy built here ({@link TitleBuild}).
+	 * build their own, beside {@code downloadReadme} (or with null, the page's own); and each of
+	 * {@code builds}, a patched copy built here ({@link TitleBuild}).
 	 */
-	private void exportCia(String titleId, boolean patcherDownload, List<ExportWizard.Build> builds) {
+	private void exportCia(String titleId, boolean patcherDownload, String downloadReadme, List<ExportWizard.Build> builds) {
 		Path root = game.index.root();
 		Path patcherZip = null;
 		if (patcherDownload) {
@@ -1559,7 +1567,9 @@ public final class MainWindow {
 					if (page == null) {
 						throw new IOException("There is nothing patched to put in the patcher download yet: save some English first.");
 					}
-					PatchExport.writeFiles(titleId, page.readme(), List.of(new PatchExport.Extra(page.page(), PatcherPage.PAGE)),
+					String readme = downloadReadme == null ? page.readme()
+							: downloadReadme.replace(PatcherPage.DLC_TITLE_ID, "0004008C" + titleId.substring(8));
+					PatchExport.writeFiles(titleId, readme, List.of(new PatchExport.Extra(page.page(), PatcherPage.PAGE)),
 							zip, toBar(s -> publish(s)));
 					wrote.add(String.format(java.util.Locale.ROOT, "The patcher download, %s (%.1f MB): players open its %s in "
 							+ "a browser to build a patched copy of %s from their own.", zip, Files.size(zip) / 1048576.0,

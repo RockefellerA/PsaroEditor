@@ -233,6 +233,36 @@ class PatchExportTest {
 		assertFalse(Files.exists(dir.resolve("game.psaro/" + ExportSettings.PATCHER_README_FILE)));
 	}
 
+	/**
+	 * The patcher download's readme is kept per project apart from the others, none while it is what
+	 * the page would write; that default names the game, and the DLC when there is one.
+	 */
+	@Test
+	void theDownloadReadmeIsKeptForTheProject() throws IOException {
+		String byDefault = PatcherPage.defaultDownloadReadme(true, true);
+		assertTrue(byDefault.contains("The game (title id {titleId})"), byDefault);
+		assertTrue(byDefault.contains("The DLC (title id " + PatcherPage.DLC_TITLE_ID + ")"), byDefault);
+		assertTrue(byDefault.contains("English title on the HOME Menu"), byDefault);
+		assertFalse(PatcherPage.defaultDownloadReadme(false, false).contains("The DLC"));
+
+		Path romfs = dir.resolve("game");
+		ExportSettings s = ExportSettings.open(romfs);
+		assertNull(s.downloadReadme());
+		s.setDownloadReadme(byDefault.replace("\n", "\r\n"), byDefault);
+		assertNull(s.downloadReadme(), "the default's text is none of its own");
+
+		s.setDownloadReadme("Patch {titleId} and {dlcTitleId}\r\n", byDefault);
+		ExportSettings again = ExportSettings.open(romfs);
+		assertEquals("Patch {titleId} and {dlcTitleId}\n", again.downloadReadme());
+		assertTrue(Files.isRegularFile(dir.resolve("game.psaro/" + ExportSettings.DOWNLOAD_README_FILE)), "editable on its own");
+		assertFalse(again.ownReadme());
+		assertFalse(again.ownPatcherReadme());
+
+		again.setDownloadReadme(byDefault, byDefault);
+		assertNull(again.downloadReadme());
+		assertFalse(Files.exists(dir.resolve("game.psaro/" + ExportSettings.DOWNLOAD_README_FILE)));
+	}
+
 	/** How the patch is applied, and for a patched CIA what is made, are kept per project, with the added files. */
 	@Test
 	void theWayThePatchIsAppliedIsKeptForTheProject() throws IOException {

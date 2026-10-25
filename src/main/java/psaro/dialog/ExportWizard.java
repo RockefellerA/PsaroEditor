@@ -57,7 +57,8 @@ import psaro.patch.TitleBuild;
  * chosen first. LayeredFS gives a zip of the patched files for Luma3DS's game patching or Citra's
  * mods folder, with the project's readme and any files it adds (a code patch Luma3DS reads beside
  * the romfs folder, say), and the DLC's patcher page, a DLC having no other way to be patched. A
- * patched CIA gives the patcher download, for players to build their own patched copies, and the
+ * patched CIA gives the patcher download, for players to build their own patched copies, with a
+ * readme the project may write, and the
  * patched copies built here from decrypted copies chosen, either or both. What is chosen is kept
  * per project ({@link ExportSettings}) whether or not it goes on to export; Export checks it first.
  */
@@ -82,6 +83,9 @@ public final class ExportWizard extends JDialog {
 	private final JRadioButton cia = new JRadioButton("Patched CIA: the game rebuilt with the patch in it");
 	private final JTextArea readme = new JTextArea(16, 86);
 	private final JTextArea patcherReadme = new JTextArea(16, 86);
+	private final JTextArea downloadReadme = new JTextArea(12, 86);
+	/** What the patcher page would write as the patcher download's readme. */
+	private final String downloadDefault;
 	private final Model model = new Model();
 	private final JTable table = new JTable(model);
 	private final JButton remove = new JButton("Remove");
@@ -97,15 +101,17 @@ public final class ExportWizard extends JDialog {
 
 	/**
 	 * Edits {@code settings} for the game whose patch is in {@code patchFolder}; {@code id} is the
-	 * title id known so far, or null; {@code hasDlc} whether a DLC is attached; {@code gameBase} and
-	 * {@code dlcBase} the decrypted copies built from last, or null.
+	 * title id known so far, or null; {@code hasDlc} whether a DLC is attached; {@code homeTitle}
+	 * whether the game is given a HOME Menu title; {@code gameBase} and {@code dlcBase} the decrypted
+	 * copies built from last, or null.
 	 */
-	public ExportWizard(Frame owner, ExportSettings settings, Path patchFolder, String id, boolean hasDlc, Path gameBase,
-			Path dlcBase) {
+	public ExportWizard(Frame owner, ExportSettings settings, Path patchFolder, String id, boolean hasDlc,
+			boolean homeTitle, Path gameBase, Path dlcBase) {
 		super(owner, "Export patch", true);
 		this.settings = settings;
 		this.patchFolder = patchFolder;
 		this.hasDlc = hasDlc;
+		this.downloadDefault = PatcherPage.defaultDownloadReadme(hasDlc, homeTitle);
 		setDefaultCloseOperation(DO_NOTHING_ON_CLOSE);
 		addWindowListener(new WindowAdapter() {
 			@Override
@@ -278,11 +284,21 @@ public final class ExportWizard extends JDialog {
 		return p;
 	}
 
-	/** Patched CIA: the patcher download, and patched copies built here. */
+	/** Patched CIA: the patcher download and its readme, and patched copies built here. */
 	private JPanel ciaPage() {
 		patcherDownload.setText(String.format(Locale.ROOT, "Patcher download for players (about %.0f MB)",
 				folderSize(patchFolder) / 1048576.0));
 		patcherDownload.setSelected(settings.patcherDownload());
+		String own = settings.downloadReadme();
+		JPanel readmePanel = section("README.txt in the patcher download");
+		readmePanel.add(readmeEditor(downloadReadme, own != null ? own : downloadDefault, downloadDefault,
+				"Put back the readme the patcher page writes", "Replace this project's patcher download readme with the default one?",
+				PatchExport.TITLE_ID + " becomes the game's title id" + (hasDlc ? ", " + PatcherPage.DLC_TITLE_ID + " the DLC's" : "")
+						+ ". Saved as " + ExportSettings.DOWNLOAD_README_FILE + " in the project folder, which can be edited "
+						+ "elsewhere too."), BorderLayout.CENTER);
+		readmePanel.setBorder(BorderFactory.createCompoundBorder(new EmptyBorder(4, 24, 0, 0), readmePanel.getBorder()));
+		patcherDownload.addActionListener(e -> enableAll(readmePanel, patcherDownload.isSelected()));
+		enableAll(readmePanel, patcherDownload.isSelected());
 		buildCopies.setSelected(settings.buildCopies());
 		patcherDownload.setAlignmentX(LEFT_ALIGNMENT);
 		buildCopies.setAlignmentX(LEFT_ALIGNMENT);
@@ -311,6 +327,7 @@ public final class ExportWizard extends JDialog {
 		page.add(note("A zip holding " + PatcherPage.PAGE + ": players open it in a browser and build a patched copy of the "
 				+ "game (from its CIA or .3ds)" + (hasDlc ? " or its DLC (from its CIA)" : "") + " from their own decrypted "
 				+ "copy, then install it in place of the original. Nothing of the game is in it."));
+		page.add(readmePanel);
 		page.add(Box.createVerticalStrut(8));
 		page.add(buildCopies);
 		page.add(basesRow);
@@ -364,6 +381,16 @@ public final class ExportWizard extends JDialog {
 	private void enableBases(JPanel bases) {
 		for (java.awt.Component k : bases.getComponents()) {
 			k.setEnabled(buildCopies.isSelected());
+		}
+	}
+
+	/** {@code k} and everything in it enabled or not. */
+	private static void enableAll(java.awt.Component k, boolean enabled) {
+		k.setEnabled(enabled);
+		if (k instanceof java.awt.Container c) {
+			for (java.awt.Component in : c.getComponents()) {
+				enableAll(in, enabled);
+			}
 		}
 	}
 
@@ -438,6 +465,11 @@ public final class ExportWizard extends JDialog {
 		return patcherDownload.isSelected();
 	}
 
+	/** Patched CIA: the patcher download's readme as it stands, or null for the one the page writes. */
+	public String downloadReadme() {
+		return settings.downloadReadme();
+	}
+
 	/** Patched CIA: the copies to build, checked, the game's first. */
 	public List<Build> builds() {
 		return List.copyOf(builds);
@@ -460,6 +492,7 @@ public final class ExportWizard extends JDialog {
 			if (hasDlc) {
 				settings.setPatcherReadme(patcherReadme.getText());
 			}
+			settings.setDownloadReadme(downloadReadme.getText(), downloadDefault);
 			settings.setExtras(model.rows);
 			settings.setMode(mode(), patcherDownload.isSelected(), buildCopies.isSelected());
 			return true;

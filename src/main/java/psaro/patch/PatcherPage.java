@@ -29,6 +29,8 @@ public final class PatcherPage {
 	/** Where the page and its readme go in the zip. */
 	public static final String FOLDER = "Patcher";
 	public static final String PAGE = "Patcher.html";
+	/** Stands for the DLC's title id in the patcher download's readme, {@link PatchExport#TITLE_ID} for the game's. */
+	public static final String DLC_TITLE_ID = "{dlcTitleId}";
 	private static final String TEMPLATE = "/patcher.html";
 	private static final String SLOT = "{{PATCH}}";
 
@@ -143,6 +145,22 @@ public final class PatcherPage {
 	 */
 	public static String defaultDlcReadme() {
 		return readme(List.of(new Title(Kind.DLC, PatchExport.TITLE_ID, null, Map.of())));
+	}
+
+	/**
+	 * The readme of the patcher download (Export patch as a patched CIA) as the page would write it
+	 * for the game, with {@code dlc} its DLC too, and with {@code homeTitle} a HOME Menu title:
+	 * {@link PatchExport#TITLE_ID} standing for the game's title id, {@link #DLC_TITLE_ID} the DLC's.
+	 */
+	public static String defaultDownloadReadme(boolean dlc, boolean homeTitle) {
+		List<Title> titles = new ArrayList<>();
+		// any title: the readme says only that there is one
+		titles.add(new Title(Kind.GAME, PatchExport.TITLE_ID, null, Map.of(),
+				homeTitle ? new Smdh.Title("title", "", "") : null));
+		if (dlc) {
+			titles.add(new Title(Kind.DLC, DLC_TITLE_ID, null, Map.of()));
+		}
+		return readme(titles);
 	}
 
 	/** How a player builds their patched copies with the page. */

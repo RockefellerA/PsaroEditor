@@ -18,8 +18,8 @@ import psaro.project.Translations;
  * LayeredFS, the readme, kept in {@code <romfs>.psaro/patch-readme.txt} so it can be edited
  * anywhere (the default readme while there is none), the DLC's patcher page's readme the same way
  * in {@code patcher-readme.txt}, and the files added to the zip, each by the path it is read from
- * and its path in the zip; for a patched CIA, whether the patcher download is written and whether
- * patched copies are built. All but the readmes are in
+ * and its path in the zip; for a patched CIA, whether the patcher download is written, its readme
+ * in {@code download-readme.txt}, and whether patched copies are built. All but the readmes are in
  * {@code <romfs>.psaro/export.json}. An added file is read when the zip is written, so the zip
  * always has it as it is then.
  */
@@ -37,13 +37,17 @@ public final class ExportSettings {
 	public static final String README_FILE = "patch-readme.txt";
 	/** The DLC's patcher page's readme's file in the project folder. */
 	public static final String PATCHER_README_FILE = "patcher-readme.txt";
+	/** The patcher download's readme's file in the project folder. */
+	public static final String DOWNLOAD_README_FILE = "download-readme.txt";
 	private static final String FILE = "export.json";
 
 	private final Path readmeFile;
 	private final Path patcherReadmeFile;
+	private final Path downloadReadmeFile;
 	private final Path file;
 	private String readme;
 	private String patcherReadme;
+	private String downloadReadme;
 	private List<Extra> extras = List.of();
 	private Mode mode = Mode.LAYERED_FS;
 	/** For a patched CIA: whether the patcher download is written ({@link PatcherPage}). */
@@ -54,6 +58,7 @@ public final class ExportSettings {
 	private ExportSettings(Path folder) {
 		this.readmeFile = folder.resolve(README_FILE);
 		this.patcherReadmeFile = folder.resolve(PATCHER_README_FILE);
+		this.downloadReadmeFile = folder.resolve(DOWNLOAD_README_FILE);
 		this.file = folder.resolve(FILE);
 	}
 
@@ -66,6 +71,9 @@ public final class ExportSettings {
 		}
 		if (Files.isRegularFile(s.patcherReadmeFile)) {
 			s.patcherReadme = PatchExport.withoutFooter(Files.readString(s.patcherReadmeFile, StandardCharsets.UTF_8));
+		}
+		if (Files.isRegularFile(s.downloadReadmeFile)) {
+			s.downloadReadme = PatchExport.withoutFooter(Files.readString(s.downloadReadmeFile, StandardCharsets.UTF_8));
 		}
 		if (Files.isRegularFile(s.file)) {
 			try {
@@ -121,6 +129,23 @@ public final class ExportSettings {
 	/** Saves {@code text} as the project's patcher readme; the default's text (or none) goes back to the default. */
 	public synchronized void setPatcherReadme(String text) throws IOException {
 		patcherReadme = keep(text, PatcherPage.defaultDlcReadme(), patcherReadme, patcherReadmeFile);
+	}
+
+	/**
+	 * For a patched CIA, the patcher download's readme, {@link PatchExport#TITLE_ID} standing for the
+	 * game's title id and {@link PatcherPage#DLC_TITLE_ID} the DLC's: the project's own, or null
+	 * while the page writes its own ({@link PatcherPage#defaultDownloadReadme}).
+	 */
+	public synchronized String downloadReadme() {
+		return downloadReadme;
+	}
+
+	/**
+	 * Saves {@code text} as the project's patcher download readme; {@code byDefault}'s text (or none),
+	 * what the page would write, goes back to the page's own.
+	 */
+	public synchronized void setDownloadReadme(String text, String byDefault) throws IOException {
+		downloadReadme = keep(text, byDefault, downloadReadme, downloadReadmeFile);
 	}
 
 	/**
