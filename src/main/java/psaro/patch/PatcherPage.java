@@ -172,6 +172,7 @@ public final class PatcherPage {
 				+ " from your own decrypted copy, to install or play in place of the original. Open it in a web browser,");
 		lines.add("choose your copy, and build. It all happens in the page: nothing is uploaded.");
 		lines.add("");
+		lines.addAll(godMode9(game, dlc));
 		if (game) {
 			titles.stream().filter(t -> t.kind() == Kind.GAME).findFirst()
 					.ifPresent(t -> lines.add("The game (title id " + t.titleId() + ")"));
@@ -204,6 +205,33 @@ public final class PatcherPage {
 		lines.add("Keep your decrypted copies: installing one puts the original back.");
 		lines.add("");
 		return String.join("\n", lines);
+	}
+
+	/** The readme's steps for making a decrypted copy with GodMode9, for the game, its DLC or both. */
+	private static List<String> godMode9(boolean game, boolean dlc) {
+		List<String> lines = new ArrayList<>();
+		lines.add("Making a decrypted copy with GodMode9 (on a 3DS with Luma3DS)");
+		lines.add("  1. Turn the 3DS off. Hold START while turning it on, and GodMode9 starts. (The usual Luma3DS");
+		lines.add("     setup, 3ds.hacks.guide, puts it there; if nothing starts, follow that guide's GodMode9 steps.)");
+		if (game && dlc) {
+			lines.add("  2. For the game or DLC installed on the 3DS, open [A:] SYSNAND SD > title > 00040000 for the");
+			lines.add("     game or 0004008c for its DLC > the folder named for the last 8 digits of the title id below >");
+			lines.add("     content.");
+		} else {
+			lines.add("  2. For the " + (game ? "game" : "DLC") + " installed on the 3DS, open [A:] SYSNAND SD > title > "
+					+ (game ? "00040000" : "0004008c") + " > the folder");
+			lines.add("     named for the last 8 digits of the title id below > content.");
+		}
+		lines.add("     Press A on the .tmd file, choose \"TMD file options...\", then \"Build CIA (standard)\": that");
+		lines.add("     CIA is decrypted.");
+		if (game) {
+			lines.add("     For a game card, open [C:] GAMECART instead, press A on the .3ds file, choose \"NCSD image");
+			lines.add("     options...\", then \"Build CIA from file\" for a CIA or \"Decrypt file (0:/gm9/out)\" for a .3ds.");
+		}
+		lines.add("  3. GodMode9 writes the copy to the gm9/out folder on the SD card. Turn the 3DS off (HOME, then");
+		lines.add("     \"Poweroff system\"), put the SD card in your computer, and choose that file in the page.");
+		lines.add("");
+		return lines;
 	}
 
 	private static String template() throws IOException {

@@ -329,6 +329,8 @@ class TitleBuildTest {
 		assertTrue(readme.contains("The DLC (title id 0004008C00140000)"), readme);
 		assertTrue(readme.contains("delete the game's Ext Save Data with FBI"), readme);
 		assertFalse(readme.contains("The game (title id"), readme);
+		assertTrue(readme.contains("[A:] SYSNAND SD > title > 0004008c > the folder"), "GodMode9's path to the DLC");
+		assertFalse(readme.contains("GAMECART"), "no game card for a DLC");
 		String own = Files.readString(PatcherPage.inFolder(written, "The DLC ({titleId})\n  NOTE: Japan.\n", "0004008c00140000")
 				.get(1).source());
 		assertEquals("The DLC (0004008C00140000)\r\n  NOTE: Japan.\r\n", own, "a project's own, its title id filled in");

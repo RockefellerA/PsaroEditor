@@ -36,6 +36,8 @@ progress { width: 100%; height: 8px; margin-top: 16px; accent-color: var(--accen
 details { margin-top: 18px; color: var(--muted); }
 details summary { cursor: pointer; color: var(--text); }
 details p { margin: 8px 0; }
+details ol { margin: 8px 0; padding-left: 22px; }
+details li { margin: 4px 0; }
 </style>
 </head>
 <body>
@@ -55,8 +57,17 @@ details p { margin: 8px 0; }
     <div id="done" hidden><a class="save" id="save">Save the patched copy</a></div>
     <details>
       <summary>Where to get a decrypted copy, and using the result</summary>
-      <p>On a 3DS with custom firmware, GodMode9 can build a decrypted CIA of a title installed on it, and dump a game card
-        as a decrypted .3ds. The copy has to be decrypted: this page cannot read an encrypted one.</p>
+      <p>The copy has to be decrypted: this page cannot read an encrypted one. On a 3DS with Luma3DS, GodMode9 makes one:</p>
+      <ol>
+        <li>Turn the 3DS off. Hold START while turning it on, and GodMode9 starts. (The usual Luma3DS setup,
+          3ds.hacks.guide, puts it there; if nothing starts, follow that guide's GodMode9 steps.)</li>
+        <li>For a title installed on the 3DS, open <span id="gm9Paths">[A:] SYSNAND SD → title → the title's folders → content</span>.
+          Press A on the .tmd file, choose “TMD file options...”, then “Build CIA (standard)”: that CIA is decrypted.
+          <span id="gm9Card">For a game card, open [C:] GAMECART instead, press A on the .3ds file, choose “NCSD image
+          options...”, then “Build CIA from file” for a CIA or “Decrypt file (0:/gm9/out)” for a .3ds.</span></li>
+        <li>GodMode9 writes the copy to the gm9/out folder on the SD card. Turn the 3DS off (HOME, then “Poweroff system”),
+          put the SD card in your computer, and choose that file above.</li>
+      </ol>
       <p>Install a patched CIA in place of the original: with FBI on a 3DS with Luma3DS, or in Citra (or Azahar) with
         File → Install CIA. Play a patched .3ds in Citra, or have GodMode9 build a CIA from it to install on a 3DS.
         A patched game needs no Luma3DS game patching: if you used the patch's luma folder before, delete its romfs folder.</p>
@@ -570,6 +581,13 @@ if (patch.name) {
   $('what').textContent = game && dlc ? 'the game or its DLC' : game ? 'the game' : 'the DLC';
   $('kinds').textContent = game ? 'a .cia or the game\'s .3ds' : 'a .cia';
   $('dlcNote').hidden = !dlc;
+  // where the 3DS keeps each title on the SD card: title/<high>/<low>/content, in lower case
+  $('gm9Paths').textContent = patch.titles.map(t => {
+    const id = t.titleId.toLowerCase();
+    return (patch.titles.length > 1 ? (t.kind === 'game' ? 'the game: ' : 'the DLC: ') : '')
+      + '[A:] SYSNAND SD → title → ' + id.slice(0, 8) + ' → ' + id.slice(8) + ' → content';
+  }).join('; ');
+  $('gm9Card').hidden = !game;
 }
 
 function status(text, kind) {
