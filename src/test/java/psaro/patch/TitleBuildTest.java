@@ -310,7 +310,7 @@ class TitleBuildTest {
 				new PatcherPage.Title(PatcherPage.Kind.DLC, "0004008C00140000", 48,
 						Map.of("009a", Map.of("contents.csv.lz", "Royal Trumpet".getBytes(StandardCharsets.UTF_16LE))))));
 		List<PatchExport.Extra> extras = PatcherPage.inFolder(written);
-		assertEquals(List.of("Patcher/Patcher.html", "Patcher/README.txt"), extras.stream().map(PatchExport.Extra::destination).toList());
+		assertEquals(List.of("DLC Patcher/Patcher.html", "DLC Patcher/README.txt"), extras.stream().map(PatchExport.Extra::destination).toList());
 		String html = Files.readString(extras.get(0).source());
 		String data = html.substring(html.indexOf("id=\"patch\">") + "id=\"patch\">".length());
 		data = data.substring(0, data.indexOf("</script>"));

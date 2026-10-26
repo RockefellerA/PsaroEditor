@@ -27,7 +27,7 @@ import psaro.format.Smdh;
 public final class PatcherPage {
 
 	/** Where the page and its readme go in the zip. */
-	public static final String FOLDER = "Patcher";
+	public static final String FOLDER = "DLC Patcher";
 	public static final String PAGE = "Patcher.html";
 	/** Stands for the DLC's title id in the patcher download's readme, {@link PatchExport#TITLE_ID} for the game's. */
 	public static final String DLC_TITLE_ID = "{dlcTitleId}";
