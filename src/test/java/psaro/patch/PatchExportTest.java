@@ -263,6 +263,26 @@ class PatchExportTest {
 		assertFalse(Files.exists(dir.resolve("game.psaro/" + ExportSettings.DOWNLOAD_README_FILE)));
 	}
 
+	/** The files added to the patcher download are kept per project apart from those added to the LayeredFS zip. */
+	@Test
+	void theDownloadsAddedFilesAreKeptForTheProject() throws IOException {
+		Path romfs = dir.resolve("game");
+		ExportSettings s = ExportSettings.open(romfs);
+		assertTrue(s.downloadExtras().isEmpty());
+
+		Path ips = dir.resolve("fix/code.ips");
+		Path script = dir.resolve("tools/Tablets.bat");
+		s.setExtras(List.of(new PatchExport.Extra(ips, PatchExport.defaultDestination(ips))));
+		s.setDownloadExtras(List.of(new PatchExport.Extra(script, "Scripts/Tablets.bat")));
+		ExportSettings again = ExportSettings.open(romfs);
+		assertEquals(List.of(new PatchExport.Extra(script, "Scripts/Tablets.bat")), again.downloadExtras());
+		assertEquals(List.of(new PatchExport.Extra(ips, "luma/titles/{titleId}/code.ips")), again.extras());
+
+		again.setDownloadExtras(List.of());
+		assertTrue(ExportSettings.open(romfs).downloadExtras().isEmpty());
+		assertFalse(Files.readString(dir.resolve("game.psaro/export.json")).contains("downloadFiles"), "none, none written");
+	}
+
 	/** How the patch is applied, and for a patched CIA what is made, are kept per project, with the added files. */
 	@Test
 	void theWayThePatchIsAppliedIsKeptForTheProject() throws IOException {

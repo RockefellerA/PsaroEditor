@@ -19,7 +19,8 @@ import psaro.project.Translations;
  * anywhere (the default readme while there is none), the DLC's patcher page's readme the same way
  * in {@code patcher-readme.txt}, and the files added to the zip, each by the path it is read from
  * and its path in the zip; for a patched CIA, whether the patcher download is written, its readme
- * in {@code download-readme.txt}, and whether patched copies are built. All but the readmes are in
+ * in {@code download-readme.txt}, the files added to it the same way, and whether patched copies
+ * are built. All but the readmes are in
  * {@code <romfs>.psaro/export.json}. An added file is read when the zip is written, so the zip
  * always has it as it is then.
  */
@@ -49,6 +50,8 @@ public final class ExportSettings {
 	private String patcherReadme;
 	private String downloadReadme;
 	private List<Extra> extras = List.of();
+	/** For a patched CIA: the files added to the patcher download. */
+	private List<Extra> downloadExtras = List.of();
 	private Mode mode = Mode.LAYERED_FS;
 	/** For a patched CIA: whether the patcher download is written ({@link PatcherPage}). */
 	private boolean patcherDownload = true;
@@ -81,18 +84,23 @@ public final class ExportSettings {
 				s.mode = json.optEnum(Mode.class, "mode", Mode.LAYERED_FS);
 				s.patcherDownload = json.optBoolean("patcherDownload", true);
 				s.buildCopies = json.optBoolean("buildCopies", false);
-				JSONArray files = json.optJSONArray("extraFiles");
-				List<Extra> read = new ArrayList<>();
-				for (int i = 0; files != null && i < files.length(); i++) {
-					JSONObject e = files.getJSONObject(i);
-					read.add(new Extra(Path.of(e.getString("source")), e.getString("destination")));
-				}
-				s.extras = List.copyOf(read);
+				s.extras = extras(json.optJSONArray("extraFiles"));
+				s.downloadExtras = extras(json.optJSONArray("downloadFiles"));
 			} catch (JSONException | InvalidPathException e) {
 				throw new IOException(s.file + " is not valid export settings: " + e.getMessage(), e);
 			}
 		}
 		return s;
+	}
+
+	/** The added files {@code files} lists, none when it is null. */
+	private static List<Extra> extras(JSONArray files) {
+		List<Extra> read = new ArrayList<>();
+		for (int i = 0; files != null && i < files.length(); i++) {
+			JSONObject e = files.getJSONObject(i);
+			read.add(new Extra(Path.of(e.getString("source")), e.getString("destination")));
+		}
+		return List.copyOf(read);
 	}
 
 	/**
@@ -179,6 +187,20 @@ public final class ExportSettings {
 		save();
 	}
 
+	/** For a patched CIA: the files added to the patcher download, in order. */
+	public synchronized List<Extra> downloadExtras() {
+		return downloadExtras;
+	}
+
+	/** Saves the files added to the patcher download. */
+	public synchronized void setDownloadExtras(List<Extra> files) throws IOException {
+		if (files.equals(downloadExtras)) {
+			return;
+		}
+		downloadExtras = List.copyOf(files);
+		save();
+	}
+
 	/** How players apply the patch, as last chosen. */
 	public synchronized Mode mode() {
 		return mode;
@@ -209,11 +231,10 @@ public final class ExportSettings {
 	}
 
 	private void save() throws IOException {
-		JSONArray list = new JSONArray();
-		for (Extra e : extras) {
-			list.put(new JSONObject().put("source", e.source().toString()).put("destination", e.destination()));
+		JSONObject json = new JSONObject().put("extraFiles", list(extras)).put("mode", mode.name());
+		if (!downloadExtras.isEmpty()) {
+			json.put("downloadFiles", list(downloadExtras));
 		}
-		JSONObject json = new JSONObject().put("extraFiles", list).put("mode", mode.name());
 		if (!patcherDownload) {
 			json.put("patcherDownload", false);
 		}
@@ -222,5 +243,13 @@ public final class ExportSettings {
 		}
 		Files.createDirectories(file.getParent());
 		Files.writeString(file, json.toString(2) + "\n", StandardCharsets.UTF_8);
+	}
+
+	private static JSONArray list(List<Extra> files) {
+		JSONArray list = new JSONArray();
+		for (Extra e : files) {
+			list.put(new JSONObject().put("source", e.source().toString()).put("destination", e.destination()));
+		}
+		return list;
 	}
 }

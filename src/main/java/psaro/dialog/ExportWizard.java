@@ -19,6 +19,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.function.Function;
 import java.util.prefs.Preferences;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
@@ -58,7 +59,7 @@ import psaro.patch.TitleBuild;
  * mods folder, with the project's readme and any files it adds (a code patch Luma3DS reads beside
  * the romfs folder, say), and the DLC's patcher page, a DLC having no other way to be patched. A
  * patched CIA gives the patcher download, for players to build their own patched copies, with a
- * readme the project may write, and the
+ * readme the project may write and any files it adds, and the
  * patched copies built here from decrypted copies chosen, either or both. What is chosen is kept
  * per project ({@link ExportSettings}) whether or not it goes on to export; Export checks it first.
  */
@@ -86,9 +87,10 @@ public final class ExportWizard extends JDialog {
 	private final JTextArea downloadReadme = new JTextArea(12, 86);
 	/** What the patcher page would write as the patcher download's readme. */
 	private final String downloadDefault;
-	private final Model model = new Model();
-	private final JTable table = new JTable(model);
-	private final JButton remove = new JButton("Remove");
+	/** LayeredFS: the files added to the zip, beside the romfs folder unless told otherwise. */
+	private final FileList files = new FileList(PatchExport::defaultDestination);
+	/** Patched CIA: the files added to the patcher download, beside the page unless told otherwise. */
+	private final FileList downloadFiles = new FileList(source -> source.getFileName().toString());
 	private final JCheckBox patcherDownload = new JCheckBox();
 	private final JCheckBox buildCopies = new JCheckBox("Build patched copies now, from your own decrypted copies");
 	private final JTextField gameBase = new JTextField(44);
@@ -221,28 +223,7 @@ public final class ExportWizard extends JDialog {
 			readmePanel.add(gameReadme, BorderLayout.CENTER);
 		}
 
-		model.rows = new ArrayList<>(settings.extras());
-		table.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
-		table.getTableHeader().setReorderingAllowed(false);
-		table.setFillsViewportHeight(true);
-		table.getColumnModel().getColumn(0).setPreferredWidth(420);
-		table.getColumnModel().getColumn(1).setPreferredWidth(320);
-		table.getSelectionModel().addListSelectionListener(e -> remove.setEnabled(table.getSelectedRowCount() > 0));
-		JScrollPane tableScroll = new JScrollPane(table);
-		tableScroll.setPreferredSize(new Dimension(740, 110));
-		JButton add = new JButton("Add…");
-		add.setToolTipText("Choose files to add to every export of this project");
-		add.addActionListener(e -> addFiles());
-		remove.setEnabled(false);
-		remove.addActionListener(e -> removeSelected());
-		JPanel fileButtons = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
-		fileButtons.add(add);
-		fileButtons.add(remove);
-		fileButtons.add(new JLabel("Each is read from where it was chosen at every export. Double-click a path in the zip "
-				+ "to change it; " + PatchExport.TITLE_ID + " becomes the title id."));
-		JPanel filesPanel = section("Additional files added to the zip");
-		filesPanel.add(tableScroll, BorderLayout.CENTER);
-		filesPanel.add(fileButtons, BorderLayout.SOUTH);
+		JPanel filesPanel = files.panel("Additional files added to the zip", settings.extras(), 110);
 
 		JPanel page = column();
 		page.add(heading("LayeredFS"));
@@ -297,8 +278,16 @@ public final class ExportWizard extends JDialog {
 						+ ". Saved as " + ExportSettings.DOWNLOAD_README_FILE + " in the project folder, which can be edited "
 						+ "elsewhere too."), BorderLayout.CENTER);
 		readmePanel.setBorder(BorderFactory.createCompoundBorder(new EmptyBorder(4, 24, 0, 0), readmePanel.getBorder()));
-		patcherDownload.addActionListener(e -> enableAll(readmePanel, patcherDownload.isSelected()));
-		enableAll(readmePanel, patcherDownload.isSelected());
+		JPanel filesPanel = downloadFiles.panel("Additional files added to the patcher download", settings.downloadExtras(),
+				80);
+		filesPanel.setBorder(BorderFactory.createCompoundBorder(new EmptyBorder(4, 24, 0, 0), filesPanel.getBorder()));
+		Runnable enableDownload = () -> {
+			enableAll(readmePanel, patcherDownload.isSelected());
+			enableAll(filesPanel, patcherDownload.isSelected());
+			downloadFiles.enableRemove();
+		};
+		patcherDownload.addActionListener(e -> enableDownload.run());
+		enableDownload.run();
 		buildCopies.setSelected(settings.buildCopies());
 		patcherDownload.setAlignmentX(LEFT_ALIGNMENT);
 		buildCopies.setAlignmentX(LEFT_ALIGNMENT);
@@ -328,6 +317,7 @@ public final class ExportWizard extends JDialog {
 				+ "game (from its CIA or .3ds)" + (hasDlc ? " or its DLC (from its CIA)" : "") + " from their own decrypted "
 				+ "copy, then install it in place of the original. Nothing of the game is in it."));
 		page.add(readmePanel);
+		page.add(filesPanel);
 		page.add(Box.createVerticalStrut(8));
 		page.add(buildCopies);
 		page.add(basesRow);
@@ -470,6 +460,11 @@ public final class ExportWizard extends JDialog {
 		return settings.downloadReadme();
 	}
 
+	/** Patched CIA: the files added to the patcher download as they stand. */
+	public List<Extra> downloadExtras() {
+		return settings.downloadExtras();
+	}
+
 	/** Patched CIA: the copies to build, checked, the game's first. */
 	public List<Build> builds() {
 		return List.copyOf(builds);
@@ -484,16 +479,16 @@ public final class ExportWizard extends JDialog {
 
 	/** Keeps what was chosen; false (with the reason shown) when it could not be saved. */
 	private boolean keep() {
-		if (table.isEditing()) {
-			table.getCellEditor().stopCellEditing();
-		}
+		files.stopEditing();
+		downloadFiles.stopEditing();
 		try {
 			settings.setReadme(readme.getText());
 			if (hasDlc) {
 				settings.setPatcherReadme(patcherReadme.getText());
 			}
 			settings.setDownloadReadme(downloadReadme.getText(), downloadDefault);
-			settings.setExtras(model.rows);
+			settings.setExtras(files.model.rows);
+			settings.setDownloadExtras(downloadFiles.model.rows);
 			settings.setMode(mode(), patcherDownload.isSelected(), buildCopies.isSelected());
 			return true;
 		} catch (IOException e) {
@@ -524,6 +519,18 @@ public final class ExportWizard extends JDialog {
 				problems.add("Could not read the patch folder: " + e.getMessage());
 			}
 		} else {
+			if (patcherDownload.isSelected()) {
+				try {
+					problems.addAll(PatchExport.problems(null, titleId(), settings.downloadExtras()));
+				} catch (IOException e) {
+					problems.add("Could not check the files added to the patcher download: " + e.getMessage());
+				}
+				for (Extra e : settings.downloadExtras()) {
+					if (PatchExport.destination(e.destination(), titleId()).equalsIgnoreCase(PatcherPage.PAGE)) {
+						problems.add(PatcherPage.PAGE + " is the patcher page's own place in the zip.");
+					}
+				}
+			}
 			if (buildCopies.isSelected()) {
 				check(false, problems, doubts, replaced);
 				if (hasDlc) {
@@ -661,36 +668,88 @@ public final class ExportWizard extends JDialog {
 		return p;
 	}
 
-	private void addFiles() {
-		JFileChooser chooser = new JFileChooser();
-		chooser.setDialogTitle("Add files to the patch");
-		chooser.setMultiSelectionEnabled(true);
-		String last = prefs.get(PREF_FOLDER, null);
-		if (last != null && Files.isDirectory(Path.of(last))) {
-			chooser.setCurrentDirectory(new File(last));
+	/** Files added to a zip, in a table with buttons adding and removing them. */
+	private final class FileList {
+		final Model model = new Model();
+		final JTable table = new JTable(model);
+		final JButton remove = new JButton("Remove");
+		/** Where a file chosen goes in the zip until told otherwise. */
+		private final Function<Path, String> destination;
+
+		FileList(Function<Path, String> destination) {
+			this.destination = destination;
 		}
-		if (chooser.showOpenDialog(this) != JFileChooser.APPROVE_OPTION || chooser.getSelectedFiles().length == 0) {
-			return;
+
+		/** The table holding {@code rows}, {@code height} high, and its buttons, in a section titled {@code title}. */
+		JPanel panel(String title, List<Extra> rows, int height) {
+			model.rows = new ArrayList<>(rows);
+			table.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
+			table.getTableHeader().setReorderingAllowed(false);
+			table.setFillsViewportHeight(true);
+			table.getColumnModel().getColumn(0).setPreferredWidth(420);
+			table.getColumnModel().getColumn(1).setPreferredWidth(320);
+			table.getSelectionModel().addListSelectionListener(e -> enableRemove());
+			JScrollPane tableScroll = new JScrollPane(table);
+			tableScroll.setPreferredSize(new Dimension(740, height));
+			JButton add = new JButton("Add…");
+			add.setToolTipText("Choose files to add to every export of this project");
+			add.addActionListener(e -> addFiles());
+			remove.setEnabled(false);
+			remove.addActionListener(e -> removeSelected());
+			JPanel fileButtons = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+			fileButtons.add(add);
+			fileButtons.add(remove);
+			fileButtons.add(new JLabel("Each is read from where it was chosen at every export. Double-click a path in the zip "
+					+ "to change it; " + PatchExport.TITLE_ID + " becomes the title id."));
+			JPanel p = section(title);
+			p.add(tableScroll, BorderLayout.CENTER);
+			p.add(fileButtons, BorderLayout.SOUTH);
+			return p;
 		}
-		prefs.put(PREF_FOLDER, chooser.getSelectedFiles()[0].getParent());
-		for (File f : chooser.getSelectedFiles()) {
-			Path source = f.toPath().toAbsolutePath();
-			if (model.rows.stream().noneMatch(e -> e.source().equals(source))) {
-				model.rows.add(new Extra(source, PatchExport.defaultDestination(source)));
+
+		/** Remove enabled while rows are selected and the table is. */
+		void enableRemove() {
+			remove.setEnabled(table.isEnabled() && table.getSelectedRowCount() > 0);
+		}
+
+		void stopEditing() {
+			if (table.isEditing()) {
+				table.getCellEditor().stopCellEditing();
 			}
 		}
-		model.fireTableDataChanged();
-	}
 
-	private void removeSelected() {
-		if (table.isEditing()) {
-			table.getCellEditor().cancelCellEditing();
+		private void addFiles() {
+			JFileChooser chooser = new JFileChooser();
+			chooser.setDialogTitle("Add files to the patch");
+			chooser.setMultiSelectionEnabled(true);
+			String last = prefs.get(PREF_FOLDER, null);
+			if (last != null && Files.isDirectory(Path.of(last))) {
+				chooser.setCurrentDirectory(new File(last));
+			}
+			if (chooser.showOpenDialog(ExportWizard.this) != JFileChooser.APPROVE_OPTION
+					|| chooser.getSelectedFiles().length == 0) {
+				return;
+			}
+			prefs.put(PREF_FOLDER, chooser.getSelectedFiles()[0].getParent());
+			for (File f : chooser.getSelectedFiles()) {
+				Path source = f.toPath().toAbsolutePath();
+				if (model.rows.stream().noneMatch(e -> e.source().equals(source))) {
+					model.rows.add(new Extra(source, destination.apply(source)));
+				}
+			}
+			model.fireTableDataChanged();
 		}
-		int[] rows = table.getSelectedRows();
-		for (int i = rows.length - 1; i >= 0; i--) {
-			model.rows.remove(rows[i]);
+
+		private void removeSelected() {
+			if (table.isEditing()) {
+				table.getCellEditor().cancelCellEditing();
+			}
+			int[] rows = table.getSelectedRows();
+			for (int i = rows.length - 1; i >= 0; i--) {
+				model.rows.remove(rows[i]);
+			}
+			model.fireTableDataChanged();
 		}
-		model.fireTableDataChanged();
 	}
 
 	/** Each added file: where it is read from, and its path in the zip, which can be changed. */

@@ -1415,7 +1415,7 @@ public final class MainWindow {
 		if (wizard.mode() == ExportSettings.Mode.LAYERED_FS) {
 			exportLayeredFs(id, wizard.readme(), wizard.patcherReadme(), wizard.extras());
 		} else {
-			exportCia(id, wizard.patcherDownload(), wizard.downloadReadme(), wizard.builds());
+			exportCia(id, wizard.patcherDownload(), wizard.downloadReadme(), wizard.downloadExtras(), wizard.builds());
 		}
 	}
 
@@ -1513,10 +1513,11 @@ public final class MainWindow {
 	/**
 	 * Exports the patch as patched CIAs: with {@code patcherDownload}, the patcher download, the
 	 * patcher page ({@link PatcherPage}) with the game's patched files and its DLC's, for players to
-	 * build their own, beside {@code downloadReadme} (or with null, the page's own); and each of
-	 * {@code builds}, a patched copy built here ({@link TitleBuild}).
+	 * build their own, beside {@code downloadReadme} (or with null, the page's own) and the
+	 * {@code downloadExtras} added; and each of {@code builds}, a patched copy built here ({@link TitleBuild}).
 	 */
-	private void exportCia(String titleId, boolean patcherDownload, String downloadReadme, List<ExportWizard.Build> builds) {
+	private void exportCia(String titleId, boolean patcherDownload, String downloadReadme,
+			List<PatchExport.Extra> downloadExtras, List<ExportWizard.Build> builds) {
 		Path root = game.index.root();
 		Path patcherZip = null;
 		if (patcherDownload) {
@@ -1569,11 +1570,15 @@ public final class MainWindow {
 					}
 					String readme = downloadReadme == null ? page.readme()
 							: downloadReadme.replace(PatcherPage.DLC_TITLE_ID, "0004008C" + titleId.substring(8));
-					PatchExport.writeFiles(titleId, readme, List.of(new PatchExport.Extra(page.page(), PatcherPage.PAGE)),
-							zip, toBar(s -> publish(s)));
+					List<PatchExport.Extra> all = new ArrayList<>();
+					all.add(new PatchExport.Extra(page.page(), PatcherPage.PAGE));
+					all.addAll(downloadExtras);
+					PatchExport.writeFiles(titleId, readme, all, zip, toBar(s -> publish(s)));
 					wrote.add(String.format(java.util.Locale.ROOT, "The patcher download, %s (%.1f MB): players open its %s in "
-							+ "a browser to build a patched copy of %s from their own.", zip, Files.size(zip) / 1048576.0,
-							PatcherPage.PAGE, dlcPatch != null ? "the game or its DLC" : "the game"));
+							+ "a browser to build a patched copy of %s from their own.%s", zip, Files.size(zip) / 1048576.0,
+							PatcherPage.PAGE, dlcPatch != null ? "the game or its DLC" : "the game",
+							downloadExtras.isEmpty() ? "" : String.format(java.util.Locale.ROOT, " With %,d added %s.",
+									downloadExtras.size(), downloadExtras.size() == 1 ? "file" : "files")));
 				}
 				for (ExportWizard.Build b : builds) {
 					String what = b.dlc() ? "DLC" : "game";
