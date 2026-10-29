@@ -30,6 +30,9 @@ import psaro.format.Texture;
  * <p>Like the game's own, an outline overhangs the letter's advance rather than widening it.
  * Every glyph sits in a cell of one size per font, so the same letter comes out the same
  * whichever others are drawn with it.
+ *
+ * <p>In an outlined font, {@link #NUDGED} letters sit one pixel right of where the typeface puts
+ * them, their advance kept.
  */
 public final class GlyphDrawing {
 
@@ -38,6 +41,12 @@ public final class GlyphDrawing {
 	}
 
 	private static final FontRenderContext FRC = new FontRenderContext(new AffineTransform(), true, true);
+	/**
+	 * Letters whose crossbar reaches back to the pen: outlined, their outline would cover the edge of
+	 * the letter before ("lt" of "Alltrades"), so they are drawn one pixel right. Their advance is
+	 * kept, so no line grows; the crowding moves to the crossbar's other end, where it shows less.
+	 */
+	static final String NUDGED = "ft";
 	/** The size the reference typeface is measured at. */
 	private static final double REFERENCE = 100;
 
@@ -141,7 +150,8 @@ public final class GlyphDrawing {
 				px[y * cellW + x] = Texture.fromRgba(blend(look, f, o), format);
 			}
 		}
-		return new Bcfnt.Glyph(px, Math.max(-128, x0 - pad), w, advance);
+		int nudge = look.radius > 0 && NUDGED.indexOf(c) >= 0 ? 1 : 0;
+		return new Bcfnt.Glyph(px, Math.max(-128, x0 - pad + nudge), w, advance);
 	}
 
 	/** The fill over the outline: {@code fill} of {@code outer} coverage is fill, the rest outline. */
