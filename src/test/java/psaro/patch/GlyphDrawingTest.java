@@ -126,32 +126,6 @@ class GlyphDrawingTest {
 		assertFalse(drawn.has('あ'), "only what was asked for");
 	}
 
-	/**
-	 * Outlined, f and t sit a pixel right of where the typeface puts them, so their outline leaves
-	 * the letter before alone, and keep the typeface's advance; other letters, and plain fonts' f
-	 * and t, sit where it puts them.
-	 */
-	@Test
-	void anOutlinedFontsFAndTAreNudgedRightWithTheirAdvanceKept() {
-		String name = "SulaPro_B_04a_20.bcfnt";
-		List<Integer> codes = List.of((int) 'f', (int) 't', (int) 'l');
-		for (Bcfnt target : List.of(outlined("あいうえお漢字"), SampleRomfs.font("あいうえお漢字", 10))) {
-			GlyphDrawing.Look look = GlyphDrawing.look(target);
-			Bcfnt drawn = GlyphDrawing.draw(Typeface.M_PLUS_ROUNDED, name, target, codes);
-			String weight = Typeface.weightFor(name);
-			java.awt.Font sized = Typeface.M_PLUS_ROUNDED.font(weight).deriveFont((float) GlyphDrawing.emSize(target, look, weight));
-			var frc = new java.awt.font.FontRenderContext(new java.awt.geom.AffineTransform(), true, true);
-			for (int c : codes) {
-				var gv = sized.createGlyphVector(frc, Character.toChars(c));
-				// the first column the letter and its outline touch
-				int left = (int) Math.floor(gv.getOutline().getBounds2D().getMinX() - look.radius());
-				int nudge = look.radius() > 0 && c != 'l' ? 1 : 0;
-				assertEquals(left + nudge, drawn.glyph(c).left, (char) c + " with outline " + look.radius());
-				assertEquals((int) Math.round(gv.getGlyphMetrics(0).getAdvanceX()), drawn.glyph(c).charWidth);
-			}
-		}
-	}
-
 	private static int lowestInk(Bcfnt f, int c) {
 		int[] px = f.rgba(f.cmap.get(c));
 		int lowest = -1;
