@@ -126,10 +126,18 @@ public final class ImagesWindow extends JFrame {
 	private final DefaultListModel<Group> shown = new DefaultListModel<>();
 	private final JList<Group> list = new JList<>(shown);
 	private final JTextField filter = new JTextField(16);
-	/** Which images the list shows by whether they are replaced: one of three, all of them to begin with. */
+	/**
+	 * Which images the list shows by whether they are replaced, or drawn by a picture moved in depth:
+	 * one of four, all of them to begin with.
+	 */
 	private final JToggleButton showAll = new JToggleButton("All", true);
 	private final JToggleButton showEdited = new JToggleButton("Edited");
 	private final JToggleButton showUnedited = new JToggleButton("Unedited");
+	private final JToggleButton showDepthModified = new JToggleButton("Depth Modified");
+	/** The layout images a picture moved in depth draws, by hash; null before they are looked for. */
+	private java.util.Set<String> movedInDepth;
+	/** Counts the looks for {@link #movedInDepth}, so only the latest answer is kept. */
+	private int depthAsked;
 	/** Which kind of image the list shows: a tab per kind, over the one list. */
 	private final JTabbedPane kinds = new JTabbedPane();
 	/** The image last picked under each tab, to pick again on coming back to it. */
@@ -197,18 +205,21 @@ public final class ImagesWindow extends JFrame {
 				refilter();
 			}
 		});
-		// a three-way switch: a group lets one be pressed at a time, a tool bar draws them as one control
+		// a four-way switch: a group lets one be pressed at a time, a tool bar draws them as one control
 		ButtonGroup shows = new ButtonGroup();
 		JToolBar show = new JToolBar();
 		show.setFloatable(false);
-		for (JToggleButton b : List.of(showAll, showEdited, showUnedited)) {
+		for (JToggleButton b : List.of(showAll, showEdited, showUnedited, showDepthModified)) {
 			shows.add(b);
 			show.add(b);
 			b.addActionListener(e -> refilter());
 		}
+		// looked for again on each press, as the editor's pane settings change depth too
+		showDepthModified.addActionListener(e -> findMovedInDepth());
 		showAll.setToolTipText("Every image");
 		showEdited.setToolTipText("Only the images you have replaced");
 		showUnedited.setToolTipText("Only the images still the game's");
+		showDepthModified.setToolTipText("Only the layout images a picture pane draws at a depth other than the layout's own");
 		// the field across the pane, the switch on a row of its own below it: on one flowing row, what
 		// overflowed the narrow pane wrapped onto a line the panel had no height for, and vanished
 		JPanel ticks = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
@@ -375,7 +386,9 @@ public final class ImagesWindow extends JFrame {
 			boolean matches = needle.isEmpty() || g.copies().stream().anyMatch(i -> i.path().toLowerCase(Locale.ROOT).contains(needle)
 					|| index.root().relativize(i.archive()).toString().replace('\\', '/').toLowerCase(Locale.ROOT).contains(needle));
 			boolean edited = edits.get(g.hash()) != null;
-			if (matches && (showAll.isSelected() || showEdited.isSelected() == edited)) {
+			boolean shows = showDepthModified.isSelected() ? movedInDepth != null && movedInDepth.contains(g.hash())
+					: showAll.isSelected() || showEdited.isSelected() == edited;
+			if (matches && shows) {
 				int k = g.kind();
 				counts[k]++;
 				if (k == kind) {
@@ -385,7 +398,9 @@ public final class ImagesWindow extends JFrame {
 		}
 		for (int k = 0; k < KINDS.length; k++) {
 			boolean unread = k == FILES && looseGroups == null;
-			kinds.setTitleAt(k, KINDS[k] + "  " + (unread ? (readingLoose ? "…" : "") : String.format(Locale.ROOT, "%,d", counts[k])));
+			boolean looking = showDepthModified.isSelected() && movedInDepth == null;
+			kinds.setTitleAt(k, KINDS[k] + "  " + (looking ? "…" : unread ? (readingLoose ? "…" : "")
+					: String.format(Locale.ROOT, "%,d", counts[k])));
 		}
 		kinds.revalidate();
 		// added all at once: added one by one, each addition had the list measure every line again
@@ -434,6 +449,50 @@ public final class ImagesWindow extends JFrame {
 			}
 		}.execute();
 		info.setText("Reading the loose images…");
+	}
+
+	/**
+	 * Looks in the background for the layout images a picture moved in depth draws, in every archive
+	 * that has them, as reading the archives' layouts takes a while the first time; then lists them.
+	 */
+	private void findMovedInDepth() {
+		int asked = ++depthAsked;
+		List<Group> layoutImages = groups.stream().filter(g -> g.kind() == LAYOUTS).toList();
+		new javax.swing.SwingWorker<java.util.Set<String>, Void>() {
+			@Override
+			protected java.util.Set<String> doInBackground() {
+				Map<java.nio.file.Path, java.util.Set<String>> byArchive = new java.util.HashMap<>();
+				java.util.Set<String> out = new java.util.HashSet<>();
+				for (Group g : layoutImages) {
+					for (Image copy : g.copies()) {
+						String file = copy.path().substring(copy.path().lastIndexOf('/') + 1);
+						if (byArchive.computeIfAbsent(copy.archive(), fonts::imagesMovedInDepth).contains(file)) {
+							out.add(g.hash());
+							break;
+						}
+					}
+				}
+				return out;
+			}
+
+			@Override
+			protected void done() {
+				if (asked != depthAsked) {
+					return;
+				}
+				try {
+					movedInDepth = get();
+				} catch (InterruptedException | java.util.concurrent.ExecutionException e) {
+					movedInDepth = new java.util.HashSet<>();
+				}
+				if (showDepthModified.isSelected()) {
+					refilter();
+				}
+			}
+		}.execute();
+		if (movedInDepth == null) {
+			info.setText("Finding the images moved in depth…");
+		}
 	}
 
 	/**
@@ -709,6 +768,23 @@ public final class ImagesWindow extends JFrame {
 			error("Could not save the layout change:\n" + e.getMessage());
 		}
 		showDepth();
+		Group g = list.getSelectedValue();
+		if (movedInDepth != null && g != null) {
+			boolean moved = false;
+			for (int i = 0; i < panes.getItemCount(); i++) {
+				Placed q = panes.getItemAt(i);
+				moved |= overrides.place(q.layout(), q.pane().name()).z() != null;
+			}
+			if (moved) {
+				movedInDepth.add(g.hash());
+			} else {
+				movedInDepth.remove(g.hash());
+			}
+			// put back, it leaves the list as a reverted image leaves Edited; stepped through, it stays till then
+			if (back && showDepthModified.isSelected()) {
+				refilter();
+			}
+		}
 		onChange.run();
 	}
 

@@ -1280,6 +1280,27 @@ public final class FontPatcher {
 		return out;
 	}
 
+	/**
+	 * The images of {@code archive}, by texture file name, that a picture of its layouts draws with
+	 * a depth other than the layout's own: what the Images window's Depth Modified switch lists.
+	 */
+	public Set<String> imagesMovedInDepth(Path archive) {
+		Set<String> out = new HashSet<>();
+		Map<String, byte[]> layouts = originalLayouts(archive);
+		for (String layout : overrides.layouts()) {
+			if (!layouts.containsKey(layout)) {
+				continue;
+			}
+			Map<String, String> names = pictureNames(archive, layout);
+			overrides.placesForLayout(layout).forEach((pane, p) -> {
+				if (p.z() != null && names.containsKey(pane)) {
+					out.add(names.get(pane));
+				}
+			});
+		}
+		return out;
+	}
+
 	/** {@code archive}'s layouts by path, read once; empty when it cannot be read. */
 	private Map<String, byte[]> originalLayouts(Path archive) {
 		Map<String, byte[]> known = originalLayouts.get(archive);
