@@ -74,6 +74,30 @@ class BclytTest {
 		assertArrayEquals(layout, Bclyt.withPanes(layout, Map.of()));
 	}
 
+	/** A pane's depth is read, set and set back on its own, its place and size kept. */
+	@Test
+	void paneDepthIsSetAlone() {
+		byte[] layout = SampleRomfs.layout(List.of("a.bcfnt"), SampleRomfs.group("NL_Mark",
+				SampleRomfs.picture("Pic_Flag", -136, 13, 18, 20), SampleRomfs.picture("Pic_Mark", -154, 49, 44, 44)));
+		Bclyt.Pane flag = pane(layout, "Pic_Flag");
+		assertEquals(0f, flag.z());
+
+		byte[] raised = Bclyt.withPanes(layout, Map.of("Pic_Flag", new Bclyt.PaneOverride(null, null, null, null, 3f)));
+		assertEquals(3f, pane(raised, "Pic_Flag").z());
+		assertEquals(-136f, pane(raised, "Pic_Flag").x());
+		assertEquals(18f, pane(raised, "Pic_Flag").width());
+		assertEquals(pane(layout, "Pic_Mark"), pane(raised, "Pic_Mark"));
+		int differing = 0;
+		for (int i = 0; i < layout.length; i++) {
+			differing += layout[i] != raised[i] ? 1 : 0;
+		}
+		assertTrue(differing <= 4, differing + " bytes changed");
+
+		Bclyt.PaneOverride flat = new Bclyt.PaneOverride(null, null, null, null, 0f);
+		assertArrayEquals(layout, Bclyt.withPanes(raised, Map.of("Pic_Flag", flat)));
+		assertEquals(flat.apply(pane(raised, "Pic_Flag")), pane(layout, "Pic_Flag"));
+	}
+
 	private static Bclyt.Pane pane(byte[] layout, String name) {
 		return Bclyt.read(layout).panes().stream().filter(p -> p.name().equals(name)).findFirst().orElseThrow();
 	}

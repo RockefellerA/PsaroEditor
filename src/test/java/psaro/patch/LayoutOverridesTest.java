@@ -76,4 +76,21 @@ class LayoutOverridesTest {
 		assertTrue(again.layouts().isEmpty());
 		assertFalse(Files.exists(dir.resolve("game.psaro/layouts.json")));
 	}
+
+	/** A depth alone is a change of its own, saved as z and read back. */
+	@Test
+	void depthIsSavedAndReadBack() throws IOException {
+		Path romfs = dir.resolve("game");
+		String stage = "blyt/challenge_stage_select_up.bclyt";
+		LayoutOverrides o = LayoutOverrides.open(romfs);
+		PaneOverride flat = new PaneOverride(null, null, null, null, 0f);
+		assertFalse(flat.isEmpty());
+		o.setPlace(stage, "Pic_Flag", flat);
+
+		String json = Files.readString(dir.resolve("game.psaro/layouts.json"), StandardCharsets.UTF_8);
+		assertTrue(json.contains("\"z\": 0"), json);
+		assertFalse(json.contains("\"x\""), json);
+		assertEquals(flat, LayoutOverrides.open(romfs).place(stage, "Pic_Flag"));
+		assertEquals(Set.of(stage), LayoutOverrides.open(romfs).layouts());
+	}
 }

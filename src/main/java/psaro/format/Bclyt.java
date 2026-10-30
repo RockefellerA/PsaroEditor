@@ -32,14 +32,15 @@ public final class Bclyt {
 	/**
 	 * Any pane. Text-pane fields are null / zero for other kinds. {@code parent} is the pane it
 	 * hangs under (null at the root), {@code x} and {@code y} where it sits from there, its centre
-	 * by default; {@code width} and {@code height} its size (a text pane's box).
+	 * by default; {@code width} and {@code height} its size (a text pane's box); {@code z} its depth
+	 * from its parent, which in stereoscopic 3D sets it apart from the rest of the layout.
 	 */
 	public record Pane(String kind, String name, List<String> keys, TextInfo text, String parent, float x, float y,
-			float width, float height) {
+			float width, float height, float z) {
 
-		/** A pane whose size does not matter here. */
+		/** A pane whose size and depth do not matter here. */
 		public Pane(String kind, String name, List<String> keys, TextInfo text, String parent, float x, float y) {
-			this(kind, name, keys, text, parent, x, y, 0, 0);
+			this(kind, name, keys, text, parent, x, y, 0, 0, 0);
 		}
 
 		/** A picture: an image, or a window drawn from images, which {@link PaneOverride} can move and size. */
@@ -133,20 +134,27 @@ public final class Bclyt {
 	 * New values for where a pane sits and how big it is; a null field keeps the layout's own.
 	 * {@code x} and {@code y} are its translation from its parent (y runs up), {@code width} and
 	 * {@code height} its size: a picture's stretches its image to fit, a text pane's is its box.
+	 * {@code z} is its depth from its parent: the game's stereoscopic 3D draws a pane away from 0
+	 * nearer or farther than the rest of the layout, and 0 keeps it flat with it.
 	 */
-	public record PaneOverride(Float x, Float y, Float width, Float height) {
+	public record PaneOverride(Float x, Float y, Float width, Float height, Float z) {
 
-		public static final PaneOverride NONE = new PaneOverride(null, null, null, null);
+		public static final PaneOverride NONE = new PaneOverride(null, null, null, null, null);
+
+		/** A change that keeps the pane's depth. */
+		public PaneOverride(Float x, Float y, Float width, Float height) {
+			this(x, y, width, height, null);
+		}
 
 		public boolean isEmpty() {
 			return equals(NONE);
 		}
 
-		/** {@code pane} where this override puts it, at the size it gives it. */
+		/** {@code pane} where this override puts it, at the size and depth it gives it. */
 		public Pane apply(Pane pane) {
 			return new Pane(pane.kind(), pane.name(), pane.keys(), pane.text(), pane.parent(),
 					TextOverride.or(x, pane.x()), TextOverride.or(y, pane.y()), TextOverride.or(width, pane.width()),
-					TextOverride.or(height, pane.height()));
+					TextOverride.or(height, pane.height()), TextOverride.or(z, pane.z()));
 		}
 	}
 
@@ -197,7 +205,7 @@ public final class Bclyt {
 								rgba(d, o + 0x5C), rgba(d, o + 0x60));
 					}
 					panes.add(new Pane(tag, name, new ArrayList<>(), info, parents.peek(), Bytes.f32(d, o + 0x24),
-							Bytes.f32(d, o + 0x28), Bytes.f32(d, o + 0x44), Bytes.f32(d, o + 0x48)));
+							Bytes.f32(d, o + 0x28), Bytes.f32(d, o + 0x44), Bytes.f32(d, o + 0x48), Bytes.f32(d, o + 0x2C)));
 					last = name;
 				}
 				case "usd1" -> {
@@ -344,9 +352,9 @@ public final class Bclyt {
 	}
 
 	/**
-	 * A copy of layout {@code d} with each pane named in {@code overrides}, of any kind, moved and
-	 * sized as it says: its translation x and y (0x24, 0x28) and its size (0x44, 0x48). Only those
-	 * floats change; every other byte stays as it was.
+	 * A copy of layout {@code d} with each pane named in {@code overrides}, of any kind, moved,
+	 * sized and set in depth as it says: its translation x, y and z (0x24, 0x28, 0x2C) and its size
+	 * (0x44, 0x48). Only those floats change; every other byte stays as it was.
 	 */
 	public static byte[] withPanes(byte[] d, Map<String, PaneOverride> overrides) {
 		if (overrides.isEmpty()) {
@@ -367,6 +375,7 @@ public final class Bclyt {
 				if (p != null) {
 					put(b, o + 0x24, p.x());
 					put(b, o + 0x28, p.y());
+					put(b, o + 0x2C, p.z());
 					put(b, o + 0x44, p.width());
 					put(b, o + 0x48, p.height());
 				}

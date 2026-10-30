@@ -78,6 +78,30 @@ class GlyphDrawingTest {
 		assertTrue(look.radius() > 0.5 && look.radius() < 2, "radius " + look.radius());
 	}
 
+	/**
+	 * Green letters in a black outline, like the game's 08a style: the green averages dark, but
+	 * the letters are light, not dark green with no outline.
+	 */
+	@Test
+	void aGreenFontInABlackOutlineIsRead() {
+		Bcfnt f = SampleRomfs.font("あいうえお", 10);
+		f.format = Texture.RGBA8;
+		for (Bcfnt.Glyph g : f.glyphs) {
+			int[] px = new int[f.cellW * f.cellH];
+			for (int y = 1; y <= f.baseline; y++) {
+				for (int x = 0; x < f.cellW; x++) {
+					boolean edge = y == 1 || y == f.baseline || x == 0 || x == f.cellW - 1;
+					px[y * f.cellW + x] = Texture.fromRgba(edge ? 0x000000FF : 0x5FC00BFF, f.format);
+				}
+			}
+			g.pixels = px;
+		}
+		GlyphDrawing.Look look = GlyphDrawing.look(f);
+		assertEquals(0x5FC00BFF, look.fill());
+		assertEquals(0x000000FF, look.outline());
+		assertTrue(look.radius() > 0.5 && look.radius() < 2, "radius " + look.radius());
+	}
+
 	/** Light letters over a dark shadow below, like the game's 02a style: no outline. */
 	@Test
 	void aDropShadowIsNotAnOutline() {

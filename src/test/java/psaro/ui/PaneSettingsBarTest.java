@@ -66,7 +66,7 @@ class PaneSettingsBarTest {
 
 		bar.show(usages.get(0), usages);
 		List<JSpinner> spinners = all(bar, JSpinner.class, new ArrayList<>());
-		assertEquals(12, spinners.size(), "box and type, the pane's position, a picture's place and size");
+		assertEquals(13, spinners.size(), "box and type, the pane's position, a picture's place, size and depth");
 		assertEquals(120.0, spinners.get(0).getValue());
 		assertEquals(16.0, spinners.get(2).getValue());
 		assertEquals(0, changes[0], "showing a pane is not a change");
@@ -122,12 +122,17 @@ class PaneSettingsBarTest {
 		picW.setValue(78.0);
 		picX.setValue(52.0);
 		assertEquals(new PaneOverride(52f, null, 78f, null), fonts.overrides().place("blyt/menu.bclyt", "Pic_Fram"));
-		assertEquals(3, changes[0]);
+		JSpinner picZ = spinners.get(12);
+		assertEquals(0.0, picZ.getValue());
+		picZ.setValue(-0.5);
+		assertEquals(new PaneOverride(52f, null, 78f, null, -0.5f), fonts.overrides().place("blyt/menu.bclyt", "Pic_Fram"));
+		assertEquals(4, changes[0]);
 
 		List<JButton> resets = all(bar, JButton.class, new ArrayList<>()).stream().filter(b -> b.getText().equals("Reset")).toList();
 		resets.get(1).doClick();
 		assertTrue(fonts.overrides().place("blyt/menu.bclyt", "Pic_Fram").isEmpty());
 		assertEquals(66.0, picW.getValue());
+		assertEquals(0.0, picZ.getValue());
 		resets.get(0).doClick();
 		assertTrue(fonts.overrides().layouts().isEmpty(), "the label and its shadow back where they were");
 		assertEquals(31.0, posX.getValue());

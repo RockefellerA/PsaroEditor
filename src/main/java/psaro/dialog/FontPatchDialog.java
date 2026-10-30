@@ -478,6 +478,9 @@ public final class FontPatchDialog extends JDialog {
 		if (p.width() != null || p.height() != null) {
 			parts.add("size " + number(p.width()) + "×" + number(p.height()));
 		}
+		if (p.z() != null) {
+			parts.add("depth " + number(p.z()));
+		}
 		return String.join(", ", parts);
 	}
 

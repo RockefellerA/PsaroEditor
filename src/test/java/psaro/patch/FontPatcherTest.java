@@ -338,6 +338,20 @@ class FontPatcherTest {
 		assertFalse(Files.exists(patcher.outputPath(menu())));
 	}
 
+	/** A depth alone is enough to write the archive, with nothing else of the pane changed. */
+	@Test
+	void aPaneGivenOnlyADepthIsWritten() throws IOException {
+		patcher.overrides().setPlace("blyt/menu.bclyt", "Txt_Yes", new Bclyt.PaneOverride(null, null, null, null, 2.5f));
+		Plan plan = patcher.plan(List.of());
+		assertEquals(1, plan.layoutsToWrite());
+		patcher.write(plan, step -> { });
+		Bclyt.Pane written = Bclyt.read(Darc.files(Archive.load(patcher.outputPath(menu()))).get("blyt/menu.bclyt").data)
+				.panes().get(0);
+		assertEquals(2.5f, written.z());
+		assertEquals(Bclyt.read(Darc.files(Archive.load(menu())).get("blyt/menu.bclyt").data).panes().get(0).x(), written.x());
+		assertFalse(patcher.plan(List.of()).hasWork());
+	}
+
 	@Test
 	void anArchiveWithGlyphsAndALayoutChangeGetsBoth() throws IOException {
 		patcher.overrides().set("blyt/menu.bclyt", List.of("Txt_Yes"), new TextOverride(40f, null, null, null, null, null));

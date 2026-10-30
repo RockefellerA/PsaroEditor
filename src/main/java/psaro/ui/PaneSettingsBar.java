@@ -50,7 +50,8 @@ import psaro.romfs.RomfsIndex.Usage;
  * dialog lists (a letter from another font can crowd the next one, its outline included);
  * <li>Text pane: the pane's box, font size, spacing and where it sits;
  * <li>Picture pane: a picture of the same layout (a label's frame, a plate), nearest first, with
- * where it sits and how big it is: a picture stretches its image to its size.
+ * where it sits, how big it is (a picture stretches its image to its size) and its depth, which
+ * sets it apart from the rest of the layout in stereoscopic 3D.
  * </ol>
  * A pane's change is made to the layout, so it applies to that pane, and its drop-shadow twin, the
  * panes layered with it and the other rows of a list it is one row of ({@link Fit#together}), in
@@ -105,6 +106,7 @@ final class PaneSettingsBar extends JPanel {
 	private final JSpinner picY = spinner(-2000, 2000, 1);
 	private final JSpinner picW = spinner(0, 2000, 1);
 	private final JSpinner picH = spinner(0, 2000, 1);
+	private final JSpinner picZ = spinner(-2000, 2000, 0.1);
 	private final JButton pictureReset = new JButton("Reset");
 	/** The chosen picture's image at the size given it ({@link PictureIcon}). */
 	private final JLabel picturePreview = new JLabel();
@@ -219,6 +221,7 @@ final class PaneSettingsBar extends JPanel {
 		place.add(group(label("Picture:"), picture, picturePreview));
 		place.add(group(label("at"), picX, new JLabel(","), picY));
 		place.add(group(label("size"), picW, new JLabel("×"), picH));
+		place.add(group(label("depth"), picZ));
 		place.add(group(pictureReset));
 		section(FONT_AREA, "Font", pane, every);
 		add(separator());
@@ -262,14 +265,16 @@ final class PaneSettingsBar extends JPanel {
 				refreshPicture();
 			}
 		});
-		for (JSpinner s : List.of(picX, picY, picW, picH)) {
+		picZ.setToolTipText("<html>The picture's depth from its parent. In the game's stereoscopic 3D a picture away "
+				+ "from 0 stands out from the rest of the layout; 0 keeps it flat with it.</html>");
+		for (JSpinner s : List.of(picX, picY, picW, picH, picZ)) {
 			s.addChangeListener(e -> {
 				if (!loading && usage != null && picture.getSelectedItem() != null) {
 					savePicture(false);
 				}
 			});
 		}
-		pictureReset.setToolTipText("Back to the layout's own place and size for this picture");
+		pictureReset.setToolTipText("Back to the layout's own place, size and depth for this picture");
 		pictureReset.addActionListener(e -> savePicture(true));
 		for (Field f : fields) {
 			f.spinner().addChangeListener(e -> {
@@ -342,7 +347,7 @@ final class PaneSettingsBar extends JPanel {
 		drawWith.removeAllItems();
 		drawWith.setEnabled(false);
 		style(drawWith, false);
-		for (JSpinner s : List.of(posX, posY, picX, picY, picW, picH)) {
+		for (JSpinner s : List.of(posX, posY, picX, picY, picW, picH, picZ)) {
 			s.setEnabled(false);
 			s.setValue(0.0);
 			style(s, false);
@@ -429,13 +434,13 @@ final class PaneSettingsBar extends JPanel {
 		return usage == null ? p : fonts.overrides().place(usage.layout(), p.name()).apply(p);
 	}
 
-	/** Fills the picture's place and size as changed, marking what differs from the layout's own. */
+	/** Fills the picture's place, size and depth as changed, marking what differs from the layout's own. */
 	private void refreshPicture() {
 		Bclyt.Pane own = (Bclyt.Pane) picture.getSelectedItem();
 		boolean any = own != null && usage != null;
 		picture.setEnabled(picture.getItemCount() > 0);
 		loading = true;
-		for (JSpinner s : List.of(picX, picY, picW, picH)) {
+		for (JSpinner s : List.of(picX, picY, picW, picH, picZ)) {
 			s.setEnabled(any);
 		}
 		if (any) {
@@ -444,10 +449,12 @@ final class PaneSettingsBar extends JPanel {
 			picY.setValue((double) now.y());
 			picW.setValue((double) now.width());
 			picH.setValue((double) now.height());
+			picZ.setValue((double) now.z());
 			style(picX, differs(now.x(), own.x()));
 			style(picY, differs(now.y(), own.y()));
 			style(picW, differs(now.width(), own.width()));
 			style(picH, differs(now.height(), own.height()));
+			style(picZ, differs(now.z(), own.z()));
 		}
 		loading = false;
 		pictureReset.setEnabled(any && !fonts.overrides().place(usage.layout(), own.name()).isEmpty());
@@ -496,14 +503,14 @@ final class PaneSettingsBar extends JPanel {
 		}
 	}
 
-	/** {@code p} moved {@code dx}, {@code dy} from where the layout has it, its size as changed. */
+	/** {@code p} moved {@code dx}, {@code dy} from where the layout has it, its size and depth as changed. */
 	private PaneOverride moved(Bclyt.Pane p, float dx, float dy) {
 		PaneOverride now = fonts.overrides().place(usage.layout(), p.name());
 		return new PaneOverride(differs(dx, 0) ? p.x() + dx : null, differs(dy, 0) ? p.y() + dy : null, now.width(),
-				now.height());
+				now.height(), now.z());
 	}
 
-	/** Places and sizes the chosen picture as the spinners say; as the layout has it when {@code back}. */
+	/** Places, sizes and sets the depth of the chosen picture as the spinners say; as the layout has it when {@code back}. */
 	private void savePicture(boolean back) {
 		Bclyt.Pane own = (Bclyt.Pane) picture.getSelectedItem();
 		if (own == null) {
@@ -511,7 +518,7 @@ final class PaneSettingsBar extends JPanel {
 		}
 		PaneOverride p = back ? PaneOverride.NONE
 				: new PaneOverride(changed(picX, own.x()), changed(picY, own.y()), changed(picW, own.width()),
-						changed(picH, own.height()));
+						changed(picH, own.height()), changed(picZ, own.z()));
 		try {
 			fonts.overrides().setPlace(usage.layout(), own.name(), p);
 		} catch (IOException e) {

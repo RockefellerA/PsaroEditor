@@ -13,6 +13,7 @@ import java.awt.image.BufferedImage;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.function.IntUnaryOperator;
 import psaro.format.Bcfnt;
 import psaro.format.Texture;
 
@@ -186,8 +187,17 @@ public final class GlyphDrawing {
 	 * them; the thickness counts the outline's faint outer pixels by how opaque they are. Whichever
 	 * kind borders the transparent background is the outline: dark round light letters (04a), or
 	 * light round dark ones (10a), where the dark letters hardly meet the background.
+	 *
+	 * <p>Light and dark go by the plain average of red, green and blue, which puts a saturated
+	 * green (08a's lower fill) with the dark. When that leaves a font read as dark letters alone,
+	 * it is read again by the eye's weighting; a grey font reads the same either way.
 	 */
 	static Look look(Bcfnt font) {
+		Look look = look(font, GlyphDrawing::luminance);
+		return look.radius == 0 && luminance(look.fill) < 128 ? look(font, GlyphDrawing::perceived) : look;
+	}
+
+	private static Look look(Bcfnt font, IntUnaryOperator luminance) {
 		long[] light = new long[4];
 		long[] dark = new long[4];
 		long[] lightest = new long[4];
@@ -205,7 +215,7 @@ public final class GlyphDrawing {
 			for (int y = 0; y < font.cellH; y++) {
 				for (int x = 0; x < font.cellW; x++) {
 					int p = px[y * font.cellW + x];
-					int lum = luminance(p);
+					int lum = luminance.applyAsInt(p);
 					if ((p & 0xFF) >= 40) {
 						if (lum < 128) {
 							darkArea += (p & 0xFF) / 255.0;
@@ -230,7 +240,7 @@ public final class GlyphDrawing {
 						int ny = y + d[1];
 						int q = nx < 0 || ny < 0 || nx >= font.cellW || ny >= font.cellH ? 0 : px[ny * font.cellW + nx];
 						edge |= (q & 0xFF) < 40;
-						if ((q & 0xFF) >= 40 && isLight != luminance(q) >= 128) {
+						if ((q & 0xFF) >= 40 && isLight != luminance.applyAsInt(q) >= 128) {
 							if (isLight) {
 								lightBoundary++;
 							} else {
@@ -282,6 +292,11 @@ public final class GlyphDrawing {
 
 	private static int luminance(int rgba) {
 		return ((rgba >>> 24) + (rgba >> 16 & 0xFF) + (rgba >> 8 & 0xFF)) / 3;
+	}
+
+	/** Luminance as the eye weighs it, green the most. */
+	private static int perceived(int rgba) {
+		return (299 * (rgba >>> 24) + 587 * (rgba >> 16 & 0xFF) + 114 * (rgba >> 8 & 0xFF)) / 1000;
 	}
 
 	// ------------------------------------------------------------------ size

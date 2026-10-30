@@ -19,10 +19,10 @@ import psaro.format.Bclyt.TextOverride;
 import psaro.project.Translations;
 
 /**
- * Changes to text panes' box and type settings, and to where any pane sits and how big it is, in
- * {@code <romfs>.psaro/layouts.json} as
+ * Changes to text panes' box and type settings, and to where any pane sits, how big it is and its
+ * depth, in {@code <romfs>.psaro/layouts.json} as
  * {@code {"blyt/common_btn_win_yes.bclyt": {"Txt_Btn": {"boxWidth": 40, "font": "SulaPro_B_04a_18.bcfnt"}}}}
- * and {@code {"blyt/config_common.bclyt": {"Pic_Fram_Resu": {"x": 54, "width": 78}}}}.
+ * and {@code {"blyt/config_common.bclyt": {"Pic_Fram_Resu": {"x": 54, "width": 78, "z": 0}}}}.
  * A change is made
  * per layout and pane, and so applies in every archive that carries that layout. The editor
  * measures with the changes at once; the patch writes them into the archives. Saved on every
@@ -31,8 +31,8 @@ import psaro.project.Translations;
 public final class LayoutOverrides {
 
 	private static final String[] FIELDS = {"boxWidth", "boxHeight", "fontSizeX", "fontSizeY", "charSpace", "lineSpace"};
-	/** Where a pane sits and how big it is ({@link PaneOverride}). */
-	private static final String[] PLACE = {"x", "y", "width", "height"};
+	/** Where a pane sits, how big it is and its depth ({@link PaneOverride}). */
+	private static final String[] PLACE = {"x", "y", "width", "height", "z"};
 	/** Another of the layout's fonts, by file name. */
 	private static final String FONT = "font";
 	/** What the pane alone draws with: a typeface's id, or "game". */
@@ -71,7 +71,7 @@ public final class LayoutOverrides {
 						for (int i = 0; i < PLACE.length; i++) {
 							p[i] = f.has(PLACE[i]) ? (float) f.getDouble(PLACE[i]) : null;
 						}
-						PaneOverride place = new PaneOverride(p[0], p[1], p[2], p[3]);
+						PaneOverride place = new PaneOverride(p[0], p[1], p[2], p[3], p[4]);
 						if (!place.isEmpty()) {
 							o.places.computeIfAbsent(layout, k -> new TreeMap<>()).put(pane, place);
 						}
@@ -168,7 +168,7 @@ public final class LayoutOverrides {
 		}));
 		places.forEach((layout, panes) -> panes.forEach((pane, p) -> {
 			JSONObject f = all.computeIfAbsent(layout, k -> new TreeMap<>()).computeIfAbsent(pane, k -> new JSONObject());
-			putFloats(f, PLACE, new Float[] {p.x(), p.y(), p.width(), p.height()});
+			putFloats(f, PLACE, new Float[] {p.x(), p.y(), p.width(), p.height(), p.z()});
 		}));
 		JSONObject json = new JSONObject();
 		all.forEach((layout, panes) -> {
