@@ -36,6 +36,7 @@ import javax.swing.JList;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
+import javax.swing.JSpinner;
 import javax.swing.JSplitPane;
 import javax.swing.JTabbedPane;
 import javax.swing.JTextArea;
@@ -44,15 +45,20 @@ import javax.swing.JToggleButton;
 import javax.swing.JToolBar;
 import javax.swing.KeyStroke;
 import javax.swing.ListSelectionModel;
+import javax.swing.SpinnerNumberModel;
 import javax.swing.UIManager;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
 import javax.swing.filechooser.FileNameExtensionFilter;
 import com.formdev.flatlaf.FlatClientProperties;
 import psaro.format.Bclim;
+import psaro.format.Bclyt;
+import psaro.format.Bclyt.PaneOverride;
 import psaro.format.Cgfx;
 import psaro.format.Texture;
+import psaro.patch.FontPatcher;
 import psaro.patch.ImageEdits;
+import psaro.patch.LayoutOverrides;
 import psaro.romfs.RomfsIndex;
 import psaro.romfs.RomfsIndex.Image;
 
@@ -68,6 +74,11 @@ import psaro.romfs.RomfsIndex.Image;
  * picked in it. Loose images can be thousands, so they are read the first time their tab is
  * opened, and picked by folder as well as by name.
  *
+ * <p>A layout image also lists the picture panes that draw it, each in its layout, with its depth:
+ * in the game's stereoscopic 3D a picture away from 0 stands out from the rest of its layout. A
+ * layout with no text (a map's balloons) is reached here alone, as the editor's pane settings
+ * open from a text. The depth is the same change the editor's pane settings make.
+ *
  * <p>A window of its own, not a dialog, so it can be minimized and maximized and left open
  * beside the editor.
  */
@@ -78,6 +89,10 @@ public final class ImagesWindow extends JFrame {
 		Image first() {
 			return copies.get(0);
 		}
+	}
+
+	/** A picture pane that draws the selected image, as its layout has it. */
+	private record Placed(String layout, Bclyt.Pane pane) {
 	}
 
 	/** The tabs, in order: layout images, models' textures, then loose images; short, as the list's width takes all. */
@@ -98,6 +113,8 @@ public final class ImagesWindow extends JFrame {
 
 	private final RomfsIndex index;
 	private final ImageEdits edits;
+	/** Finds the panes that draw an image, and holds their depth with the other layout changes. */
+	private final FontPatcher fonts;
 	private final Runnable onChange;
 	private final List<Group> groups;
 	/** The loose images, once read ({@link RomfsIndex#looseImages}); null before, while being read. */
@@ -124,14 +141,28 @@ public final class ImagesWindow extends JFrame {
 	private final JButton exportButton = new JButton("Export PNG…");
 	private final JButton importButton = new JButton("Import PNG…");
 	private final JButton revertButton = new JButton("Revert");
+	/** The picture panes that draw the selected layout image, with the depth of the one chosen. */
+	private final JPanel paneRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
+	private final JComboBox<Placed> panes = new JComboBox<>();
+	private final JSpinner depth = new JSpinner(new SpinnerNumberModel(0.0, -2000.0, 2000.0, 0.1));
+	private final JButton depthReset = new JButton("Reset");
+	private final JLabel panesNote = new JLabel();
+	/** Set while the panes and depth are filled in, so that is not taken as a change. */
+	private boolean fillingPanes;
+	/** Counts the images whose panes were looked for, so an answer for one no longer shown is dropped. */
+	private int panesAsked;
 
-	/** {@code onChange} runs after an image is replaced or put back, so the window checks the patch again. */
-	public ImagesWindow(Frame owner, RomfsIndex index, ImageEdits edits, Runnable onChange) {
+	/**
+	 * {@code onChange} runs after an image is replaced or put back, or a picture's depth changed, so
+	 * the window checks the patch again.
+	 */
+	public ImagesWindow(Frame owner, RomfsIndex index, FontPatcher fonts, Runnable onChange) {
 		super("Images");
 		setIconImages(owner.getIconImages());
 		setDefaultCloseOperation(DISPOSE_ON_CLOSE);
 		this.index = index;
-		this.edits = edits;
+		this.fonts = fonts;
+		this.edits = fonts.images();
 		this.onChange = onChange;
 		Map<String, List<Image>> byHash = new LinkedHashMap<>();
 		for (Image i : index.images()) {
@@ -235,10 +266,47 @@ public final class ImagesWindow extends JFrame {
 		info.setWrapStyleWord(true);
 		info.setOpaque(false);
 		info.setBorder(BorderFactory.createEmptyBorder(6, 8, 6, 8));
+		panes.setToolTipText("<html>The picture panes that draw this image, each in its layout. A change applies to the "
+				+ "pane in every archive that carries its layout.</html>");
+		panes.setRenderer(new DefaultListCellRenderer() {
+			@Override
+			public Component getListCellRendererComponent(JList<?> l, Object value, int i, boolean selected, boolean focus) {
+				String text = value instanceof Placed p ? p.pane().name() + "  in "
+						+ p.layout().substring(p.layout().lastIndexOf('/') + 1).replace(".bclyt", "") + ",  depth " + number(depthOf(p))
+						: "";
+				return super.getListCellRendererComponent(l, text, i, selected, focus);
+			}
+		});
+		panes.addActionListener(e -> {
+			if (!fillingPanes) {
+				showDepth();
+			}
+		});
+		depth.setEditor(new JSpinner.NumberEditor(depth, "0.##"));
+		((JSpinner.DefaultEditor) depth.getEditor()).getTextField().setColumns(4);
+		depth.setToolTipText("<html>The picture's depth from its parent. In the game's stereoscopic 3D a picture away "
+				+ "from 0 stands out from the rest of the layout; 0 keeps it flat with it.</html>");
+		depth.addChangeListener(e -> {
+			if (!fillingPanes) {
+				saveDepth(false);
+			}
+		});
+		depthReset.setToolTipText("Back to the layout's own depth for this picture");
+		depthReset.addActionListener(e -> saveDepth(true));
+		panesNote.putClientProperty(FlatClientProperties.STYLE, "foreground: $Label.disabledForeground");
+		paneRow.add(new JLabel("Picture panes:"));
+		paneRow.add(panes);
+		paneRow.add(new JLabel("depth"));
+		paneRow.add(depth);
+		paneRow.add(depthReset);
+		paneRow.add(panesNote);
+		JPanel below = new JPanel(new BorderLayout());
+		below.add(info, BorderLayout.CENTER);
+		below.add(paneRow, BorderLayout.SOUTH);
 		JPanel right = new JPanel(new BorderLayout());
 		right.add(zoomBar, BorderLayout.NORTH);
 		right.add(pictures, BorderLayout.CENTER);
-		right.add(info, BorderLayout.SOUTH);
+		right.add(below, BorderLayout.SOUTH);
 
 		JSplitPane split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, left, right);
 		split.setDividerLocation(330);
@@ -421,6 +489,7 @@ public final class ImagesWindow extends JFrame {
 
 	private void showSelected() {
 		Group g = list.getSelectedValue();
+		findPanes(g);
 		exportButton.setEnabled(g != null);
 		importButton.setEnabled(g != null);
 		revertButton.setEnabled(g != null && edits.get(g.hash()) != null);
@@ -548,6 +617,104 @@ public final class ImagesWindow extends JFrame {
 		list.repaint();
 		refilter();
 		onChange.run();
+	}
+
+	/**
+	 * Looks for the picture panes that draw layout image {@code g} in every archive that has it, in
+	 * the background as they can be many, then offers them; the row is hidden for other images.
+	 */
+	private void findPanes(Group g) {
+		int asked = ++panesAsked;
+		fillPanes(List.of());
+		paneRow.setVisible(g != null && g.kind() == LAYOUTS);
+		if (g == null || g.kind() != LAYOUTS) {
+			return;
+		}
+		panesNote.setText("Finding the panes that draw it…");
+		String file = g.first().path().substring(g.first().path().lastIndexOf('/') + 1);
+		new javax.swing.SwingWorker<List<Placed>, Void>() {
+			@Override
+			protected List<Placed> doInBackground() {
+				// a layout's change applies wherever the layout is, so each pane once
+				Map<String, Placed> found = new java.util.TreeMap<>();
+				for (Image copy : g.copies()) {
+					fonts.picturesDrawing(copy.archive(), file).forEach((layout, ps) -> ps
+							.forEach(p -> found.putIfAbsent(layout + "!" + p.name(), new Placed(layout, p))));
+				}
+				return List.copyOf(found.values());
+			}
+
+			@Override
+			protected void done() {
+				if (asked != panesAsked) {
+					return;
+				}
+				List<Placed> found;
+				try {
+					found = get();
+				} catch (InterruptedException | java.util.concurrent.ExecutionException e) {
+					found = List.of();
+				}
+				fillPanes(found);
+				panesNote.setText(found.isEmpty() ? "No picture shows it as its own image; it may be a frame of one's animation" : "");
+			}
+		}.execute();
+	}
+
+	private void fillPanes(List<Placed> found) {
+		fillingPanes = true;
+		panes.removeAllItems();
+		found.forEach(panes::addItem);
+		fillingPanes = false;
+		panesNote.setText("");
+		showDepth();
+	}
+
+	/** The chosen picture's depth as changed, in bold when it differs from the layout's own. */
+	private void showDepth() {
+		Placed p = (Placed) panes.getSelectedItem();
+		panes.setEnabled(panes.getItemCount() > 0);
+		depth.setEnabled(p != null);
+		fillingPanes = true;
+		depth.setValue(p == null ? 0.0 : (double) depthOf(p));
+		fillingPanes = false;
+		boolean changed = p != null && fonts.overrides().place(p.layout(), p.pane().name()).z() != null;
+		((JSpinner.DefaultEditor) depth.getEditor()).getTextField().putClientProperty(FlatClientProperties.STYLE,
+				changed ? "font: bold" : null);
+		depth.setToolTipText(p == null ? null : "The picture's depth from its parent; the layout's own is " + number(p.pane().z())
+				+ ". In the game's stereoscopic 3D a picture away from 0 stands out from the rest of the layout.");
+		depthReset.setEnabled(changed);
+		panes.repaint();
+	}
+
+	/** {@code p}'s depth with the layout changes made. */
+	private float depthOf(Placed p) {
+		return fonts.overrides().place(p.layout(), p.pane().name()).apply(p.pane()).z();
+	}
+
+	/** Gives the chosen picture the spinner's depth, keeping its place and size as changed; its own when {@code back}. */
+	private void saveDepth(boolean back) {
+		Placed p = (Placed) panes.getSelectedItem();
+		if (p == null) {
+			return;
+		}
+		LayoutOverrides overrides = fonts.overrides();
+		PaneOverride now = overrides.place(p.layout(), p.pane().name());
+		// to a thousandth, so stepping -0.6 up by 0.1 saves 0 and not -1.5E-9
+		float value = Math.round(((Number) depth.getValue()).doubleValue() * 1000) / 1000f;
+		Float z = back || Math.abs(value - p.pane().z()) <= 1e-4 ? null : value;
+		try {
+			overrides.setPlace(p.layout(), p.pane().name(), new PaneOverride(now.x(), now.y(), now.width(), now.height(), z));
+		} catch (IOException e) {
+			error("Could not save the layout change:\n" + e.getMessage());
+		}
+		showDepth();
+		onChange.run();
+	}
+
+	/** A depth as written, "0.5" and not "0.50". */
+	private static String number(float v) {
+		return v == Math.rint(v) ? String.valueOf((int) v) : String.format(Locale.ROOT, "%.3f", v).replaceAll("0+$", "");
 	}
 
 	private void error(String message) {

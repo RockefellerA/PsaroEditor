@@ -1196,17 +1196,7 @@ public final class FontPatcher {
 	 * draws none or the image cannot be read. The game's image is read once.
 	 */
 	public BufferedImage pictureImage(Path archive, String layout, String pane) {
-		String texture;
-		synchronized (pictureNames) {
-			texture = pictureNames.computeIfAbsent(archive + "!" + layout, k -> {
-				byte[] d = originalLayouts(archive).get(layout);
-				try {
-					return d == null ? Map.of() : Bclyt.pictureImages(d);
-				} catch (IllegalArgumentException | IndexOutOfBoundsException unreadable) {
-					return Map.of();
-				}
-			}).get(pane);
-		}
+		String texture = pictureNames(archive, layout).get(pane);
 		if (texture == null) {
 			return null;
 		}
@@ -1252,6 +1242,42 @@ public final class FontPatcher {
 			return out;
 		});
 		return files.get(name);
+	}
+
+	/** Each picture of {@code layout} in {@code archive} to the image it draws ({@link Bclyt#pictureImages}), read once. */
+	private Map<String, String> pictureNames(Path archive, String layout) {
+		synchronized (pictureNames) {
+			return pictureNames.computeIfAbsent(archive + "!" + layout, k -> {
+				byte[] d = originalLayouts(archive).get(layout);
+				try {
+					return d == null ? Map.of() : Bclyt.pictureImages(d);
+				} catch (IllegalArgumentException | IndexOutOfBoundsException unreadable) {
+					return Map.of();
+				}
+			});
+		}
+	}
+
+	/**
+	 * The pictures in {@code archive}'s layouts that draw {@code image}, a texture's file name
+	 * ({@code flag.bclim}), by layout path, as the romfs has them: what the Images window offers to
+	 * move back or forward in depth. A picture that shows the image only as a frame of an animation
+	 * is not among them.
+	 */
+	public Map<String, List<Bclyt.Pane>> picturesDrawing(Path archive, String image) {
+		Map<String, List<Bclyt.Pane>> out = new TreeMap<>();
+		for (String layout : originalLayouts(archive).keySet()) {
+			Set<String> panes = new HashSet<>();
+			pictureNames(archive, layout).forEach((pane, texture) -> {
+				if (texture.equals(image)) {
+					panes.add(pane);
+				}
+			});
+			if (!panes.isEmpty()) {
+				out.put(layout, layout(archive, layout).panes().stream().filter(p -> panes.contains(p.name())).toList());
+			}
+		}
+		return out;
 	}
 
 	/** {@code archive}'s layouts by path, read once; empty when it cannot be read. */

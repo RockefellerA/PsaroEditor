@@ -779,6 +779,12 @@ class FontPatcherTest {
 		english.setRGB(3, 3, 0xFF00FF00);
 		edits.set(frame, "timg/frame.bclim", english);
 		assertEquals(0xFF00FF00, patcher.pictureImage(help, "blyt/dialog_help.bclyt", "Pic_Fram").getRGB(3, 3), "as replaced");
+
+		// the other way: the pictures that draw an image, as the Images window offers them for their depth
+		Map<String, List<Bclyt.Pane>> drawing = patcher.picturesDrawing(help, "frame.bclim");
+		assertEquals(List.of("blyt/dialog_help.bclyt"), List.copyOf(drawing.keySet()));
+		assertEquals(List.of("Pic_Fram"), drawing.get("blyt/dialog_help.bclyt").stream().map(Bclyt.Pane::name).toList());
+		assertTrue(patcher.picturesDrawing(help, "other.bclim").isEmpty());
 	}
 
 	/**

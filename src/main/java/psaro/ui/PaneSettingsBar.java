@@ -102,6 +102,8 @@ final class PaneSettingsBar extends JPanel {
 	private final JSpinner posY = spinner(-2000, 2000, 1);
 	/** The layout's pictures, nearest the pane first. */
 	private final JComboBox<Bclyt.Pane> picture = new JComboBox<>();
+	/** Names the layout the pictures are from, as they need not be part of the pane's text. */
+	private final JLabel pictureLabel = new JLabel();
 	private final JSpinner picX = spinner(-2000, 2000, 1);
 	private final JSpinner picY = spinner(-2000, 2000, 1);
 	private final JSpinner picW = spinner(0, 2000, 1);
@@ -218,7 +220,7 @@ final class PaneSettingsBar extends JPanel {
 		scope.putClientProperty(FlatClientProperties.STYLE_CLASS, "small");
 		scope.putClientProperty(FlatClientProperties.STYLE, "foreground: $Label.disabledForeground");
 		JPanel place = row();
-		place.add(group(label("Picture:"), picture, picturePreview));
+		place.add(group(pictureLabel, picture, picturePreview));
 		place.add(group(label("at"), picX, new JLabel(","), picY));
 		place.add(group(label("size"), picW, new JLabel("×"), picH));
 		place.add(group(label("depth"), picZ));
@@ -244,8 +246,8 @@ final class PaneSettingsBar extends JPanel {
 				}
 			});
 		}
-		picture.setToolTipText("<html>A picture of the same layout, nearest this pane first: a label's frame, a plate. "
-				+ "Its image stretches to the size given here.</html>");
+		picture.setToolTipText("<html>Any picture of the same layout, nearest this pane first: a label's frame, a plate, "
+				+ "or one that has nothing to do with this text. Its image stretches to the size given here.</html>");
 		picture.setRenderer(new DefaultListCellRenderer() {
 			@Override
 			public Component getListCellRendererComponent(JList<?> list, Object value, int index, boolean selected,
@@ -292,6 +294,8 @@ final class PaneSettingsBar extends JPanel {
 	 */
 	void show(Usage u, List<Usage> all) {
 		flushLetters();
+		// shown again after a change (the preview redraws): the picture being changed stays chosen
+		Bclyt.Pane chosen = usage != null && usage.layout().equals(u.layout()) ? (Bclyt.Pane) picture.getSelectedItem() : null;
 		usage = u;
 		panes = new ArrayList<>(List.of(u.pane().name()));
 		twins = Fit.together(u, all);
@@ -305,15 +309,16 @@ final class PaneSettingsBar extends JPanel {
 		scope.setText(archives <= 1 ? "Applies to " + layout : "Applies to " + layout + " in " + archives + " archives");
 		setToolTipText("Changes " + String.join(" and ", panes) + " of " + u.layout()
 				+ " in every archive that has it. Patch writes the changed layout.");
-		fillPictures(u);
+		pictureLabel.setText("Picture panes in " + layout.replace(".bclyt", "") + ":");
+		fillPictures(u, chosen == null ? null : chosen.name());
 		refresh();
 	}
 
 	/**
 	 * The layout's pictures in the picker, those under the pane's own parent first (where its x and
-	 * y mean the same), nearest it first; the nearest chosen.
+	 * y mean the same), nearest it first; the one named {@code keep} chosen, else the nearest.
 	 */
-	private void fillPictures(Usage u) {
+	private void fillPictures(Usage u, String keep) {
 		Bclyt.Layout layout = fonts.layout(u.archive(), u.layout());
 		List<Bclyt.Pane> pics = new ArrayList<>();
 		if (layout != null) {
@@ -325,6 +330,7 @@ final class PaneSettingsBar extends JPanel {
 		loading = true;
 		picture.removeAllItems();
 		pics.forEach(picture::addItem);
+		pics.stream().filter(p -> p.name().equals(keep)).findFirst().ifPresent(picture::setSelectedItem);
 		loading = false;
 		refreshPicture();
 	}
@@ -354,6 +360,7 @@ final class PaneSettingsBar extends JPanel {
 		}
 		picture.removeAllItems();
 		picture.setEnabled(false);
+		pictureLabel.setText("Picture panes:");
 		picturePreview.setIcon(null);
 		loading = false;
 		reset.setEnabled(false);
@@ -531,7 +538,8 @@ final class PaneSettingsBar extends JPanel {
 
 	/** The spinner's value when it differs from the layout's own, else null. */
 	private static Float changed(JSpinner s, float original) {
-		float value = ((Number) s.getValue()).floatValue();
+		// to a thousandth, so stepping -0.6 up by 0.1 saves 0 and not -1.5E-9
+		float value = Math.round(((Number) s.getValue()).doubleValue() * 1000) / 1000f;
 		return differs(value, original) ? value : null;
 	}
 

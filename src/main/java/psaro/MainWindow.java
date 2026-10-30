@@ -1303,7 +1303,7 @@ public final class MainWindow {
 		}
 		commitTyping();
 		if (imagesWindow == null || !imagesWindow.isDisplayable()) {
-			imagesWindow = new ImagesWindow(frame, index, patcher.images(), this::startPlan);
+			imagesWindow = new ImagesWindow(frame, index, patcher, this::startPlan);
 		}
 		imagesWindow.setVisible(true);
 		imagesWindow.setExtendedState(imagesWindow.getExtendedState() & ~JFrame.ICONIFIED);

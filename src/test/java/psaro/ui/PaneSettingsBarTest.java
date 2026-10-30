@@ -136,6 +136,17 @@ class PaneSettingsBarTest {
 		resets.get(0).doClick();
 		assertTrue(fonts.overrides().layouts().isEmpty(), "the label and its shadow back where they were");
 		assertEquals(31.0, posX.getValue());
+
+		// another picture chosen and changed: shown again, as the preview does after a change, it stays chosen
+		Object far = java.util.stream.IntStream.range(0, pictures.getItemCount()).mapToObj(pictures::getItemAt)
+				.filter(p -> ((psaro.format.Bclyt.Pane) p).name().equals("Pic_Far")).findFirst().orElseThrow();
+		pictures.setSelectedItem(far);
+		picZ.setValue(1.5);
+		bar.show(label, usages);
+		assertEquals("Pic_Far", ((psaro.format.Bclyt.Pane) pictures.getSelectedItem()).name());
+		assertEquals(1.5, picZ.getValue());
+		assertTrue(all(bar, JLabel.class, new ArrayList<>()).stream().anyMatch(l -> "Picture panes in menu:".equals(l.getText())),
+				"the pictures are named as the layout's");
 	}
 
 	/** Each area's header folds it away and opens it again, and the next bar opens as it was left. */
