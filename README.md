@@ -37,6 +37,7 @@ Once the application has been installed, you can update to any new releases from
 * In the Images editor, you can view all 2D and 3D model textures.
 * Export any images that you need to edit and re-import them (at the same dimensions).
 * You will need to use the Patch dialog to then get them re-written into the .lz's.
+* You can also adjust 3D depth for images.
 
 (Basically, if only strings were changed, use Save. If any images, panes, or fonts were edited, or the game keeps its text in a .cpk, use the Patch window.)
 
